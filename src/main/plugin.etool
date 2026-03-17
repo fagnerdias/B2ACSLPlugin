@@ -1,0 +1,8 @@
+<externalTool name="B2ACSL"
+	category="project"
+	label="Verify C code"
+	tooltip="Uses the models specified to generate specification to verify the C code generated"
+	>
+	<command>./xml-reader</command>
+	<param>${extensionsDir}</param>
+</externalTool>

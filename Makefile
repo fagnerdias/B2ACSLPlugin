@@ -1,6 +1,6 @@
 .PHONY: build-jar build-native build-installer clean run
 
-APP_NAME ?= xml-reader
+APP_NAME ?= B2ACSLExec
 MAIN_CLASS ?= com.example.Main
 
 MVN ?= mvn

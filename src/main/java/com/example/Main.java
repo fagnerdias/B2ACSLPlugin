@@ -1,48 +1,72 @@
 package com.example;
 
-import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.List;
 
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.NodeList;
+import com.example.model.Machine;
+import com.example.model.Variables;
 
 public class Main {
     public static void main(String[] args) throws Exception {
-        try (InputStream in = Main.class.getResourceAsStream("/example.xml")) {
-            if (in == null) {
-                throw new IllegalStateException("Não foi possível encontrar /example.xml no classpath.");
-            }
-
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            factory.setNamespaceAware(true);
-            DocumentBuilder builder = factory.newDocumentBuilder();
-
-            Document doc = builder.parse(in);
-            doc.getDocumentElement().normalize();
-
-            Element root = doc.getDocumentElement();
-            NodeList personNodes = root.getElementsByTagName("person");
-            if (personNodes.getLength() == 0) {
-                throw new IllegalStateException("Elemento <person> não encontrado no XML.");
-            }
-
-            Element person = (Element) personNodes.item(0);
-            String name = textContentOfFirst(person, "name");
-            int age = Integer.parseInt(textContentOfFirst(person, "age"));
-
-            System.out.println("XML lido com sucesso (DOM):");
-            System.out.println("name=" + name + ", age=" + age);
+        if (args.length != 1) {
+            System.err.println("Uso: java -jar <app>.jar <caminho-do-projeto-com-bxml>");
+            System.exit(2);
         }
-    }
 
-    private static String textContentOfFirst(Element parent, String tagName) {
-        NodeList nodes = parent.getElementsByTagName(tagName);
-        if (nodes.getLength() == 0) {
-            throw new IllegalStateException("Elemento <" + tagName + "> não encontrado no XML.");
+        Path projectPath = Path.of(args[0]).toAbsolutePath().normalize();
+        if (!Files.isDirectory(projectPath)) {
+            System.err.println("Caminho inválido (não é diretório): " + projectPath);
+            System.exit(2);
         }
-        return nodes.item(0).getTextContent().trim();
+
+        List<Path> bxmlFiles;
+        try (var stream = Files.walk(projectPath)) {
+            bxmlFiles = stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".bxml"))
+                    .sorted(Comparator.comparing(Path::toString))
+                    .toList();
+        }
+
+        if (bxmlFiles.isEmpty()) {
+            System.out.println("Nenhum arquivo .bxml encontrado em: " + projectPath);
+            return;
+        }
+
+        int ok = 0;
+        int failed = 0;
+
+        for (Path file : bxmlFiles) {
+            Path relative = projectPath.relativize(file);
+            try {
+                Machine machine = Machine.fromBxmlPath(file);
+                ok++;
+
+                System.out.println("Arquivo: " + relative);
+                System.out.println("Machine: machineType=" + machine.getMachineType()
+                        + ", machineName=" + machine.getMachineName());
+
+                if (machine.getVariables().isEmpty()) {
+                    System.out.println("  (sem variáveis mapeadas)");
+                } else {
+                    for (Variables v : machine.getVariables()) {
+                        System.out.println("  Variable: machineType=" + v.getMachineType()
+                                + ", machineName=" + v.getMachineName()
+                                + ", variableName=" + v.getVariableName()
+                                + ", variableType=" + v.getVariableType()
+                                + ", isAbstract=" + v.isAbstract()
+                                + ", isConcrete=" + v.isConcrete());
+                    }
+                }
+                System.out.println();
+            } catch (Exception e) {
+                failed++;
+                System.err.println("Falha ao processar " + relative + ": " + e.getMessage());
+            }
+        }
+
+        System.out.println("Processamento concluído: ok=" + ok + ", failed=" + failed + ", total=" + bxmlFiles.size());
     }
 }
