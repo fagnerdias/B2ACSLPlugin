@@ -2,71 +2,41 @@ package com.example;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
-import java.util.List;
 
-import com.example.model.Machine;
-import com.example.model.Variables;
-
+/**
+ * Ponto de entrada do plugin B2ACSL para Atelier B.
+ *
+ * <p>Uso: B2ACSLExec &lt;caminho-bdp&gt;
+ *
+ * <p>Passos executados:
+ * <ol>
+ *   <li>Ler arquivos .bxml na pasta bdp passada como parâmetro</li>
+ *   <li>Gerar arquivos temporários .acsl com especificação de cada máquina abstrata</li>
+ *   <li>Obter arquivos .c em lang/c/ (mesmo path, trocando bdp por lang)</li>
+ *   <li>Executar Frama-C: acsl-importer e WP</li>
+ *   <li>Retornar valor para Atelier B</li>
+ * </ol>
+ *
+ * <p>Modo mock (b2acsl.mock=true): simula Frama-C quando não há .c ou frama-c não está instalado.
+ */
 public class Main {
     public static void main(String[] args) throws Exception {
-        if (args.length != 1) {
-            System.err.println("Uso: java -jar <app>.jar <caminho-do-projeto-com-bxml>");
-            System.exit(2);
-        }
-
-        Path projectPath = Path.of(args[0]).toAbsolutePath().normalize();
-        if (!Files.isDirectory(projectPath)) {
-            System.err.println("Caminho inválido (não é diretório): " + projectPath);
-            System.exit(2);
-        }
-
-        List<Path> bxmlFiles;
-        try (var stream = Files.walk(projectPath)) {
-            bxmlFiles = stream
-                    .filter(Files::isRegularFile)
-                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".bxml"))
-                    .sorted(Comparator.comparing(Path::toString))
-                    .toList();
-        }
-
-        if (bxmlFiles.isEmpty()) {
-            System.out.println("Nenhum arquivo .bxml encontrado em: " + projectPath);
-            return;
-        }
-
-        int ok = 0;
-        int failed = 0;
-
-        for (Path file : bxmlFiles) {
-            Path relative = projectPath.relativize(file);
-            try {
-                Machine machine = Machine.fromBxmlPath(file);
-                ok++;
-
-                System.out.println("Arquivo: " + relative);
-                System.out.println("Machine: machineType=" + machine.getMachineType()
-                        + ", machineName=" + machine.getMachineName());
-
-                if (machine.getVariables().isEmpty()) {
-                    System.out.println("  (sem variáveis mapeadas)");
-                } else {
-                    for (Variables v : machine.getVariables()) {
-                        System.out.println("  Variable: machineType=" + v.getMachineType()
-                                + ", machineName=" + v.getMachineName()
-                                + ", variableName=" + v.getVariableName()
-                                + ", variableType=" + v.getVariableType()
-                                + ", isAbstract=" + v.isAbstract()
-                                + ", isConcrete=" + v.isConcrete());
-                    }
-                }
-                System.out.println();
-            } catch (Exception e) {
-                failed++;
-                System.err.println("Falha ao processar " + relative + ": " + e.getMessage());
+        Path bdpPath;
+        if (args.length >= 1) {
+            bdpPath = Path.of(args[0]).toAbsolutePath().normalize();
+        } else {
+            // Dados mockados para execução de exemplo
+            Path mockBdp = Path.of(System.getProperty("user.dir"), "src", "main", "resources");
+            if (!Files.isDirectory(mockBdp)) {
+                System.err.println("Uso: B2ACSLExec <caminho-bdp>");
+                System.err.println("  O caminho deve apontar para a pasta que contém os arquivos .bxml");
+                System.exit(2);
             }
+            bdpPath = mockBdp;
+            System.out.println("[B2ACSL] Modo exemplo: usando " + bdpPath);
         }
 
-        System.out.println("Processamento concluído: ok=" + ok + ", failed=" + failed + ", total=" + bxmlFiles.size());
+        int exitCode = B2ACSLPipeline.run(bdpPath);
+        System.exit(exitCode);
     }
 }

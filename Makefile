@@ -2,6 +2,8 @@
 
 APP_NAME ?= B2ACSLExec
 MAIN_CLASS ?= com.example.Main
+# Mock: true=simula Frama-C, false=executa Frama-C real (ex.: make build-jar MOCK=false)
+MOCK ?= false
 
 MVN ?= mvn
 TARGET_DIR := target
@@ -14,14 +16,15 @@ UBER_JAR := $(TARGET_DIR)/$(ARTIFACT_ID)-$(VERSION)-all.jar
 OS := $(shell uname -s)
 
 build-jar:
-	$(MVN) -q -DskipTests package
-	@echo "Uber-JAR gerado em: $(UBER_JAR)"
+	$(MVN) -q -DskipTests -Db2acsl.mock=$(MOCK) package
+	@echo "Uber-JAR gerado em: $(UBER_JAR) (mock=$(MOCK))"
 
 build-native:
 	# Requer GraalVM + native-image instalados e JAVA_HOME apontando para GraalVM
-	$(MVN) -q -DskipTests -Pnative package
+	$(MVN) -q -DskipTests -Db2acsl.mock=$(MOCK) -Pnative package
 	@echo "Binário nativo (Linux/macOS) geralmente em: $(TARGET_DIR)/$(ARTIFACT_ID)"
 	@echo "Binário nativo (Windows) geralmente em: $(TARGET_DIR)/$(ARTIFACT_ID).exe"
+	@echo "mock=$(MOCK)"
 
 build-installer: build-jar
 	@mkdir -p $(TARGET_DIR)/jpackage-input $(TARGET_DIR)/installer
@@ -69,4 +72,4 @@ clean:
 	@rm -rf "$(TARGET_DIR)/jpackage-input" "$(TARGET_DIR)/installer"
 
 run: build-jar
-	java -jar "$(UBER_JAR)"
+	java -Db2acsl.mock=$(MOCK) -jar "$(UBER_JAR)"
