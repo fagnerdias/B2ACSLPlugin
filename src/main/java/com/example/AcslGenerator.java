@@ -110,10 +110,10 @@ public final class AcslGenerator {
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* ACSL gerado a partir de ").append(baseName).append(".bxml (BXML 1.0) */\n");
-        sb.append("/* Biblioteca: usar ACSL_Lib em resources, p.ex.:\n");
-        sb.append(" *   set_functions/empty.acsl, union.acsl, singleton.acsl, inclusion.acsl\n");
-        sb.append(" *   set_functions/card.acsl\n");
-        sb.append(" */\n\n");
+        sb.append(
+                "/* Biblioteca ACSL_Lib: includes gerados automaticamente (AcslLibIncludes); "
+                        + "opções: b2acsl.acslLibIncludeBase, b2acsl.acslLibIncludeMiddle. */\n\n");
+        int headerLen = sb.length();
 
         // 1) Todos os blocos axiomatic (compreensões)
         if (!ctx.comprehensions().isEmpty()) {
@@ -145,6 +145,10 @@ public final class AcslGenerator {
             }
         }
 
+        String includes = AcslLibIncludes.formatIncludeBlock(sb.substring(headerLen));
+        if (!includes.isEmpty()) {
+            sb.insert(headerLen, includes);
+        }
         Files.writeString(acslFile, sb.toString());
         return Optional.of(acslFile);
     }
