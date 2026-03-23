@@ -3,10 +3,12 @@
 APP_NAME ?= B2ACSLExec
 MAIN_CLASS ?= com.example.Main
 # Mock: true=simula Frama-C, false=executa Frama-C real (ex.: make build-jar MOCK=false)
-MOCK ?= false
+MOCK ?= true
 
 MVN ?= mvn
 TARGET_DIR := target
+# Saída persistente dos .acsl gerados por `make run`
+ACSL_OUT := $(TARGET_DIR)/b2acsl-acsl
 
 # Maven Shade gera: target/<artifactId>-<version>-all.jar
 VERSION := $(shell $(MVN) -q -DforceStdout help:evaluate -Dexpression=project.version)
@@ -72,4 +74,5 @@ clean:
 	@rm -rf "$(TARGET_DIR)/jpackage-input" "$(TARGET_DIR)/installer"
 
 run: build-jar
-	java -Db2acsl.mock=$(MOCK) -jar "$(UBER_JAR)"
+	@mkdir -p "$(ACSL_OUT)"
+	java -Db2acsl.mock=$(MOCK) -Db2acsl.keepAcsl="$(ACSL_OUT)" -jar "$(UBER_JAR)"

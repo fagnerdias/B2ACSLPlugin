@@ -6,11 +6,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
+import com.example.bxml.BxmlGluingNormalizer;
 import com.example.model.Machine;
+
+import org.w3c.dom.Element;
 
 /**
  * Pipeline B2ACSL: BXML -> ACSL -> Frama-C (acsl-importer + WP) -> resultado para Atelier B.
@@ -58,21 +64,53 @@ public final class B2ACSLPipeline {
             return 2;
         }
 
-        List<Machine> machines = new ArrayList<>();
+        record MachineFile(Machine machine, Path bxmlPath) {}
+        List<MachineFile> machines = new ArrayList<>();
         for (Path f : bxmlFiles) {
             try {
                 Machine m = Machine.fromBxmlPath(f);
-                if ("abstraction".equalsIgnoreCase(m.getMachineType())) {
-                    machines.add(m);
-                }
+                machines.add(new MachineFile(m, f));
             } catch (Exception e) {
                 System.err.println("[B2ACSL] Falha ao ler " + f + ": " + e.getMessage());
             }
         }
 
         if (machines.isEmpty()) {
-            System.err.println("[B2ACSL] Nenhuma máquina abstrata encontrada.");
+            System.err.println("[B2ACSL] Nenhuma máquina válida encontrada nos ficheiros .bxml.");
             return 3;
+        }
+
+        Map<String, String> invariantGluingSubstitutions = BxmlGluingNormalizer.collectFromAllBxmlFiles(bxmlFiles);
+
+        // Mapa máquina -> nome em <Abstraction> (refinamento / implementação)
+        Map<String, String> abstractionParentByMachine = buildAbstractionParentMap(bxmlFiles);
+        // Ficheiros BXML de refinamento/implementação a fundir na máquina abstrata raiz
+        Map<String, List<Path>> mergePathsByRootAbstract = new HashMap<>();
+        for (Path f : bxmlFiles) {
+            try {
+                Element root = AcslGenerator.parseMachineElement(f);
+                if (AcslGenerator.getAbstractionReferenceName(root).isEmpty()) continue;
+                String source = root.getAttribute("name");
+                if (source == null || source.isBlank()) continue;
+                String rootAbstract = resolveRootAbstractName(source, abstractionParentByMachine);
+                mergePathsByRootAbstract.computeIfAbsent(rootAbstract, k -> new ArrayList<>()).add(f);
+            } catch (Exception e) {
+                System.err.println("[B2ACSL] Falha ao indexar merge de " + f + ": " + e.getMessage());
+            }
+        }
+        for (List<Path> paths : mergePathsByRootAbstract.values()) {
+            paths.sort(
+                    Comparator.comparingInt(
+                            path -> {
+                                try {
+                                    String n =
+                                            AcslGenerator.parseMachineElement(path)
+                                                    .getAttribute("name");
+                                    return refinementDepthToRoot(n, abstractionParentByMachine);
+                                } catch (Exception e) {
+                                    return 0;
+                                }
+                            }));
         }
 
         // Step 1.1: Gerar arquivos .acsl (temporários ou em dir fixo para inspeção)
@@ -82,9 +120,18 @@ public final class B2ACSLPipeline {
         boolean keepFiles = KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank();
         try {
             List<Path> acslFiles = new ArrayList<>();
-            for (Machine m : machines) {
-                Path acsl = AcslGenerator.generateAcsl(m, acslDir);
-                acslFiles.add(acsl);
+            for (MachineFile mf : machines) {
+                Element machineRoot = AcslGenerator.parseMachineElement(mf.bxmlPath());
+                if (AcslGenerator.getAbstractionReferenceName(machineRoot).isPresent()) {
+                    continue;
+                }
+                String machineName = mf.machine().getMachineName();
+                List<Path> mergePaths =
+                        mergePathsByRootAbstract.getOrDefault(machineName, List.of());
+                Optional<Path> acsl =
+                        AcslGenerator.generateAcsl(
+                                mf.machine(), mf.bxmlPath(), acslDir, mergePaths, invariantGluingSubstitutions);
+                acsl.ifPresent(acslFiles::add);
             }
             if (keepFiles) {
                 System.out.println("[B2ACSL] ACSL gravados em: " + acslDir);
@@ -118,6 +165,49 @@ public final class B2ACSLPipeline {
         } finally {
             if (!keepFiles) deleteRecursive(acslDir);
         }
+    }
+
+    /** {@code nomeDaMaquina -> nomeEm<Abstraction>} para seguir a cadeia até à abstrata raiz. */
+    private static Map<String, String> buildAbstractionParentMap(List<Path> bxmlFiles) throws Exception {
+        Map<String, String> map = new HashMap<>();
+        for (Path f : bxmlFiles) {
+            try {
+                Element root = AcslGenerator.parseMachineElement(f);
+                String name = root.getAttribute("name");
+                if (name == null || name.isBlank()) continue;
+                AcslGenerator.getAbstractionReferenceName(root)
+                        .ifPresent(parent -> map.put(name.trim(), parent.trim()));
+            } catch (Exception ignored) {
+                // ficheiro ignorado; já reportado ao ler Machine
+            }
+        }
+        return map;
+    }
+
+    /**
+     * Segue {@code <Abstraction>} até à máquina que não referencia outra (raiz da cadeia de refinamento).
+     */
+    private static String resolveRootAbstractName(String machineName, Map<String, String> parentOf) {
+        String current = machineName;
+        for (int i = 0; i < 256; i++) {
+            String p = parentOf.get(current);
+            if (p == null || p.isBlank()) return current;
+            current = p;
+        }
+        return current;
+    }
+
+    /** Número de saltos até à raiz (refinamento = 1, implementação sobre refinamento = 2, …). */
+    private static int refinementDepthToRoot(String machineName, Map<String, String> parentOf) {
+        int d = 0;
+        String current = machineName;
+        for (int i = 0; i < 256; i++) {
+            String p = parentOf.get(current);
+            if (p == null || p.isBlank()) return d;
+            d++;
+            current = p;
+        }
+        return d;
     }
 
     private static String bdpPathToString(Path p) {

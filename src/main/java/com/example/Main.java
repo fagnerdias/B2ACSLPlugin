@@ -11,7 +11,7 @@ import java.nio.file.Path;
  * <p>Passos executados:
  * <ol>
  *   <li>Ler arquivos .bxml na pasta bdp passada como parâmetro</li>
- *   <li>Gerar arquivos temporários .acsl com especificação de cada máquina abstrata</li>
+ *   <li>Gerar arquivos temporários .acsl com especificação de cada máquina (abstração, refinamento, etc.)</li>
  *   <li>Obter arquivos .c em lang/c/ (mesmo path, trocando bdp por lang)</li>
  *   <li>Executar Frama-C: acsl-importer e WP</li>
  *   <li>Retornar valor para Atelier B</li>
