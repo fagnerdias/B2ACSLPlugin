@@ -3,6 +3,7 @@ package com.example;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +36,9 @@ import com.example.model.Machine;
  *
  * <p>Na máquina abstrata: compreensões e invariantes locais entram no {@code .acsl}; já
  * {@code Initialisation} e {@code Operations} só quando {@code type="abstraction"}.
+ * Os invariantes fundidos dos refinamentos/implementações repetem-se em {@code requires} e
+ * {@code ensures} de cada operação (e em {@code ensures} da inicialização), juntamente com o
+ * invariante da abstrata.
  */
 public final class AcslGenerator {
 
@@ -99,13 +103,16 @@ public final class AcslGenerator {
         BxmlTranslateContext ctx = BxmlTranslateContext.forMachine(machineEl, gluing);
         boolean isAbstraction = isAbstractMachine(machineEl);
 
-        List<String> invariantNames = BxmlInvariantTranslator.listInvariantPredicateNames(machineEl, ctx);
+        List<String> allInvariantPredicateNames =
+                listAllInvariantPredicateNames(machineEl, ctx, mergePaths, gluing);
         List<String> extraAssigns = extraAssignTargetsForExample(baseName);
         InitialisationAcsl init = isAbstraction
-                ? BxmlInitialisationTranslator.translate(machineEl, extraAssigns, ctx)
+                ? withInvariantEnsures(
+                        BxmlInitialisationTranslator.translate(machineEl, extraAssigns, ctx),
+                        allInvariantPredicateNames)
                 : null;
         List<OperationAcsl> operations = isAbstraction
-                ? BxmlOperationsTranslator.translateOperations(machineEl, ctx, invariantNames)
+                ? BxmlOperationsTranslator.translateOperations(machineEl, ctx, allInvariantPredicateNames)
                 : List.of();
 
         StringBuilder sb = new StringBuilder();
@@ -216,6 +223,36 @@ public final class AcslGenerator {
     private static boolean isAbstractMachine(Element machineEl) {
         String t = machineEl.getAttribute("type");
         return t != null && "abstraction".equalsIgnoreCase(t.trim());
+    }
+
+    /**
+     * Invariante(s) da abstrata seguido(s) dos invariantes de cada refinamento/implementação em
+     * {@code mergePaths} (mesma ordem que em {@link #appendMergedInvariantPredicatesOnly}), para
+     * repetir em {@code requires}/{@code ensures} das operações e em {@code ensures} da inicialização.
+     */
+    private static List<String> listAllInvariantPredicateNames(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<Path> mergePaths,
+            Map<String, String> gluing)
+            throws Exception {
+        List<String> out = new ArrayList<>(BxmlInvariantTranslator.listInvariantPredicateNames(machineEl, ctx));
+        for (Path p : mergePaths) {
+            Element mel = parseMachineElement(p);
+            BxmlTranslateContext mctx = BxmlTranslateContext.forMachine(mel, gluing);
+            out.addAll(BxmlInvariantTranslator.listInvariantPredicateNames(mel, mctx));
+        }
+        return out;
+    }
+
+    private static InitialisationAcsl withInvariantEnsures(
+            InitialisationAcsl init, List<String> invariantPredicateNames) {
+        if (invariantPredicateNames.isEmpty()) return init;
+        List<String> ensures = new ArrayList<>(init.ensures());
+        for (String inv : invariantPredicateNames) {
+            ensures.add(inv);
+        }
+        return new InitialisationAcsl(init.functionName(), ensures, init.assignsTargets());
     }
 
     /**
