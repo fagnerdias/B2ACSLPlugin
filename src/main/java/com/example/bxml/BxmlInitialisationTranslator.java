@@ -32,7 +32,8 @@ public final class BxmlInitialisationTranslator {
 
     /**
      * @param machineEl elemento raiz {@code <Machine>}
-     * @param additionalAssignTargets nomes ACSL/C adicionais para {@code assigns} (ex.: variáveis de implementação)
+     * @param additionalAssignTargets nomes para {@code assigns} (ex.: {@code NomeAbstrata__v} a partir
+     *        de {@code Concrete_Variables} das máquinas de implementação fundidas)
      */
     public static InitialisationAcsl translate(
             Element machineEl, List<String> additionalAssignTargets, BxmlTranslateContext ctx) {
