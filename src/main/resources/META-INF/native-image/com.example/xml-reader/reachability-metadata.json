@@ -1,0 +1,10 @@
+{
+  "resources": [
+    {
+      "glob": "ACSL_Lib/**"
+    },
+    {
+      "glob": "META-INF/b2acsl.properties"
+    }
+  ]
+}

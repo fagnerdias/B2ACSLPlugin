@@ -1,0 +1,12 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": "\\QACSL_Lib/\\E.*"
+      },
+      {
+        "pattern": "\\QMETA-INF/b2acsl.properties\\E"
+      }
+    ]
+  }
+}

@@ -182,7 +182,9 @@ public final class AcslGenerator {
         if (!includes.isEmpty()) {
             sb.insert(headerLen, includes);
         }
-        Files.writeString(acslFile, sb.toString());
+        String fullAcsl = sb.toString();
+        Files.writeString(acslFile, fullAcsl);
+        AcslLibIncludes.copyReferencedLibraryFiles(fullAcsl, acslFile);
         return Optional.of(acslFile);
     }
 
