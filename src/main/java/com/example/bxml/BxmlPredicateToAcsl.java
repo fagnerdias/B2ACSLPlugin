@@ -10,6 +10,11 @@ import org.w3c.dom.NodeList;
 /**
  * Traduz predicados BXML ({@code pred_group}) para expressões ACSL.
  *
+ * <p>{@code v : iseq(T)} / {@code v : seq(T)} → {@code iSeq} / {@code is_seq_of};
+ * {@code ss : POW(S)} → {@code inclusion(ss, S)}; {@code ss : FIN(ss)} → {@code is_finite(ss)};
+ * {@code x /: s} → {@code not_belongs(x, s)}; comparadores inteiros {@code <=i}, {@code <i} →
+ * {@code <=}, {@code <}.
+ *
  * @see <a href="https://www.atelierb.eu/wp-content/uploads/2023/10/bxml-1.0.html">BXML 1.0</a>
  */
 public final class BxmlPredicateToAcsl {
@@ -60,12 +65,43 @@ public final class BxmlPredicateToAcsl {
     }
 
     private static String translateExpComparison(Element cmp, BxmlTranslateContext ctx) {
-        String op = cmp.getAttribute("op");
+        String op = normalizeExpComparisonOp(cmp.getAttribute("op"));
         Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(cmp);
         if (pair[0] == null || pair[1] == null) return "";
-        String left = BxmlExpressionToAcsl.translate(pair[0], ctx);
-        String right = BxmlExpressionToAcsl.translate(pair[1], ctx);
+        Element leftEl = pair[0];
+        Element rightEl = pair[1];
+        if ("/:".equals(op)) {
+            String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
+            return "not_belongs(" + left + ", " + right + ")";
+        }
         if (":".equals(op)) {
+            // ss : POW(S) → inclusion(ss, S); ss : FIN(ss) → is_finite(ss)
+            if ("Unary_Exp".equals(rightEl.getLocalName())) {
+                String uop = rightEl.getAttribute("op");
+                if ("POW".equals(uop)) {
+                    String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                    Element inner = firstNonAttrElementChild(rightEl);
+                    String setAtom = bTypeArgToSeqOfSetName(inner);
+                    return "inclusion(" + left + ", " + setAtom + ")";
+                }
+                if ("FIN".equals(uop) || "fin".equals(uop)) {
+                    String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                    return "is_finite(" + left + ")";
+                }
+                if ("iseq".equals(uop)) {
+                    String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                    return "iSeq(" + left + ")";
+                }
+                if ("seq".equals(uop)) {
+                    String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                    Element typeArg = firstNonAttrElementChild(rightEl);
+                    String setAtom = bTypeArgToSeqOfSetName(typeArg);
+                    return "is_seq_of(" + left + ", " + setAtom + ")";
+                }
+            }
+            String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
             // x : T — pertença (ex.: nn : NAT → belongs(nn, NAT)) — ACSL_Lib/set_functions/belongs.acsl
             if (isPrimitiveTypeName(right)) {
                 if ("NAT".equals(right)) return "belongs(" + left + ", NAT)";
@@ -73,12 +109,29 @@ public final class BxmlPredicateToAcsl {
             }
             return "belongs(" + left + ", " + right + ")";
         }
-        if ("<:".equals(op) || "&lt;:".equals(op)) {
-            // subconjunto — ACSL_Lib/set_functions/inclusion.acsl
+        String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+        String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
+        if ("<:".equals(op)) {
             return "inclusion(" + left + ", " + right + ")";
         }
         if ("=".equals(op)) return "(" + left + " == " + right + ")";
         return "(" + left + " " + op + " " + right + ")";
+    }
+
+    /**
+     * Operadores BXML (ex.: {@code &lt;=i}, {@code &lt;i}) → ACSL numérico {@code <=}, {@code <}.
+     */
+    private static String normalizeExpComparisonOp(String raw) {
+        if (raw == null) return "";
+        String o = raw.trim();
+        return switch (o) {
+            case "&lt;:" -> "<:";
+            case "&lt;=i", "<=i" -> "<=";
+            case "&lt;i", "<i" -> "<";
+            case "&gt;=i", ">=i" -> ">=";
+            case "&gt;i", ">i" -> ">";
+            default -> o;
+        };
     }
 
     private static String translateNaryPred(Element np, BxmlTranslateContext ctx) {
@@ -122,6 +175,32 @@ public final class BxmlPredicateToAcsl {
             case "NAT", "INTEGER", "BOOL", "INT", "REAL" -> true;
             default -> false;
         };
+    }
+
+    private static Element firstNonAttrElementChild(Element parent) {
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            return e;
+        }
+        return null;
+    }
+
+    /** Segundo argumento de {@code is_seq_of} (conjunto ACSL da lib, ex. {@code NAT}). */
+    private static String bTypeArgToSeqOfSetName(Element typeArg) {
+        if (typeArg != null && "Id".equals(typeArg.getLocalName())) {
+            String v = typeArg.getAttribute("value");
+            if (v == null || v.isBlank()) return "NAT";
+            return switch (v) {
+                case "NAT", "INTEGER", "INT" -> "NAT";
+                case "BOOL" -> "BOOL";
+                default -> v;
+            };
+        }
+        return "NAT";
     }
 
     /** Predicado completo de um {@code <Body>} de operação (ex.: dentro de {@code Quantified_Set}). */
