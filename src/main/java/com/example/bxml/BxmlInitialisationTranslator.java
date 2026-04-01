@@ -98,9 +98,7 @@ public final class BxmlInitialisationTranslator {
         List<Element> rhs = directExpChildren(vals);
         int n = Math.min(lhs.size(), rhs.size());
         for (int i = 0; i < n; i++) {
-            String l = BxmlExpressionToAcsl.translate(lhs.get(i), ctx);
-            String r = BxmlExpressionToAcsl.translate(rhs.get(i), ctx);
-            ensures.add(l + " == " + r);
+            ensures.add(BxmlExpressionToAcsl.formatEquality(lhs.get(i), rhs.get(i), ctx));
         }
     }
 

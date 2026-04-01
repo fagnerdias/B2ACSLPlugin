@@ -2,6 +2,7 @@ package com.example;
 
 import java.io.InputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -12,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import com.example.bxml.BxmlGluingNormalizer;
 import com.example.model.Machine;
@@ -19,11 +21,22 @@ import com.example.model.Machine;
 import org.w3c.dom.Element;
 
 /**
- * Pipeline B2ACSL: BXML -> ACSL -> Frama-C (acsl-importer + WP) -> resultado para Atelier B.
+ * Pipeline B2ACSL: BXML -> ACSL -> Frama-C ({@code -acsl-import} + {@code merged_code.c} + WP) -> resultado para Atelier B.
  */
 public final class B2ACSLPipeline {
 
     private static final String FRAMA_C = "frama-c";
+
+    /**
+     * Linhas de diagnóstico que o Frama-C escreve no stdout antes do C gerado com {@code -print}
+     * (ex.: {@code [kernel] Parsing ...}, {@code [acsl-import] Success ...}).
+     */
+    private static final Pattern FRAMA_C_STDOUT_TAG_LINE =
+            Pattern.compile("^\\[[^\\]]+\\]\\s*.*");
+
+    /** Marca o bloco {@code axiomatic new_types} importado (ex. de {@code types.acsl}). */
+    private static final String AXIOMATIC_NEW_TYPES_MARKER = "axiomatic new_types";
+
     private static final boolean MOCK_MODE = isMockEnabled();
 
     private static boolean isMockEnabled() {
@@ -224,12 +237,16 @@ public final class B2ACSLPipeline {
         }
     }
 
+    /** Saída gerada pelo Frama-C {@code -print} no mesmo diretório — não é ficheiro-fonte. */
+    private static final String MERGED_CODE_FILE_NAME = "merged_code.c";
+
     private static List<Path> findCFiles(Path root) throws IOException {
         if (!Files.isDirectory(root)) return List.of();
         try (var stream = Files.walk(root)) {
             return stream
                     .filter(Files::isRegularFile)
                     .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".c"))
+                    .filter(p -> !MERGED_CODE_FILE_NAME.equalsIgnoreCase(p.getFileName().toString()))
                     .sorted(Comparator.comparing(Path::toString))
                     .toList();
         }
@@ -250,25 +267,184 @@ public final class B2ACSLPipeline {
                 .reduce((a, b) -> a + " " + b)
                 .orElse("");
 
+        Path mergedCode = cDir.resolve(MERGED_CODE_FILE_NAME);
+
         for (Path cFile : cFiles) {
-            ProcessBuilder pb = new ProcessBuilder(
-                    FRAMA_C,
-                    "-acsl-import", acslPath,
-                    cFile.toString(),
-                    "-wp",
-                    "-wp-out", "proof"
-            );
-            pb.directory(cDir.toFile());
-            pb.inheritIO();
-            Process p = pb.start();
-            boolean ok = p.waitFor(120, TimeUnit.SECONDS);
-            if (!ok) {
-                p.destroyForcibly();
+            // frama-c -acsl-import <acsl> <c> -print -no-unicode  (saída → merged_code.c)
+            ProcessBuilder importPb =
+                    new ProcessBuilder(
+                            FRAMA_C,
+                            "-acsl-import",
+                            acslPath,
+                            cFile.toString(),
+                            "-print",
+                            "-no-unicode");
+            importPb.directory(cDir.toFile());
+            importPb.redirectOutput(mergedCode.toFile());
+            importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
+
+            Process pImport = importPb.start();
+            boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
+            if (!importOk) {
+                pImport.destroyForcibly();
                 return 5;
             }
-            if (p.exitValue() != 0) return p.exitValue();
+            if (pImport.exitValue() != 0) {
+                return pImport.exitValue();
+            }
+
+            stripLeadingFramaCNonCOutput(mergedCode);
+            moveNewTypesAxiomaticBlockAfterPreamble(mergedCode);
+
+            // frama-c -wp merged_code.c -wp-prover CVC5 --wp-smoke-tests -wp-rte -wp-status
+            ProcessBuilder wpPb =
+                    new ProcessBuilder(
+                            FRAMA_C,
+                            "-wp",
+                            mergedCode.getFileName().toString(),
+                            "-wp-prover",
+                            "CVC5",
+                            "-wp-smoke-tests",
+                            "-wp-rte",
+                            "-wp-status");
+            wpPb.directory(cDir.toFile());
+            wpPb.inheritIO();
+
+            Process pWp = wpPb.start();
+            boolean wpOk = pWp.waitFor(600, TimeUnit.SECONDS);
+            if (!wpOk) {
+                pWp.destroyForcibly();
+                return 6;
+            }
+            if (pWp.exitValue() != 0) {
+                return pWp.exitValue();
+            }
         }
         return 0;
+    }
+
+    /**
+     * Remove do início de {@code merged_code.c} linhas em branco e linhas de log Frama-C
+     * {@code [etiqueta] …} até à primeira linha que não corresponde a esse padrão (código C / ACSL).
+     */
+    private static void stripLeadingFramaCNonCOutput(Path mergedC) throws IOException {
+        List<String> lines = Files.readAllLines(mergedC, StandardCharsets.UTF_8);
+        int start = 0;
+        while (start < lines.size()) {
+            String trimmed = lines.get(start).trim();
+            if (trimmed.isEmpty()) {
+                start++;
+                continue;
+            }
+            if (FRAMA_C_STDOUT_TAG_LINE.matcher(trimmed).matches()) {
+                start++;
+                continue;
+            }
+            break;
+        }
+        if (start == 0) {
+            return;
+        }
+        Files.write(mergedC, lines.subList(start, lines.size()), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Coloca o comentário ACSL {@code axiomatic new_types} logo após o preâmbulo (comentário gerado,
+     * {@code #include}, linhas em branco), antes dos restantes blocos {@code axiomatic} em ACSL.
+     */
+    private static void moveNewTypesAxiomaticBlockAfterPreamble(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        int typesKeywordIdx = content.indexOf(AXIOMATIC_NEW_TYPES_MARKER);
+        if (typesKeywordIdx < 0) {
+            return;
+        }
+        int blockStart = content.lastIndexOf("/*@", typesKeywordIdx);
+        if (blockStart < 0) {
+            return;
+        }
+        int openBrace = content.indexOf('{', typesKeywordIdx);
+        if (openBrace < 0) {
+            return;
+        }
+        int closeBrace = findMatchingBrace(content, openBrace);
+        if (closeBrace < 0) {
+            return;
+        }
+        int commentEnd = content.indexOf("*/", closeBrace);
+        if (commentEnd < 0) {
+            return;
+        }
+        int blockEnd = commentEnd + 2;
+        blockEnd = skipNewlineAfter(blockEnd, content);
+
+        String block = content.substring(blockStart, blockEnd);
+        String without = content.substring(0, blockStart) + content.substring(blockEnd);
+        int insertAt = findPreambleInsertIndex(without);
+        String sepBefore =
+                insertAt > 0 && without.charAt(insertAt - 1) != '\n' ? "\n" : "";
+        String sepAfter = block.endsWith("\n") ? "" : "\n";
+        String result = without.substring(0, insertAt) + sepBefore + block + sepAfter + without.substring(insertAt);
+        Files.writeString(mergedC, result, StandardCharsets.UTF_8);
+    }
+
+    private static int skipNewlineAfter(int pos, String s) {
+        int i = pos;
+        while (i < s.length()) {
+            char ch = s.charAt(i);
+            if (ch == '\n') {
+                return i + 1;
+            }
+            if (ch == '\r') {
+                i++;
+                if (i < s.length() && s.charAt(i) == '\n') {
+                    i++;
+                }
+                return i;
+            }
+            break;
+        }
+        return i;
+    }
+
+    private static int findMatchingBrace(String s, int openIdx) {
+        int depth = 0;
+        for (int i = openIdx; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /** Índice do primeiro {@code /*@} após o preâmbulo inicial; se não houver, o fim do texto. */
+    private static int findPreambleInsertIndex(String s) {
+        int i = 0;
+        while (i < s.length()) {
+            int lineStart = i;
+            int nl = s.indexOf('\n', i);
+            int lineEnd = nl < 0 ? s.length() : nl + 1;
+            String line = s.substring(i, lineEnd);
+            String left = line.stripLeading();
+            if (left.startsWith("/*@")) {
+                return lineStart;
+            }
+            String t = line.strip();
+            if (t.isEmpty()
+                    || t.startsWith("#include")
+                    || t.startsWith("/* Generated")
+                    || t.startsWith("//")) {
+                i = lineEnd;
+                continue;
+            }
+            i = lineEnd;
+        }
+        return s.length();
     }
 
     private static void deleteRecursive(Path dir) {

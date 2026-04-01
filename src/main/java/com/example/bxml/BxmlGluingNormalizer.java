@@ -39,7 +39,7 @@ public final class BxmlGluingNormalizer {
                 if (inv == null) continue;
                 BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machineEl);
                 BxmlComprehensionRegistry stub = BxmlComprehensionRegistry.emptyForFingerprinting();
-                BxmlTranslateContext ctx = new BxmlTranslateContext(types, stub);
+                BxmlTranslateContext ctx = new BxmlTranslateContext(types, stub, Map.of());
                 collectFromInvariantSubtree(inv, ctx, acc);
             } catch (Exception ignored) {
             }

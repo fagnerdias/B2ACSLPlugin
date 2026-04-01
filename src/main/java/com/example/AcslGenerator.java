@@ -20,6 +20,7 @@ import org.w3c.dom.NodeList;
 
 import com.example.bxml.BxmlInitialisationTranslator;
 import com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl;
+import com.example.bxml.BxmlConstantsAndProperties;
 import com.example.bxml.BxmlInvariantTranslator;
 import com.example.bxml.BxmlMachineVariables;
 import com.example.bxml.BxmlOperationsTranslator;
@@ -41,8 +42,12 @@ import com.example.model.Machine;
  * {@code ensures} de cada operação (e em {@code ensures} da inicialização), juntamente com o
  * invariante da abstrata.
  *
+ * <p>{@code Concrete_Constants} → {@code axiomatic Nome_constants}; {@code Properties} →
+ * {@code axiomatic Nome_properties} com axiomas ({@link BxmlConstantsAndProperties}).
+ *
  * <p>Variáveis: um bloco {@code axiomatic NomeMaquina_variables} por máquina (abstrata e cada
- * refinamento/implementação fundido), tipos inferidos quando possível ({@link BxmlMachineVariables}).
+ * refinamento/implementação fundido), tipos inferidos quando possível ({@link BxmlMachineVariables});
+ * nas implementações fundidas, cada variável concreta declara-se com {@code = RaizAbstrata__nome}.
  */
 public final class AcslGenerator {
 
@@ -133,7 +138,21 @@ public final class AcslGenerator {
                         + "opções: b2acsl.acslLibIncludeBase, b2acsl.acslLibIncludeMiddle. */\n\n");
         int headerLen = sb.length();
 
-        // 1) Variáveis: um bloco axiomatic por máquina (abstrata, depois cada fundida) + compreensões
+        // 1) Constantes e propriedades (só máquina abstrata raiz deste ficheiro)
+        String concreteConstants = BxmlConstantsAndProperties.formatConcreteConstantsBlock(machineEl, ctx);
+        if (!concreteConstants.isBlank()) {
+            sb.append(concreteConstants);
+            if (!concreteConstants.endsWith("\n")) sb.append("\n");
+            sb.append("\n");
+        }
+        String propertiesBlock = BxmlConstantsAndProperties.formatPropertiesBlock(machineEl, ctx);
+        if (!propertiesBlock.isBlank()) {
+            sb.append(propertiesBlock);
+            if (!propertiesBlock.endsWith("\n")) sb.append("\n");
+            sb.append("\n");
+        }
+
+        // 1b) Variáveis: um bloco axiomatic por máquina (abstrata, depois cada fundida) + compreensões
         String varsAbstract = BxmlMachineVariables.formatAxiomaticBlock(machineEl, ctx);
         if (!varsAbstract.isBlank()) {
             sb.append(varsAbstract);
@@ -142,7 +161,8 @@ public final class AcslGenerator {
         }
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx = BxmlTranslateContext.forMachine(mel, gluing);
-            String varsMerged = BxmlMachineVariables.formatAxiomaticBlock(mel, mctx);
+            String varsMerged =
+                    BxmlMachineVariables.formatAxiomaticBlock(mel, mctx, baseName);
             if (varsMerged.isBlank()) continue;
             sb.append(varsMerged);
             if (!varsMerged.endsWith("\n")) sb.append("\n");

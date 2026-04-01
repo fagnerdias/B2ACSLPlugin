@@ -82,7 +82,7 @@ public final class BxmlComprehensionRegistry {
             return tr + "|invalid";
         }
         BxmlComprehensionRegistry stub = emptyForFingerprinting();
-        BxmlTranslateContext ctx = new BxmlTranslateContext(types, stub);
+        BxmlTranslateContext ctx = new BxmlTranslateContext(types, stub, Map.of());
         String pred = BxmlPredicateToAcsl.translateBodyPredicate(body, ctx);
         pred = BxmlGluingNormalizer.applySubstitutions(pred, gluing == null ? Map.of() : gluing);
         String varSig = boundVariablesSignature(vars);
@@ -208,7 +208,7 @@ public final class BxmlComprehensionRegistry {
         }
         if (idNodes.isEmpty()) return;
 
-        BxmlTranslateContext ctx = new BxmlTranslateContext(types, this);
+        BxmlTranslateContext ctx = new BxmlTranslateContext(types, this, Map.of());
         String pred = BxmlPredicateToAcsl.translateBodyPredicate(body, ctx);
 
         String ref = "set_comprehension_" + index;

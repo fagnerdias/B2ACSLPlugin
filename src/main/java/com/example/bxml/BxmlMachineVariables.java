@@ -13,6 +13,7 @@ import org.w3c.dom.NodeList;
  * Declara variáveis de máquina B em blocos {@code axiomatic …_variables}, com tipos inferidos
  * preferencialmente a partir do invariante (ex.: {@code numbers <: NAT} → {@code Set<integer>}) e
  * recurso ao {@code typref} de {@code Abstract_Variables} / {@code Concrete_Variables}.
+ * Constantes concretas têm bloco próprio ({@link #inferConcreteConstantsLogicTypes} + contexto).
  *
  * <p>Sequências B ({@code iseq}, {@code POW(T*T)}) traduzem-se para {@code \list<elemento>} em ACSL.
  */
@@ -25,17 +26,43 @@ public final class BxmlMachineVariables {
      * declaradas ({@code name} do {@code <Machine>}).
      */
     public static String formatAxiomaticBlock(Element machineEl, BxmlTranslateContext ctx) {
-        String machineName = machineEl.getAttribute("name");
-        if (machineName == null || machineName.isBlank()) return "";
-        return formatVariablesBlock(machineName, inferVariableLogicTypes(machineEl, ctx));
+        return formatAxiomaticBlock(machineEl, ctx, null);
     }
 
-    private static String formatVariablesBlock(String blockName, Map<String, String> types) {
+    /**
+     * Como {@link #formatAxiomaticBlock(Element, BxmlTranslateContext)}, mas para máquinas fundidas com
+     * {@code type="implementation"}: cada variável concreta fica {@code logic T v = Raiz__v;} alinhada ao
+     * contrato C ({@link #listImplementationAssignTargets}).
+     *
+     * @param rootAbstractMachineName nome da máquina abstrata raiz do ficheiro {@code .acsl} (ex. {@code SetTest});
+     *        ignorado se a máquina não for implementação
+     */
+    public static String formatAxiomaticBlock(
+            Element machineEl, BxmlTranslateContext ctx, String rootAbstractMachineName) {
+        String machineName = machineEl.getAttribute("name");
+        if (machineName == null || machineName.isBlank()) return "";
+        boolean linkConcrete =
+                rootAbstractMachineName != null
+                        && !rootAbstractMachineName.isBlank()
+                        && isImplementationMachine(machineEl);
+        return formatVariablesBlock(
+                machineName,
+                inferVariableLogicTypes(machineEl, ctx),
+                linkConcrete ? rootAbstractMachineName.trim() : null);
+    }
+
+    private static String formatVariablesBlock(
+            String blockName, Map<String, String> types, String abstractNameForRhs) {
         if (types.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic ").append(blockName).append("_variables {\n");
         for (Map.Entry<String, String> e : types.entrySet()) {
-            sb.append("    logic ").append(e.getValue()).append(" ").append(e.getKey()).append(";\n");
+            String var = e.getKey();
+            sb.append("    logic ").append(e.getValue()).append(" ").append(var);
+            if (abstractNameForRhs != null) {
+                sb.append(" = ").append(abstractNameForRhs).append("__").append(var);
+            }
+            sb.append(";\n");
         }
         sb.append("}\n");
         return sb.toString();
@@ -63,6 +90,31 @@ public final class BxmlMachineVariables {
                 t = types.acslVariableLogicTypeFromTypref(typref);
             }
             out.put(name, t);
+        }
+        return out;
+    }
+
+    /**
+     * Tipos {@code logic} só para {@code Concrete_Constants} (para fundir no
+     * {@link BxmlTranslateContext#variableLogicTypes()} sem duplicar no bloco {@code _variables}).
+     */
+    public static Map<String, String> inferConcreteConstantsLogicTypes(
+            Element machineEl, BxmlTypeRegistry types) {
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        Element block = firstChildElement(machineEl, "Concrete_Constants");
+        if (block == null) return out;
+        NodeList ch = block.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            if (!"Id".equals(e.getLocalName())) continue;
+            String name = e.getAttribute("value");
+            if (name == null || name.isBlank()) continue;
+            String trAttr = e.getAttribute("typref");
+            int typref = trAttr.isBlank() ? -1 : Integer.parseInt(trAttr.trim());
+            out.put(name, types.acslVariableLogicTypeFromTypref(typref));
         }
         return out;
     }

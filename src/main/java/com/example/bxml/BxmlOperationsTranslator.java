@@ -14,7 +14,7 @@ import org.w3c.dom.NodeList;
  * As operações referenciam funções da {@code ACSL_Lib} via {@link BxmlExpressionToAcsl}.
  *
  * <p>Uma {@code Operation} contém opcionalmente {@code Input_Parameters}, {@code Output_Parameters}
- * (cada saída vira {@code assigns *nome} e o correspondente {@code ensures} usa {@code *nome} à esquerda de {@code ==}),
+ * (cada saída vira {@code assigns *nome}, {@code requires \valid(nome)} e o correspondente {@code ensures} usa {@code *nome} à esquerda de {@code ==}),
  * {@code Precondition} (predicado) e obrigatoriamente {@code Body} (substituição).
  *
  * @see <a href="https://www.atelierb.eu/wp-content/uploads/2023/10/bxml-1.0.html">BXML 1.0 — Operation</a>
@@ -59,6 +59,9 @@ public final class BxmlOperationsTranslator {
             }
 
             List<String> outputParams = parseOutputParameterNames(child);
+            for (String p : outputParams) {
+                requires.add("\\valid(" + p + ")");
+            }
 
             List<String> ensures = new ArrayList<>();
             Element body = firstChildElement(child, "Body");

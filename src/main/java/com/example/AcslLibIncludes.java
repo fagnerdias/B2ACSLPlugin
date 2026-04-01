@@ -18,7 +18,8 @@ import java.util.regex.Pattern;
 
 /**
  * Detecta símbolos da {@code ACSL_Lib} no texto ACSL gerado e produz linhas {@code include "..."}
- * para os ficheiros correspondentes em {@code src/main/resources/ACSL_Lib}.
+ * para os ficheiros correspondentes em {@code src/main/resources/ACSL_Lib}. Usos de {@code NAT},
+ * {@code NAT1} ou {@code BOOL} como identificadores incluem {@code set_functions/variables.acsl}.
  *
  * <p>Propriedades opcionais (JVM / {@code META-INF/b2acsl.properties}):
  * <ul>
@@ -46,6 +47,15 @@ public final class AcslLibIncludes {
     /** Raiz da {@code ACSL_Lib}: tipos {@code Set}, {@code Tuple}, relações indexadas (sempre antes dos outros includes). */
     private static final String TYPES_LIB_REL = "types.acsl";
 
+    /** Conjuntos globais {@code NAT}, {@code NAT1}, {@code BOOL} ({@code set_functions/variables.acsl}). */
+    private static final String VARIABLES_LIB_REL = "set_functions/variables.acsl";
+
+    /**
+     * Referências a identificadores {@code NAT}, {@code NAT1} ou {@code BOOL} (não parte de nomes mais longos).
+     */
+    private static final Pattern GLOBAL_SET_CONSTANT_ID =
+            Pattern.compile("(?<![A-Za-z0-9_])(?:NAT1|NAT|BOOL)(?![A-Za-z0-9_])");
+
     /**
      * Símbolo ACSL (nome antes de '(') → caminho relativo dentro de ACSL_Lib (usa '/').
      */
@@ -61,32 +71,45 @@ public final class AcslLibIncludes {
             Map.entry("disjoint", "set_functions/disjoint.acsl"),
             Map.entry("intersection", "set_functions/intersection.acsl"),
             Map.entry("difference", "set_functions/difference.acsl"),
+            Map.entry("pair", "set_functions/pair.acsl"),
+            Map.entry("is_pow_of", "set_functions/pow.acsl"),
+            Map.entry("equals", "set_functions/equals.acsl"),
+            Map.entry("cartesian_product", "set_functions/cartesian_product.acsl"),
             Map.entry("dom", "relation_functions/domain.acsl"),
-            Map.entry("ran", "relation_functions/range.acsl"),
             Map.entry("relation_inverse", "relation_functions/inverse.acsl"),
             Map.entry("domain_restriction", "relation_functions/domain_restriction.acsl"),
             Map.entry("range_restriction", "relation_functions/range_restriction.acsl"),
             Map.entry("iSeq", "sequence_functions/iseq.acsl"),
             Map.entry("is_seq_of", "sequence_functions/is_seq_of.acsl"));
 
+    /**
+     * Ordem dos {@code include} para {@code set_functions/} (dependências lógicas da ACSL_Lib), depois
+     * relações e sequências.
+     */
     private static final List<String> FILE_ORDER = List.of(
             "set_functions/belongs.acsl",
-            "set_functions/inclusion.acsl",
+            "set_functions/variables.acsl",
             "set_functions/empty.acsl",
             "set_functions/singleton.acsl",
-            "set_functions/card.acsl",
-            "set_functions/finite.acsl",
             "set_functions/union.acsl",
-            "set_functions/disjoint.acsl",
+            "set_functions/pair.acsl",
             "set_functions/intersection.acsl",
             "set_functions/difference.acsl",
+            "set_functions/card.acsl",
+            "set_functions/inclusion.acsl",
+            "set_functions/pow.acsl",
+            "set_functions/finite.acsl",
+            "set_functions/equals.acsl",
+            "set_functions/cartesian_product.acsl",
+            "set_functions/disjoint.acsl",
             "relation_functions/domain.acsl",
             "relation_functions/range.acsl",
             "relation_functions/inverse.acsl",
             "relation_functions/domain_restriction.acsl",
             "relation_functions/range_restriction.acsl",
             "sequence_functions/iseq.acsl",
-            "sequence_functions/is_seq_of.acsl");
+            "sequence_functions/is_seq_of.acsl",
+            "sequence_functions/range.acsl");
 
     public static String formatIncludeBlock(String acslText) {
         List<String> lines = collectIncludeLines(acslText);
@@ -169,6 +192,10 @@ public final class AcslLibIncludes {
                 files.add(e.getValue());
             }
         }
+        addRangeIncludesForRan(acslText, files);
+        if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
+            files.add(VARIABLES_LIB_REL);
+        }
         if (files.isEmpty()) return List.of();
 
         List<String> ordered = new ArrayList<>();
@@ -179,6 +206,28 @@ public final class AcslLibIncludes {
             if (!ordered.contains(f)) ordered.add(f);
         }
         return List.copyOf(ordered);
+    }
+
+    /**
+     * B {@code ran} traduz-se para {@code ran(...)} em ACSL: há duas libs homónimas —
+     * {@code relation_functions/range.acsl} ({@code ran(Relation_*)}) e
+     * {@code sequence_functions/range.acsl} ({@code ran(\list<...>)}).
+     */
+    private static void addRangeIncludesForRan(String acslText, LinkedHashSet<String> files) {
+        if (!containsSymbolCall(acslText, "ran")) {
+            return;
+        }
+        boolean listCase = acslText.contains("\\list<");
+        boolean relationCase = acslText.contains("Relation_");
+        if (listCase) {
+            files.add("sequence_functions/range.acsl");
+        }
+        if (relationCase) {
+            files.add("relation_functions/range.acsl");
+        }
+        if (!listCase && !relationCase) {
+            files.add("relation_functions/range.acsl");
+        }
     }
 
     private static List<String> transitiveAcslLibPaths(Path diskRoot, List<String> seeds)

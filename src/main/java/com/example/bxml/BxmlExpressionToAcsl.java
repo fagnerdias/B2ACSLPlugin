@@ -17,6 +17,53 @@ public final class BxmlExpressionToAcsl {
     /**
      * Traduz uma expressão B (filho de {@code Values} ou {@code Variables}).
      */
+    /**
+     * Igualdade ACSL: {@code equals} para dois valores conjunto ({@code Set<…>}, {@code Relation_*},
+     * expressões como {@code ran(…)}, {@code empty}, …); {@code ==} para escalares (ex.: inteiro,
+     * {@code card(…)}).
+     */
+    public static String formatEquality(Element leftExp, Element rightExp, BxmlTranslateContext ctx) {
+        String l = translate(leftExp, ctx);
+        String r = translate(rightExp, ctx);
+        if (isSetValued(leftExp, ctx) && isSetValued(rightExp, ctx)) {
+            return "equals(" + l + ", " + r + ")";
+        }
+        return l + " == " + r;
+    }
+
+    /**
+     * Expressão cuja sorte lógica é conjunto (não inteiro nem lista) — usado para escolher
+     * {@code equals} vs {@code ==}.
+     */
+    public static boolean isSetValued(Element exp, BxmlTranslateContext ctx) {
+        if (exp == null) return false;
+        String ln = exp.getLocalName();
+        return switch (ln) {
+            case "Id" -> isSetLikeVariableType(ctx.variableLogicTypes().get(exp.getAttribute("value")));
+            case "Unary_Exp" -> {
+                String op = exp.getAttribute("op");
+                if ("ran".equals(op)) {
+                    yield true;
+                }
+                if ("card".equals(op)) {
+                    yield false;
+                }
+                yield false;
+            }
+            case "EmptySet" -> true;
+            case "Quantified_Set" -> true;
+            case "Binary_Exp" -> isSetUnion(exp.getAttribute("op"));
+            case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
+            default -> false;
+        };
+    }
+
+    private static boolean isSetLikeVariableType(String t) {
+        if (t == null || t.isBlank()) return false;
+        if (t.startsWith("Set<")) return true;
+        return t.startsWith("Relation_");
+    }
+
     public static String translate(Element exp, BxmlTranslateContext ctx) {
         String ln = exp.getLocalName();
         return switch (ln) {

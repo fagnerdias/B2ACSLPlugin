@@ -13,7 +13,8 @@ import org.w3c.dom.NodeList;
  * <p>{@code v : iseq(T)} / {@code v : seq(T)} → {@code iSeq} / {@code is_seq_of};
  * {@code ss : POW(S)} → {@code inclusion(ss, S)}; {@code ss : FIN(ss)} → {@code is_finite(ss)};
  * {@code x /: s} → {@code not_belongs(x, s)}; comparadores inteiros {@code <=i}, {@code <i} →
- * {@code <=}, {@code <}.
+ * {@code <=}, {@code <}; igualdade entre conjuntos ({@code Set<…>}, {@code ran} sobre relação, …) →
+ * {@code equals(a, b)}; escalares (ex.: {@code card}) mantêm {@code ==}.
  *
  * @see <a href="https://www.atelierb.eu/wp-content/uploads/2023/10/bxml-1.0.html">BXML 1.0</a>
  */
@@ -38,6 +39,13 @@ public final class BxmlPredicateToAcsl {
         Element p = firstPredChild(invariantEl);
         if (p == null) return "";
         return translatePred(p, ctx);
+    }
+
+    /**
+     * Filho preditivo direto de {@code Properties} (ex.: {@code Exp_Comparison}, {@code Nary_Pred}).
+     */
+    public static String translatePropertyPred(Element predElement, BxmlTranslateContext ctx) {
+        return translatePred(predElement, ctx);
     }
 
     private static Element firstPredChild(Element parent) {
@@ -114,7 +122,13 @@ public final class BxmlPredicateToAcsl {
         if ("<:".equals(op)) {
             return "inclusion(" + left + ", " + right + ")";
         }
-        if ("=".equals(op)) return "(" + left + " == " + right + ")";
+        if ("=".equals(op)) {
+            if (BxmlExpressionToAcsl.isSetValued(leftEl, ctx)
+                    && BxmlExpressionToAcsl.isSetValued(rightEl, ctx)) {
+                return "equals(" + left + ", " + right + ")";
+            }
+            return "(" + left + " == " + right + ")";
+        }
         return "(" + left + " " + op + " " + right + ")";
     }
 
