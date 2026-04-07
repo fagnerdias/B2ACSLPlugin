@@ -46,7 +46,8 @@ import com.example.model.Machine;
  * invariante da abstrata.
  *
  * <p>{@code Concrete_Constants} → {@code axiomatic Nome_constants}; {@code Properties} →
- * {@code axiomatic Nome_properties} com axiomas ({@link BxmlConstantsAndProperties}); em seguida
+ * {@code axiomatic Nome_properties}; {@code Values} (implementações) → {@code axiomatic Nome_values}
+ * ({@link BxmlConstantsAndProperties}); em seguida
  * {@code include "connection.acsl"} se existir refinamento fundido na abstração ({@link BxmlConnectionAcsl},
  * só elo abstração→refinamento).
  *
@@ -176,6 +177,12 @@ public final class AcslGenerator {
             if (!propertiesBlock.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
+        String valuesRoot = BxmlConstantsAndProperties.formatValuesBlock(machineEl, ctx);
+        if (!valuesRoot.isBlank()) {
+            sb.append(valuesRoot);
+            if (!valuesRoot.endsWith("\n")) sb.append("\n");
+            sb.append("\n");
+        }
 
         Optional<Path> connectionAcsl =
                 BxmlConnectionAcsl.writeConnectionAcsl(
@@ -203,6 +210,12 @@ public final class AcslGenerator {
         Element refinementChainParent = machineEl;
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx = BxmlTranslateContext.forMachine(mel, gluing);
+            String valuesMerged = BxmlConstantsAndProperties.formatValuesBlock(mel, mctx);
+            if (!valuesMerged.isBlank()) {
+                sb.append(valuesMerged);
+                if (!valuesMerged.endsWith("\n")) sb.append("\n");
+                sb.append("\n");
+            }
             String varsMerged =
                     BxmlMachineVariables.formatAxiomaticBlock(
                             mel, mctx, baseName, refinementChainParent, gluing);

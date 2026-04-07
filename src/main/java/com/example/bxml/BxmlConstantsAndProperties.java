@@ -8,7 +8,8 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 /**
- * Traduz {@code Concrete_Constants} e {@code Properties} (BXML 1.0) para blocos {@code axiomatic} ACSL.
+ * Traduz {@code Concrete_Constants}, {@code Properties} e {@code Values} (BXML 1.0) para blocos
+ * {@code axiomatic} ACSL.
  */
 public final class BxmlConstantsAndProperties {
 
@@ -88,6 +89,72 @@ public final class BxmlConstantsAndProperties {
         }
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /**
+     * {@code axiomatic Nome_values { axiom Nome_values_id: id == E; … }} a partir de {@code <Values>}
+     * (filhos {@code Valuation} com {@code ident} e expressão filha, p.ex. {@code Integer_Literal}).
+     */
+    public static String formatValuesBlock(Element machineEl, BxmlTranslateContext ctx) {
+        Element block = firstChildElement(machineEl, "Values");
+        if (block == null) return "";
+
+        String machineName = machineEl.getAttribute("name");
+        if (machineName == null || machineName.isBlank()) return "";
+
+        List<String> axioms = new ArrayList<>();
+        NodeList ch = block.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            if (!"Valuation".equals(e.getLocalName())) continue;
+
+            String ident = e.getAttribute("ident");
+            if (ident == null || ident.isBlank()) continue;
+            Element valueExp = firstValuationValueExpression(e);
+            if (valueExp == null) continue;
+
+            String equality = formatValuationEquality(ident, valueExp, ctx);
+            if (equality == null || equality.isBlank()) continue;
+            String axiomName = machineName + "_values_" + ident;
+            axioms.add("    axiom " + axiomName + ": " + equality + ";");
+        }
+        if (axioms.isEmpty()) return "";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("axiomatic ").append(machineName).append("_values {\n");
+        for (String ax : axioms) {
+            sb.append(ax).append("\n");
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    private static Element firstValuationValueExpression(Element valuation) {
+        NodeList ch = valuation.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            return e;
+        }
+        return null;
+    }
+
+    private static String formatValuationEquality(String ident, Element valueExp, BxmlTranslateContext ctx) {
+        String rhs = BxmlExpressionToAcsl.translate(valueExp, ctx);
+        if (rhs == null || rhs.isBlank()) return null;
+        String lt = ctx.variableLogicTypes().get(ident);
+        if (lt != null && (lt.startsWith("Set<") || lt.startsWith("Relation_"))) {
+            return "equals(" + ident + ", " + rhs + ")";
+        }
+        if (BxmlExpressionToAcsl.isSetValued(valueExp, ctx)) {
+            return "equals(" + ident + ", " + rhs + ")";
+        }
+        return ident + " == " + rhs;
     }
 
     private static String axiomNameForProperty(String machineName, Element predEl, int idx) {
