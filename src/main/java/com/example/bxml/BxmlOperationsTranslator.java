@@ -92,10 +92,20 @@ public final class BxmlOperationsTranslator {
                     && GhostOperationsCiGenerator.operationAssignsAbstract(child, abstractVariableNames)) {
                 ghostSlug = GhostOperationsCiGenerator.ghostOperationSlug(opName);
             }
+            List<String> dummyGhostEnsureVars =
+                    ghostSlug.isBlank()
+                            ? List.of()
+                            : GhostOperationsCiGenerator.listAbstractVariableNames(machineEl);
 
             out.add(
                     new OperationAcsl(
-                            funcName, requires, ensures, outputParams, ghostSlug, inputParamNames));
+                            funcName,
+                            requires,
+                            ensures,
+                            outputParams,
+                            ghostSlug,
+                            inputParamNames,
+                            dummyGhostEnsureVars));
         }
         return out;
     }
@@ -180,7 +190,16 @@ public final class BxmlOperationsTranslator {
             /** Vazio se a operação for pura face às variáveis abstratas; senão slug para {@code ghost__<slug>(…)}. */
             String ghostBehaviorSlug,
             /** Nomes dos parâmetros de entrada para o {@code assert ghost__…}; ordem do BXML. */
-            List<String> ghostBehaviorInputNames) {
+            List<String> ghostBehaviorInputNames,
+            /**
+             * Sufixos {@code v} para {@code ensures dummy_ghost_<v>;} (operações não puras ghost); vazio se pura.
+             */
+            List<String> dummyGhostEnsureVarNames) {
+
+        public OperationAcsl {
+            dummyGhostEnsureVarNames =
+                    dummyGhostEnsureVarNames == null ? List.of() : List.copyOf(dummyGhostEnsureVarNames);
+        }
 
         /** Mesmo esquema que {@link com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl#toContractText()}. */
         public String toContractSketch() {
@@ -192,6 +211,9 @@ public final class BxmlOperationsTranslator {
             }
             for (String e : ensures) {
                 sb.append("    ensures  ").append(e).append(";\n");
+            }
+            for (String v : dummyGhostEnsureVarNames) {
+                sb.append("    ensures  dummy_ghost_").append(v).append(";\n");
             }
             for (String p : outputParameters) {
                 sb.append("    assigns *").append(p).append(";\n");

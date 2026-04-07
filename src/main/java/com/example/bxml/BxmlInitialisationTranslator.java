@@ -47,7 +47,7 @@ public final class BxmlInitialisationTranslator {
 
         String functionName = machineName + "__INITIALISATION";
         return new InitialisationAcsl(
-                functionName, ensures, new ArrayList<>(additionalAssignTargets), false);
+                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of());
     }
 
     private static void walkSubstitution(Element sub, List<String> ensures, BxmlTranslateContext ctx) {
@@ -146,7 +146,17 @@ public final class BxmlInitialisationTranslator {
             String functionName,
             List<String> ensures,
             List<String> assignsTargets,
-            boolean includeGhostBehaviorAssert) {
+            boolean includeGhostBehaviorAssert,
+            /**
+             * Sufixos de variável abstrata (ex. {@code ss}) para cláusulas {@code ensures dummy_ghost_<v>;}
+             * em inicialização não pura face ao modelo ghost.
+             */
+            List<String> dummyGhostEnsureVarNames) {
+
+        public InitialisationAcsl {
+            dummyGhostEnsureVarNames =
+                    dummyGhostEnsureVarNames == null ? List.of() : List.copyOf(dummyGhostEnsureVarNames);
+        }
 
         public String toContractText() {
             StringBuilder sb = new StringBuilder();
@@ -154,6 +164,9 @@ public final class BxmlInitialisationTranslator {
             sb.append("contract:    \n");
             for (String e : ensures) {
                 sb.append("    ensures  ").append(e).append(";\n");
+            }
+            for (String v : dummyGhostEnsureVarNames) {
+                sb.append("    ensures  dummy_ghost_").append(v).append(";\n");
             }
             for (String a : assignsTargets) {
                 sb.append("    assigns ").append(a).append(";\n");

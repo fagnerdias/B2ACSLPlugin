@@ -312,9 +312,10 @@ public final class B2ACSLPipeline {
             stripLeadingFramaCNonCOutput(mergedCode);
             moveNewTypesAxiomaticBlockAfterPreamble(mergedCode);
             removeGhostPatternAxiomaticBlocks(mergedCode);
-            stripDummyPrefixFromMergedCode(mergedCode);
+            stripDummyPrefixFromMergedCode(mergedCode);            
             insertGhostVariableDeclarationsFromGhostCi(mergedCode, ghostCi);
             replaceAssertGhostWithGhostKeyword(mergedCode);
+            replaceEnsuresGhostVarWithAssignsInMerged(mergedCode);
             addParenthesesToGhostInitialisationCall(mergedCode);
             reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
 
@@ -463,6 +464,20 @@ public final class B2ACSLPipeline {
     private static void stripDummyPrefixFromMergedCode(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
         content = content.replaceAll("\\bdummy_", "");
+        Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Após {@link #stripDummyPrefixFromMergedCode}, {@code ensures dummy_ghost_<v>} passa a
+     * {@code ensures ghost_<v>}; troca por {@code assigns ghost_<v>;} (variáveis ghost no merge).
+     * Inclui a forma que o Frama-C emite para não-nulo: {@code ensures ghost_<v> != 0;}.
+     */
+    private static final Pattern ENSURES_GHOST_VAR =
+            Pattern.compile("ensures\\s+(ghost_\\w+)\\s*(?:;|!=\\s*0\\s*;)");
+
+    private static void replaceEnsuresGhostVarWithAssignsInMerged(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        content = ENSURES_GHOST_VAR.matcher(content).replaceAll("assigns $1;");
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 

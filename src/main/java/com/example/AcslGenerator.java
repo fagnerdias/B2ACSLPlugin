@@ -135,12 +135,17 @@ public final class AcslGenerator {
         boolean initGhostAssert =
                 GhostOperationsCiGenerator.initialisationAssignsAbstract(
                         machineEl, abstractVariableNamesForGhost);
+        List<String> dummyGhostVarsForInit =
+                initGhostAssert
+                        ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
+                        : List.of();
         InitialisationAcsl initMarked =
                 new InitialisationAcsl(
                         initBare.functionName(),
                         initBare.ensures(),
                         initBare.assignsTargets(),
-                        initGhostAssert);
+                        initGhostAssert,
+                        dummyGhostVarsForInit);
         InitialisationAcsl init =
                 isAbstraction
                         ? withInvariantEnsures(initMarked, allInvariantPredicateNames)
@@ -338,7 +343,11 @@ public final class AcslGenerator {
             ensures.add(inv);
         }
         return new InitialisationAcsl(
-                init.functionName(), ensures, init.assignsTargets(), init.includeGhostBehaviorAssert());
+                init.functionName(),
+                ensures,
+                init.assignsTargets(),
+                init.includeGhostBehaviorAssert(),
+                init.dummyGhostEnsureVarNames());
     }
 
     private static Document parseXml(Path path) throws Exception {
