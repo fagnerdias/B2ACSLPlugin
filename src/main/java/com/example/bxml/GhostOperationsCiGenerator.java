@@ -124,13 +124,13 @@ public final class GhostOperationsCiGenerator {
             String d = toDSetType(t);
             sb.append("        logic ").append(d).append(" dummy_").append(v).append(";\n\n");
         }
-        sb.append("        logic DSet<integer> empty(Set<integer> witness);\n");
-        sb.append("        predicate belongs(integer a, integer b);\n");
-        sb.append("        predicate equals(DSet<integer> a, DSet<integer> b);\n");
-        sb.append("        logic DSet<integer> set_union(DSet<integer> a, DSet<integer> b);\n");
-        sb.append("        logic integer card(DSet<integer> a);\n");
-        sb.append("        logic DSet<integer> singleton(integer a);\n");
-        sb.append("        predicate is_finite(DSet<integer> a);\n\n");
+        sb.append("        logic A empty<A>(A a);\n");
+        sb.append("        predicate belongs<A, B>(A a, B b);\n");
+        sb.append("        predicate equals<A,B>(A a, B b);\n");
+        sb.append("        logic A set_union<A, B>(A a, B b);\n");
+        sb.append("        logic integer card<A>(A a);\n");
+        sb.append("        logic DSet<integer> singleton<A>(A a);\n");
+        sb.append("        predicate is_finite<A>(A a);\n\n");
         sb.append("    }\n*/\n");
         return sb.toString();
     }
