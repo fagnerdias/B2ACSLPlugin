@@ -40,6 +40,9 @@ public final class B2ACSLPipeline {
     /** Marca o bloco {@code axiomatic new_types} importado (ex. de {@code types.acsl}). */
     private static final String AXIOMATIC_NEW_TYPES_MARKER = "axiomatic new_types";
 
+    /** Lemas admitidos da ACSL_Lib (anexados ao fim do merge Frama-C). */
+    private static final String ACSL_LIB_LEMMAS_RESOURCE = "/ACSL_Lib/lemmas.acsl";
+
     private static final boolean MOCK_MODE = isMockEnabled();
 
     private static boolean isMockEnabled() {
@@ -318,6 +321,7 @@ public final class B2ACSLPipeline {
             replaceEnsuresGhostVarWithAssignsInMerged(mergedCode);
             addParenthesesToGhostInitialisationCall(mergedCode);
             reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
+            appendLemmasAcslLibToMergedEnd(mergedCode);
 
             // frama-c -wp merged_code.c -wp-prover CVC5 --wp-smoke-tests -wp-rte -wp-status
             ProcessBuilder wpPb =
@@ -329,6 +333,8 @@ public final class B2ACSLPipeline {
                             "CVC5",
                             "-wp-smoke-tests",
                             "-wp-rte",
+                            "-wp-timeout",
+                            "20",
                             "-wp-status");
             wpPb.directory(cDir.toFile());
             wpPb.inheritIO();
@@ -599,6 +605,40 @@ public final class B2ACSLPipeline {
         }
         content = moveSequenceListAxiomaticsBeforeConnection(content);
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Passo 10: anexa ao fim de {@code merged_code.c} o texto de {@code ACSL_Lib/lemmas.acsl} (classpath
+     * ou {@code src/main/resources} em desenvolvimento), dentro de um comentário ACSL
+     * {@code slash-star-at … star-slash}.
+     */
+    private static void appendLemmasAcslLibToMergedEnd(Path mergedC) throws IOException {
+        Optional<String> lemmas = readAcslLibLemmasText();
+        if (lemmas.isEmpty() || lemmas.get().isBlank()) {
+            return;
+        }
+        String body = lemmas.get().stripTrailing();
+        String wrapped = "/*@\n" + body + "\n */\n";
+        String existing = Files.readString(mergedC, StandardCharsets.UTF_8);
+        String sep = existing.endsWith("\n") ? "" : "\n";
+        Files.writeString(mergedC, existing + sep + wrapped, StandardCharsets.UTF_8);
+    }
+
+    private static Optional<String> readAcslLibLemmasText() throws IOException {
+        try (InputStream in = B2ACSLPipeline.class.getResourceAsStream(ACSL_LIB_LEMMAS_RESOURCE)) {
+            if (in != null) {
+                return Optional.of(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+            }
+        }
+        Path dev =
+                Path.of(System.getProperty("user.dir", "."))
+                        .resolve("src/main/resources/ACSL_Lib/lemmas.acsl")
+                        .toAbsolutePath()
+                        .normalize();
+        if (Files.isRegularFile(dev)) {
+            return Optional.of(Files.readString(dev, StandardCharsets.UTF_8));
+        }
+        return Optional.empty();
     }
 
     /**
