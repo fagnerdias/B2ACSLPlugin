@@ -44,6 +44,10 @@ public final class AcslLibIncludes {
     private static final Pattern INCLUDE_IN_LIB =
             Pattern.compile("include\\s+\"([^\"]+)\"\\s*;", Pattern.MULTILINE);
 
+    /** Primeiro bloco {@code axiomatic Name} num ficheiro da ACSL_Lib (ex.: {@code set_belongs}, {@code range_function}). */
+    private static final Pattern FIRST_AXIOMATIC_NAME_IN_LIB_FILE =
+            Pattern.compile("axiomatic\\s+(\\w+)\\s*\\{");
+
     /** Raiz da {@code ACSL_Lib}: tipos {@code Set}, {@code Tuple}, relações indexadas (sempre antes dos outros includes). */
     private static final String TYPES_LIB_REL = "types.acsl";
 
@@ -120,6 +124,27 @@ public final class AcslLibIncludes {
         }
         sb.append('\n');
         return sb.toString();
+    }
+
+    /**
+     * Nomes dos blocos {@code axiomatic} definidos nos ficheiros de {@link #FILE_ORDER} (funções /
+     * predicados da biblioteca), na mesma ordem que os {@code include} da lib — para reordenar o merge
+     * Frama-C.
+     */
+    public static List<String> orderedLibFunctionAxiomaticNames() throws IOException {
+        List<String> names = new ArrayList<>();
+        Path diskRoot = resolveAcslLibRootOnDisk();
+        for (String rel : FILE_ORDER) {
+            String text = readAcslLibText(diskRoot, rel);
+            if (text == null) {
+                continue;
+            }
+            Matcher m = FIRST_AXIOMATIC_NAME_IN_LIB_FILE.matcher(text);
+            if (m.find()) {
+                names.add(m.group(1));
+            }
+        }
+        return List.copyOf(names);
     }
 
     /**

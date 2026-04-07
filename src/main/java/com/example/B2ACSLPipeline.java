@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.example.bxml.BxmlGluingNormalizer;
@@ -310,6 +311,12 @@ public final class B2ACSLPipeline {
 
             stripLeadingFramaCNonCOutput(mergedCode);
             moveNewTypesAxiomaticBlockAfterPreamble(mergedCode);
+            removeGhostPatternAxiomaticBlocks(mergedCode);
+            stripDummyPrefixFromMergedCode(mergedCode);
+            insertGhostVariableDeclarationsFromGhostCi(mergedCode, ghostCi);
+            replaceAssertGhostWithGhostKeyword(mergedCode);
+            addParenthesesToGhostInitialisationCall(mergedCode);
+            reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
 
             // frama-c -wp merged_code.c -wp-prover CVC5 --wp-smoke-tests -wp-rte -wp-status
             ProcessBuilder wpPb =
@@ -400,6 +407,329 @@ public final class B2ACSLPipeline {
         String sepAfter = block.endsWith("\n") ? "" : "\n";
         String result = without.substring(0, insertAt) + sepBefore + block + sepAfter + without.substring(insertAt);
         Files.writeString(mergedC, result, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Remove blocos ACSL {@code axiomatic dummy_ghost} e {@code axiomatic <M>_ghost_patterns} do merge
+     * Frama-C (gerados a partir de {@code ghost_operations.ci}).
+     */
+    private static void removeGhostPatternAxiomaticBlocks(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        content = removeAllAxiomaticBlocksNamed(content, "dummy_ghost");
+        Pattern ghostPatterns = Pattern.compile("axiomatic\\s+\\w+_ghost_patterns\\b");
+        Matcher m = ghostPatterns.matcher(content);
+        while (m.find()) {
+            content = removeAxiomaticCommentBlockContaining(content, m.start());
+            m = ghostPatterns.matcher(content);
+        }
+        Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    private static String removeAllAxiomaticBlocksNamed(String content, String axiomaticName) {
+        String marker = "axiomatic " + axiomaticName;
+        int idx;
+        while ((idx = content.indexOf(marker)) >= 0) {
+            content = removeAxiomaticCommentBlockContaining(content, idx);
+        }
+        return content;
+    }
+
+    /**
+     * Remove o bloco de comentário ACSL (aberto com {@code slash-star-at}) que contém {@code keywordIdx}
+     * (por exemplo o nome {@code axiomatic ...}).
+     */
+    private static String removeAxiomaticCommentBlockContaining(String content, int keywordIdx) {
+        int blockStart = content.lastIndexOf("/*@", keywordIdx);
+        if (blockStart < 0) {
+            return content;
+        }
+        int openBrace = content.indexOf('{', keywordIdx);
+        if (openBrace < 0) {
+            return content;
+        }
+        int closeBrace = findMatchingBrace(content, openBrace);
+        if (closeBrace < 0) {
+            return content;
+        }
+        int commentEnd = content.indexOf("*/", closeBrace);
+        if (commentEnd < 0) {
+            return content;
+        }
+        int blockEnd = skipNewlineAfter(commentEnd + 2, content);
+        return content.substring(0, blockStart) + content.substring(blockEnd);
+    }
+
+    /** Remove o prefixo {@code dummy_} de identificadores no C/ACSL fundido. */
+    private static void stripDummyPrefixFromMergedCode(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        content = content.replaceAll("\\bdummy_", "");
+        Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Coloca no início do ficheiro (logo após o preâmbulo) as linhas de declaração ghost lidas de
+     * {@code ghost_operations.ci}, removendo duplicados equivalentes já presentes no merge.
+     */
+    private static void insertGhostVariableDeclarationsFromGhostCi(Path mergedC, Path ghostCi)
+            throws IOException {
+        if (!Files.isRegularFile(ghostCi)) {
+            return;
+        }
+        List<String> ghostLines = new ArrayList<>();
+        for (String line : Files.readAllLines(ghostCi, StandardCharsets.UTF_8)) {
+            String t = line.stripLeading();
+            if (t.startsWith("//@") && t.contains("ghost")) {
+                ghostLines.add(line.stripTrailing());
+            }
+        }
+        if (ghostLines.isEmpty()) {
+            return;
+        }
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        content = removeExistingGhostVariableDeclarationsFromMerged(content);
+        int insertAt = findPreambleInsertIndex(content);
+        String block = String.join("\n", ghostLines);
+        String sepBefore = insertAt > 0 && content.charAt(insertAt - 1) != '\n' ? "\n" : "";
+        String sepAfter = insertAt < content.length() && content.charAt(insertAt) != '\n' ? "\n" : "";
+        String result = content.substring(0, insertAt) + sepBefore + block + "\n" + sepAfter + content.substring(insertAt);
+        Files.writeString(mergedC, result, StandardCharsets.UTF_8);
+    }
+
+    private static final Pattern GHOST_ANNOTATION_LINE = Pattern.compile("(?m)^\\s*//@\\s+ghost[^\\n]*\\R?");
+
+    /**
+     * Bloco {@code /*@ ghost ... star-slash} — candidato a duplicado de <strong>variável</strong> ghost
+     * no merge; contratos de operações (assigns, ensures, {@code void} …) são filtrados em
+     * {@link #shouldRemoveDuplicateGhostVarBlock}.
+     */
+    private static final Pattern GHOST_VAR_BLOCK_COMMENT =
+            Pattern.compile("/\\*@\\s*ghost\\b[\\s\\S]*?\\*/\\s*\\R?");
+
+    /**
+     * Remove do merge só duplicados de declaração de variável ghost ({@code //@ ghost int …} ou bloco
+     * ACSL equivalente). Não remove contratos / protótipos de operações ghost não puras.
+     */
+    private static String removeExistingGhostVariableDeclarationsFromMerged(String content) {
+        content = GHOST_ANNOTATION_LINE.matcher(content).replaceAll("");
+        Matcher m = GHOST_VAR_BLOCK_COMMENT.matcher(content);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String block = m.group();
+            if (shouldRemoveDuplicateGhostVarBlock(block)) {
+                m.appendReplacement(sb, "");
+            } else {
+                m.appendReplacement(sb, Matcher.quoteReplacement(block));
+            }
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * {@code true} se o bloco for só declaração de variável ghost a eliminar antes de reinserir a linha
+     * vinda de {@code ghost_operations.ci}; {@code false} para contratos (assigns, ensures, …) ou
+     * protótipos {@code void op(...)}.
+     */
+    private static boolean shouldRemoveDuplicateGhostVarBlock(String block) {
+        if (block.contains("assigns")
+                || block.contains("ensures")
+                || block.contains("requires")
+                || block.contains("assumes")
+                || block.contains("behavior")) {
+            return false;
+        }
+        if (block.contains("/@") || block.contains("@/")) {
+            return false;
+        }
+        if (Pattern.compile("\\bvoid\\s+[A-Za-z_]\\w*\\s*\\(").matcher(block).find()) {
+            return false;
+        }
+        return true;
+    }
+
+    /** Substitui {@code assert ghost__} por {@code ghost } nas anotações Frama-C. */
+    private static void replaceAssertGhostWithGhostKeyword(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        content = content.replace("assert ghost__", "ghost ");
+        Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    /** Garante {@code ghost initialisation();} em vez de {@code ghost initialisation;}. */
+    private static void addParenthesesToGhostInitialisationCall(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        content =
+                Pattern.compile("\\bghost\\s+initialisation\\s*;")
+                        .matcher(content)
+                        .replaceAll("ghost initialisation();");
+        Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Passo 6: reordena no merge os blocos {@code /*@ axiomatic X { ... } star-slash} que declaram
+     * {@code logic} ou {@code predicate}, quando {@code X} é o primeiro axiomatic de um ficheiro da
+     * sequência {@link AcslLibIncludes#orderedLibFunctionAxiomaticNames()}. Depois, se existir bloco
+     * {@code Connection_*}, antecipa {@code sequence_iseq}, {@code is_seq_of} e {@code range_function}
+     * (ordem da lib) para antes desse bloco — caso contrário a permutação não desloca declarações para
+     * antes de anotações que já usam {@code ran} / {@code is_seq_of}.
+     */
+    private static void reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(Path mergedC) throws IOException {
+        List<String> orderedNames = AcslLibIncludes.orderedLibFunctionAxiomaticNames();
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        if (!orderedNames.isEmpty()) {
+            Map<String, Integer> rank = new HashMap<>();
+            for (int i = 0; i < orderedNames.size(); i++) {
+                rank.put(orderedNames.get(i), i);
+            }
+            content = reorderLibAxiomaticBlocksInMerged(content, rank);
+        }
+        content = moveSequenceListAxiomaticsBeforeConnection(content);
+        Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Cauda de {@link AcslLibIncludes#orderedLibFunctionAxiomaticNames()} para listas: declarações que
+     * devem preceder {@code Connection_*} quando o Frama-C as coloca depois.
+     */
+    private static final List<String> SEQUENCE_LIST_AXIOMATIC_ORDER =
+            List.of("sequence_iseq", "is_seq_of", "range_function");
+
+    /**
+     * Remove da posição atual os blocos de sequência (lista) que estão depois do primeiro
+     * {@code axiomatic Connection_*} e reinsere-os imediatamente antes desse bloco, na ordem da lib.
+     */
+    private static String moveSequenceListAxiomaticsBeforeConnection(String content) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        int connectionStart = -1;
+        for (AcsCommentSpan sp : spans) {
+            if (sp.axiomaticName != null && sp.axiomaticName.startsWith("Connection_")) {
+                connectionStart = sp.start;
+                break;
+            }
+        }
+        if (connectionStart < 0) {
+            return content;
+        }
+        List<AcsCommentSpan> toMove = new ArrayList<>();
+        for (String name : SEQUENCE_LIST_AXIOMATIC_ORDER) {
+            for (AcsCommentSpan sp : spans) {
+                if (name.equals(sp.axiomaticName)
+                        && sp.start > connectionStart
+                        && LOGIC_OR_PREDICATE_IN_BLOCK.matcher(sp.text).find()) {
+                    toMove.add(sp);
+                    break;
+                }
+            }
+        }
+        if (toMove.isEmpty()) {
+            return content;
+        }
+        toMove.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String cut = content;
+        for (AcsCommentSpan sp : toMove) {
+            cut = cut.substring(0, sp.start) + cut.substring(sp.end);
+        }
+        List<AcsCommentSpan> after = findAllAcsCommentSpans(cut);
+        int newConn = -1;
+        for (AcsCommentSpan sp : after) {
+            if (sp.axiomaticName != null && sp.axiomaticName.startsWith("Connection_")) {
+                newConn = sp.start;
+                break;
+            }
+        }
+        if (newConn < 0) {
+            return cut;
+        }
+        StringBuilder insert = new StringBuilder();
+        for (String name : SEQUENCE_LIST_AXIOMATIC_ORDER) {
+            for (AcsCommentSpan sp : toMove) {
+                if (name.equals(sp.axiomaticName)) {
+                    insert.append(sp.text);
+                    break;
+                }
+            }
+        }
+        return cut.substring(0, newConn) + insert + cut.substring(newConn);
+    }
+
+    private static final Pattern AXIOMATIC_NAME_IN_ACSL_COMMENT =
+            Pattern.compile("axiomatic\\s+(\\w+)");
+
+    private static final Pattern LOGIC_OR_PREDICATE_IN_BLOCK =
+            Pattern.compile("\\b(logic|predicate)\\s+");
+
+    private static String reorderLibAxiomaticBlocksInMerged(String content, Map<String, Integer> rank) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        List<AcsCommentSpan> sortable = new ArrayList<>();
+        for (AcsCommentSpan sp : spans) {
+            if (sp.axiomaticName != null
+                    && rank.containsKey(sp.axiomaticName)
+                    && LOGIC_OR_PREDICATE_IN_BLOCK.matcher(sp.text).find()) {
+                sortable.add(sp);
+            }
+        }
+        if (sortable.size() <= 1) {
+            return content;
+        }
+        List<AcsCommentSpan> byFile = new ArrayList<>(sortable);
+        byFile.sort(Comparator.comparingInt(a -> a.start));
+        List<AcsCommentSpan> byRank = new ArrayList<>(sortable);
+        byRank.sort(
+                Comparator.comparingInt((AcsCommentSpan a) -> rank.get(a.axiomaticName))
+                        .thenComparingInt(a -> a.start));
+        Map<Integer, String> replacement = new HashMap<>();
+        for (int i = 0; i < byFile.size(); i++) {
+            replacement.put(byFile.get(i).start, byRank.get(i).text);
+        }
+        StringBuilder sb = new StringBuilder();
+        int cursor = 0;
+        for (AcsCommentSpan sp : spans) {
+            sb.append(content, cursor, sp.start);
+            String rep = replacement.get(sp.start);
+            if (rep != null) {
+                sb.append(rep);
+            } else {
+                sb.append(sp.text);
+            }
+            cursor = sp.end;
+        }
+        sb.append(content, cursor, content.length());
+        return sb.toString();
+    }
+
+    private static List<AcsCommentSpan> findAllAcsCommentSpans(String content) {
+        List<AcsCommentSpan> spans = new ArrayList<>();
+        int from = 0;
+        while (from < content.length()) {
+            int start = content.indexOf("/*@", from);
+            if (start < 0) {
+                break;
+            }
+            int close = content.indexOf("*/", start + 3);
+            if (close < 0) {
+                break;
+            }
+            int end = skipNewlineAfter(close + 2, content);
+            String text = content.substring(start, end);
+            Matcher m = AXIOMATIC_NAME_IN_ACSL_COMMENT.matcher(text);
+            String axName = m.find() ? m.group(1) : null;
+            spans.add(new AcsCommentSpan(start, end, text, axName));
+            from = end;
+        }
+        return spans;
+    }
+
+    private static final class AcsCommentSpan {
+        final int start;
+        final int end;
+        final String text;
+        final String axiomaticName;
+
+        AcsCommentSpan(int start, int end, String text, String axiomaticName) {
+            this.start = start;
+            this.end = end;
+            this.text = text;
+            this.axiomaticName = axiomaticName;
+        }
     }
 
     private static int skipNewlineAfter(int pos, String s) {
