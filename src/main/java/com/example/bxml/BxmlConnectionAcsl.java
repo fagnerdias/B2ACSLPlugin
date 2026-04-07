@@ -140,6 +140,16 @@ public final class BxmlConnectionAcsl {
         return Optional.of(out);
     }
 
+    /** Identificadores {@code Id} referidos nos invariantes da máquina (para dependências de refinamento). */
+    public static Set<String> invariantReferencedIdentifiers(Element machineEl) {
+        return collectIdValuesInInvariant(machineEl);
+    }
+
+    /** Variáveis de estado introduzidas: {@code Abstract_Variables} (refinamento) ou {@code Concrete_Variables} (implementação). */
+    public static List<String> introducedStateVariableIds(Element machineEl) {
+        return listIntroducedVariableNames(machineEl);
+    }
+
     private static String firstInvariantBody(Element machineEl, BxmlTranslateContext ctx) {
         List<Element> invs = BxmlInvariantTranslator.listDirectInvariants(machineEl);
         if (invs.isEmpty()) return "";

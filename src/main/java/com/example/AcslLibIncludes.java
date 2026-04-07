@@ -116,7 +116,16 @@ public final class AcslLibIncludes {
             "sequence_functions/range.acsl");
 
     public static String formatIncludeBlock(String acslText) {
-        List<String> lines = collectIncludeLines(acslText);
+        return formatIncludeBlock(acslText, null);
+    }
+
+    /**
+     * Como {@link #formatIncludeBlock(String)}, mas concatena {@code extraTextForSymbolScan} só para
+     * detetar símbolos da ACSL_Lib (includes e {@link #copyReferencedLibraryFiles}); esse texto não
+     * entra no ficheiro gerado.
+     */
+    public static String formatIncludeBlock(String acslText, String extraTextForSymbolScan) {
+        List<String> lines = collectIncludeLines(acslText, extraTextForSymbolScan);
         if (lines.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         for (String line : lines) {
@@ -155,7 +164,20 @@ public final class AcslLibIncludes {
      */
     public static void copyReferencedLibraryFiles(String acslText, Path generatedAcslFile)
             throws IOException {
-        List<String> seeds = orderedLibRelativePaths(acslText);
+        copyReferencedLibraryFiles(acslText, generatedAcslFile, null);
+    }
+
+    /**
+     * @param extraTextForSymbolScan texto extra (ex. {@code ensures} omitidos do contrato) só para
+     *     descobrir ficheiros da lib a copiar
+     */
+    public static void copyReferencedLibraryFiles(
+            String acslText, Path generatedAcslFile, String extraTextForSymbolScan) throws IOException {
+        String scan = acslText == null ? "" : acslText;
+        if (extraTextForSymbolScan != null && !extraTextForSymbolScan.isBlank()) {
+            scan = scan + "\n" + extraTextForSymbolScan;
+        }
+        List<String> seeds = orderedLibRelativePaths(scan);
         if (seeds.isEmpty()) return;
 
         Path diskRoot = resolveAcslLibRootOnDisk();
@@ -196,7 +218,15 @@ public final class AcslLibIncludes {
     }
 
     static List<String> collectIncludeLines(String acslText) {
-        List<String> ordered = orderedLibRelativePaths(acslText);
+        return collectIncludeLines(acslText, null);
+    }
+
+    static List<String> collectIncludeLines(String acslText, String extraTextForSymbolScan) {
+        String scan = acslText == null ? "" : acslText;
+        if (extraTextForSymbolScan != null && !extraTextForSymbolScan.isBlank()) {
+            scan = scan + "\n" + extraTextForSymbolScan;
+        }
+        List<String> ordered = orderedLibRelativePaths(scan);
         if (ordered.isEmpty()) return List.of();
 
         String base = propertyOrEmpty("b2acsl.acslLibIncludeBase");

@@ -2,7 +2,9 @@ package com.example.bxml;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.w3c.dom.Element;
@@ -33,18 +35,61 @@ public final class BxmlOperationsTranslator {
             Element machineEl,
             BxmlTranslateContext ctx,
             List<String> invariantPredicateNames) {
-        return translateOperations(machineEl, ctx, invariantPredicateNames, null);
+        return translateOperations(
+                machineEl, ctx, invariantPredicateNames, null, null, null, null, null);
     }
 
     /**
      * @param abstractVariableNames se não nulo, operações que atribuem a estas variáveis recebem
-     *        {@code at 1: assert ghost__<op>(p1, …);} no contrato (parâmetros de entrada)
+     *        {@code at 1: assert ghost__<op>(p1, …);} no contrato (parâmetros de entrada) e, nesse caso,
+     *        removem-se os {@code ensures} vindos do {@code Body} — mantêm-se só os que repetem o
+     *        invariante (nomes em {@code invariantPredicateNames}).
      */
     public static List<OperationAcsl> translateOperations(
             Element machineEl,
             BxmlTranslateContext ctx,
             List<String> invariantPredicateNames,
             Set<String> abstractVariableNames) {
+        return translateOperations(
+                machineEl, ctx, invariantPredicateNames, abstractVariableNames, null, null, null, null);
+    }
+
+    /**
+     * @param libScanGhostOperationBodies se não nulo, acrescenta os {@code ensures} do {@code Body}
+     *        das operações ghost (antes de os retirar do contrato) para deteção de includes da
+     *        ACSL_Lib ({@link com.example.AcslLibIncludes}).
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies) {
+        return translateOperations(
+                machineEl,
+                ctx,
+                invariantPredicateNames,
+                abstractVariableNames,
+                libScanGhostOperationBodies,
+                null,
+                null,
+                null);
+    }
+
+    /**
+     * @param rootAbstractMachineName nome da máquina abstrata raiz do {@code .acsl} (ex. {@code SetTest})
+     * @param mergedRefinementChain máquinas fundidas na ordem do pipeline (refinamentos + implementações)
+     * @param gluing substituições de invariantes
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
 
@@ -81,6 +126,7 @@ public final class BxmlOperationsTranslator {
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
             }
             applyStarPrefixToEnsures(ensures, outputParams);
+            List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
             for (String inv : invariantPredicateNames) {
                 ensures.add(inv);
             }
@@ -92,10 +138,45 @@ public final class BxmlOperationsTranslator {
                     && GhostOperationsCiGenerator.operationAssignsAbstract(child, abstractVariableNames)) {
                 ghostSlug = GhostOperationsCiGenerator.ghostOperationSlug(opName);
             }
+            if (libScanGhostOperationBodies != null && !ghostSlug.isBlank()) {
+                for (String line : bodyEnsuresOnly) {
+                    if (line != null && !line.isBlank()) {
+                        libScanGhostOperationBodies.append(line).append('\n');
+                    }
+                }
+            }
+            if (!ghostSlug.isBlank()
+                    && invariantPredicateNames != null
+                    && !invariantPredicateNames.isEmpty()) {
+                Set<String> invariantOnly = new HashSet<>(invariantPredicateNames);
+                ensures.removeIf(e -> !invariantOnly.contains(e));
+            }
             List<String> dummyGhostEnsureVars =
                     ghostSlug.isBlank()
                             ? List.of()
                             : GhostOperationsCiGenerator.listAbstractVariableNames(machineEl);
+
+            List<String> connectionConcreteAssigns = List.of();
+            if (!ghostSlug.isBlank()
+                    && rootAbstractMachineName != null
+                    && !rootAbstractMachineName.isBlank()
+                    && mergedRefinementChain != null
+                    && !mergedRefinementChain.isEmpty()
+                    && abstractVariableNames != null
+                    && !abstractVariableNames.isEmpty()) {
+                Set<String> assignedAbs =
+                        GhostOperationsCiGenerator.assignedAbstractVariablesInOperation(
+                                child, abstractVariableNames);
+                if (!assignedAbs.isEmpty()) {
+                    connectionConcreteAssigns =
+                            BxmlMachineVariables.listConcreteAssignTargetsForAbstractMutation(
+                                    rootAbstractMachineName,
+                                    machineEl,
+                                    mergedRefinementChain,
+                                    assignedAbs,
+                                    gluing);
+                }
+            }
 
             out.add(
                     new OperationAcsl(
@@ -105,7 +186,8 @@ public final class BxmlOperationsTranslator {
                             outputParams,
                             ghostSlug,
                             inputParamNames,
-                            dummyGhostEnsureVars));
+                            dummyGhostEnsureVars,
+                            connectionConcreteAssigns));
         }
         return out;
     }
@@ -194,11 +276,18 @@ public final class BxmlOperationsTranslator {
             /**
              * Sufixos {@code v} para {@code ensures dummy_ghost_<v>;} (operações não puras ghost); vazio se pura.
              */
-            List<String> dummyGhostEnsureVarNames) {
+            List<String> dummyGhostEnsureVarNames,
+            /**
+             * {@code assigns Raiz__v} para variáveis concretas ligadas por refinamento quando a operação
+             * ghost altera a abstrata (omitidas se já redundantes).
+             */
+            List<String> connectionConcreteAssigns) {
 
         public OperationAcsl {
             dummyGhostEnsureVarNames =
                     dummyGhostEnsureVarNames == null ? List.of() : List.copyOf(dummyGhostEnsureVarNames);
+            connectionConcreteAssigns =
+                    connectionConcreteAssigns == null ? List.of() : List.copyOf(connectionConcreteAssigns);
         }
 
         /** Mesmo esquema que {@link com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl#toContractText()}. */
@@ -217,6 +306,20 @@ public final class BxmlOperationsTranslator {
             }
             for (String p : outputParameters) {
                 sb.append("    assigns *").append(p).append(";\n");
+            }
+            LinkedHashSet<String> connectionEmitted = new LinkedHashSet<>();
+            for (String ca : connectionConcreteAssigns) {
+                if (ca == null || ca.isBlank()) {
+                    continue;
+                }
+                if (!connectionEmitted.add(ca)) {
+                    continue;
+                }
+                String clause = "assigns " + ca + ";";
+                if (sb.indexOf(clause) >= 0) {
+                    continue;
+                }
+                sb.append("    assigns ").append(ca).append(";\n");
             }
             if (ghostBehaviorSlug != null && !ghostBehaviorSlug.isBlank()) {
                 sb.append("    at 1: assert ghost__").append(ghostBehaviorSlug);

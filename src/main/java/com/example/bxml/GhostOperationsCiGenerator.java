@@ -55,11 +55,22 @@ public final class GhostOperationsCiGenerator {
                 || abstractVariableNames.isEmpty()) {
             return false;
         }
+        return !assignedAbstractVariablesInOperation(operation, abstractVariableNames).isEmpty();
+    }
+
+    /** Variáveis abstratas atribuídas no {@code Body} da operação (lado esquerdo de {@code :=}). */
+    public static Set<String> assignedAbstractVariablesInOperation(
+            Element operation, Set<String> abstractVariableNames) {
+        Set<String> out = new LinkedHashSet<>();
+        if (operation == null
+                || abstractVariableNames == null
+                || abstractVariableNames.isEmpty()) {
+            return out;
+        }
         Element body = firstChildElement(operation, "Body");
-        if (body == null) return false;
-        Set<String> assigned = new LinkedHashSet<>();
-        collectAssignedAbstractVarsInBody(body, abstractVariableNames, assigned);
-        return !assigned.isEmpty();
+        if (body == null) return out;
+        collectAssignedAbstractVarsInBody(body, abstractVariableNames, out);
+        return out;
     }
 
     /**

@@ -1,7 +1,9 @@
 package com.example.bxml;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -206,6 +208,57 @@ public final class BxmlMachineVariables {
      * ({@code Concrete_Variables}) de cada máquina fundida com {@code type="implementation"},
      * no formato {@code NomeMaquinaAbstrata__nomeVar} (contrato C alinhado à raiz abstrata).
      */
+    /**
+     * Alvos {@code Raiz__c} para {@code assigns} quando uma operação na abstrata altera variáveis em
+     * {@code assignedAbstractNames}: propaga-se a ligação ao longo da cadeia fundida (refinamento →
+     * implementação) e escolhem-se variáveis concretas cujo invariante referencia nomes já ligados.
+     */
+    public static List<String> listConcreteAssignTargetsForAbstractMutation(
+            String rootAbstractMachineName,
+            Element rootMachine,
+            List<Element> mergedOrdered,
+            Set<String> assignedAbstractNames,
+            Map<String, String> gluing) {
+        if (rootAbstractMachineName == null
+                || rootAbstractMachineName.isBlank()
+                || rootMachine == null
+                || mergedOrdered == null
+                || mergedOrdered.isEmpty()
+                || assignedAbstractNames == null
+                || assignedAbstractNames.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> g = gluing == null ? Map.of() : gluing;
+        Set<String> linked = new LinkedHashSet<>(assignedAbstractNames);
+        Element prev = rootMachine;
+        LinkedHashSet<String> targets = new LinkedHashSet<>();
+        for (Element mel : mergedOrdered) {
+            if (isRefinementMachine(mel)) {
+                for (String refined : BxmlConnectionAcsl.introducedStateVariableIds(mel)) {
+                    Optional<String> abs =
+                            BxmlConnectionAcsl.linkingAbstractVariableName(prev, mel, refined, g);
+                    if (abs.isPresent() && linked.contains(abs.get())) {
+                        linked.add(refined);
+                    }
+                }
+                prev = mel;
+            } else if (isImplementationMachine(mel)) {
+                Set<String> invIds = BxmlConnectionAcsl.invariantReferencedIdentifiers(mel);
+                if (!Collections.disjoint(invIds, linked)) {
+                    for (String c : BxmlConnectionAcsl.introducedStateVariableIds(mel)) {
+                        if (invIds.contains(c)) {
+                            targets.add(rootAbstractMachineName.trim() + "__" + c);
+                        }
+                    }
+                }
+                prev = mel;
+            } else {
+                prev = mel;
+            }
+        }
+        return new ArrayList<>(targets);
+    }
+
     public static List<String> listImplementationAssignTargets(
             String abstractMachineName, List<Element> mergedMachineElements) {
         if (abstractMachineName == null || abstractMachineName.isBlank()) return List.of();

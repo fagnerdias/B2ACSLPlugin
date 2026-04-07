@@ -140,10 +140,12 @@ public final class AcslGenerator {
                 initGhostAssert
                         ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
                         : List.of();
+        List<String> initEnsuresForContract =
+                initGhostAssert ? List.of() : new ArrayList<>(initBare.ensures());
         InitialisationAcsl initMarked =
                 new InitialisationAcsl(
                         initBare.functionName(),
-                        initBare.ensures(),
+                        initEnsuresForContract,
                         initBare.assignsTargets(),
                         initGhostAssert,
                         dummyGhostVarsForInit);
@@ -151,10 +153,25 @@ public final class AcslGenerator {
                 isAbstraction
                         ? withInvariantEnsures(initMarked, allInvariantPredicateNames)
                         : null;
+        StringBuilder libScanRemovedBodies = new StringBuilder();
+        if (initGhostAssert) {
+            for (String e : initBare.ensures()) {
+                if (e != null && !e.isBlank()) {
+                    libScanRemovedBodies.append(e).append('\n');
+                }
+            }
+        }
         List<OperationAcsl> operations =
                 isAbstraction
                         ? BxmlOperationsTranslator.translateOperations(
-                                machineEl, ctx, allInvariantPredicateNames, abstractVariableNamesForGhost)
+                                machineEl,
+                                ctx,
+                                allInvariantPredicateNames,
+                                abstractVariableNamesForGhost,
+                                libScanRemovedBodies,
+                                baseName,
+                                mergedMachineElements,
+                                gluing)
                         : List.of();
 
         StringBuilder sb = new StringBuilder();
@@ -255,13 +272,16 @@ public final class AcslGenerator {
             }
         }
 
-        String includes = AcslLibIncludes.formatIncludeBlock(sb.substring(headerLen));
+        String extraLibSymbolScan =
+                libScanRemovedBodies.length() == 0 ? null : libScanRemovedBodies.toString();
+        String includes =
+                AcslLibIncludes.formatIncludeBlock(sb.substring(headerLen), extraLibSymbolScan);
         if (!includes.isEmpty()) {
             sb.insert(headerLen, includes);
         }
         String fullAcsl = sb.toString();
         Files.writeString(acslFile, fullAcsl);
-        AcslLibIncludes.copyReferencedLibraryFiles(fullAcsl, acslFile);
+        AcslLibIncludes.copyReferencedLibraryFiles(fullAcsl, acslFile, extraLibSymbolScan);
         return Optional.of(acslFile);
     }
 
