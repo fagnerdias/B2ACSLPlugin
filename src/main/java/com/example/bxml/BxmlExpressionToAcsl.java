@@ -39,7 +39,7 @@ public final class BxmlExpressionToAcsl {
         if (exp == null) return false;
         String ln = exp.getLocalName();
         return switch (ln) {
-            case "Id" -> isSetLikeVariableType(ctx.variableLogicTypes().get(exp.getAttribute("value")));
+            case "Id" -> isSetValuedId(exp, ctx);
             case "Unary_Exp" -> {
                 String op = exp.getAttribute("op");
                 if ("ran".equals(op)) {
@@ -56,6 +56,28 @@ public final class BxmlExpressionToAcsl {
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
             default -> false;
         };
+    }
+
+    /**
+     * Variável de outra máquina (ex. {@code ss} no invariante de refinamento) não entra em
+     * {@link BxmlTranslateContext#variableLogicTypes()}; usa-se então o {@code typref} do {@code Id} no BXML.
+     */
+    private static boolean isSetValuedId(Element idEl, BxmlTranslateContext ctx) {
+        String name = idEl.getAttribute("value");
+        if (isSetLikeVariableType(ctx.variableLogicTypes().get(name))) {
+            return true;
+        }
+        String trAttr = idEl.getAttribute("typref");
+        if (trAttr == null || trAttr.isBlank()) {
+            return false;
+        }
+        try {
+            int tr = Integer.parseInt(trAttr.trim());
+            String inferred = ctx.types().acslVariableLogicTypeFromTypref(tr);
+            return isSetLikeVariableType(inferred);
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     private static boolean isSetLikeVariableType(String t) {
