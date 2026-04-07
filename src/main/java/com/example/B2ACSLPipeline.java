@@ -16,12 +16,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 import com.example.bxml.BxmlGluingNormalizer;
+import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.model.Machine;
 
 import org.w3c.dom.Element;
 
 /**
- * Pipeline B2ACSL: BXML -> ACSL -> Frama-C ({@code -acsl-import} + {@code merged_code.c} + WP) -> resultado para Atelier B.
+ * Pipeline B2ACSL: BXML -> ACSL -> {@code ghost_operations.ci} -> Frama-C ({@code -acsl-import} +
+ * {@code merged_code.c} + WP) -> resultado para Atelier B.
  */
 public final class B2ACSLPipeline {
 
@@ -158,6 +160,15 @@ public final class B2ACSLPipeline {
                     ? Path.of(bdpStr.substring(0, idx) + "lang" + bdpStr.substring(idx + 3))
                     : bdp.getParent().resolve("lang");
             Path cDir = langPath.resolve("c");
+            for (MachineFile mf : machines) {
+                Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
+                if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
+                    continue;
+                }
+                GhostOperationsCiGenerator.write(cDir, mr, invariantGluingSubstitutions);
+                break;
+            }
+
             List<Path> cFiles = findCFiles(cDir);
 
             if (cFiles.isEmpty() && !MOCK_MODE) {
@@ -269,16 +280,20 @@ public final class B2ACSLPipeline {
 
         Path mergedCode = cDir.resolve(MERGED_CODE_FILE_NAME);
 
+        Path ghostCi = GhostOperationsCiGenerator.targetPath(cDir);
         for (Path cFile : cFiles) {
-            // frama-c -acsl-import <acsl> <c> -print -no-unicode  (saída → merged_code.c)
-            ProcessBuilder importPb =
-                    new ProcessBuilder(
-                            FRAMA_C,
-                            "-acsl-import",
-                            acslPath,
-                            cFile.toString(),
-                            "-print",
-                            "-no-unicode");
+            // frama-c -acsl-import <acsl> [ghost_operations.ci] <c> -print -no-unicode  (saída → merged_code.c)
+            List<String> importCmd = new ArrayList<>();
+            importCmd.add(FRAMA_C);
+            importCmd.add("-acsl-import");
+            importCmd.add(acslPath);
+            if (Files.isRegularFile(ghostCi)) {
+                importCmd.add(ghostCi.toString());
+            }
+            importCmd.add(cFile.toString());
+            importCmd.add("-print");
+            importCmd.add("-no-unicode");
+            ProcessBuilder importPb = new ProcessBuilder(importCmd);
             importPb.directory(cDir.toFile());
             importPb.redirectOutput(mergedCode.toFile());
             importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
