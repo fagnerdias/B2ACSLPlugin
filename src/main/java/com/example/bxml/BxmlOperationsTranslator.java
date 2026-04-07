@@ -33,6 +33,18 @@ public final class BxmlOperationsTranslator {
             Element machineEl,
             BxmlTranslateContext ctx,
             List<String> invariantPredicateNames) {
+        return translateOperations(machineEl, ctx, invariantPredicateNames, null);
+    }
+
+    /**
+     * @param abstractVariableNames se não nulo, operações que atribuem a estas variáveis recebem
+     *        {@code at 1: assert ghost__<op>(p1, …);} no contrato (parâmetros de entrada)
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
 
@@ -73,9 +85,38 @@ public final class BxmlOperationsTranslator {
                 ensures.add(inv);
             }
 
-            out.add(new OperationAcsl(funcName, requires, ensures, outputParams));
+            List<String> inputParamNames = parseInputParameterNames(child);
+            String ghostSlug = "";
+            if (abstractVariableNames != null
+                    && !abstractVariableNames.isEmpty()
+                    && GhostOperationsCiGenerator.operationAssignsAbstract(child, abstractVariableNames)) {
+                ghostSlug = GhostOperationsCiGenerator.ghostOperationSlug(opName);
+            }
+
+            out.add(
+                    new OperationAcsl(
+                            funcName, requires, ensures, outputParams, ghostSlug, inputParamNames));
         }
         return out;
+    }
+
+    /** Nomes dos {@code Id} em {@code Input_Parameters} (ordem do BXML), identificadores C-sanitizados. */
+    private static List<String> parseInputParameterNames(Element operation) {
+        Element inEl = firstChildElement(operation, "Input_Parameters");
+        if (inEl == null) return List.of();
+        List<String> names = new ArrayList<>();
+        NodeList ch = inEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            if ("Id".equals(e.getLocalName())) {
+                String v = e.getAttribute("value");
+                if (v != null && !v.isBlank()) names.add(sanitize(v.trim()));
+            }
+        }
+        return names;
     }
 
     /** Nomes dos {@code Id} em {@code Output_Parameters} (ordem do BXML). */
@@ -135,7 +176,11 @@ public final class BxmlOperationsTranslator {
             List<String> requires,
             List<String> ensures,
             /** Parâmetros de saída B (sem {@code *}); viram {@code assigns *nome}. */
-            List<String> outputParameters) {
+            List<String> outputParameters,
+            /** Vazio se a operação for pura face às variáveis abstratas; senão slug para {@code ghost__<slug>(…)}. */
+            String ghostBehaviorSlug,
+            /** Nomes dos parâmetros de entrada para o {@code assert ghost__…}; ordem do BXML. */
+            List<String> ghostBehaviorInputNames) {
 
         /** Mesmo esquema que {@link com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl#toContractText()}. */
         public String toContractSketch() {
@@ -150,6 +195,13 @@ public final class BxmlOperationsTranslator {
             }
             for (String p : outputParameters) {
                 sb.append("    assigns *").append(p).append(";\n");
+            }
+            if (ghostBehaviorSlug != null && !ghostBehaviorSlug.isBlank()) {
+                sb.append("    at 1: assert ghost__").append(ghostBehaviorSlug);
+                if (ghostBehaviorInputNames != null && !ghostBehaviorInputNames.isEmpty()) {
+                    sb.append("(").append(String.join(", ", ghostBehaviorInputNames)).append(")");
+                }
+                sb.append(";\n");
             }
             return sb.toString();
         }

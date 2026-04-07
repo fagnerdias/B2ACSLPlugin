@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -21,6 +22,7 @@ import org.w3c.dom.NodeList;
 import com.example.bxml.BxmlInitialisationTranslator;
 import com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl;
 import com.example.bxml.BxmlConnectionAcsl;
+import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.bxml.BxmlConstantsAndProperties;
 import com.example.bxml.BxmlInvariantTranslator;
 import com.example.bxml.BxmlMachineVariables;
@@ -115,6 +117,9 @@ public final class AcslGenerator {
         BxmlTranslateContext ctx = BxmlTranslateContext.forMachine(machineEl, gluing);
         boolean isAbstraction = isAbstractMachine(machineEl);
 
+        Set<String> abstractVariableNamesForGhost =
+                new LinkedHashSet<>(GhostOperationsCiGenerator.listAbstractVariableNames(machineEl));
+
         List<Element> mergedMachineElements = new ArrayList<>();
         for (Path p : mergePaths) {
             mergedMachineElements.add(parseMachineElement(p));
@@ -124,15 +129,27 @@ public final class AcslGenerator {
                 listAllInvariantPredicateNames(machineEl, ctx, mergePaths, gluing);
         List<String> implementationAssignTargets =
                 BxmlMachineVariables.listImplementationAssignTargets(baseName, mergedMachineElements);
-        InitialisationAcsl init = isAbstraction
-                ? withInvariantEnsures(
-                        BxmlInitialisationTranslator.translate(
-                                machineEl, implementationAssignTargets, ctx),
-                        allInvariantPredicateNames)
-                : null;
-        List<OperationAcsl> operations = isAbstraction
-                ? BxmlOperationsTranslator.translateOperations(machineEl, ctx, allInvariantPredicateNames)
-                : List.of();
+        InitialisationAcsl initBare =
+                BxmlInitialisationTranslator.translate(
+                        machineEl, implementationAssignTargets, ctx);
+        boolean initGhostAssert =
+                GhostOperationsCiGenerator.initialisationAssignsAbstract(
+                        machineEl, abstractVariableNamesForGhost);
+        InitialisationAcsl initMarked =
+                new InitialisationAcsl(
+                        initBare.functionName(),
+                        initBare.ensures(),
+                        initBare.assignsTargets(),
+                        initGhostAssert);
+        InitialisationAcsl init =
+                isAbstraction
+                        ? withInvariantEnsures(initMarked, allInvariantPredicateNames)
+                        : null;
+        List<OperationAcsl> operations =
+                isAbstraction
+                        ? BxmlOperationsTranslator.translateOperations(
+                                machineEl, ctx, allInvariantPredicateNames, abstractVariableNamesForGhost)
+                        : List.of();
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* ACSL gerado a partir de ").append(baseName).append(".bxml (BXML 1.0) */\n");
@@ -161,8 +178,18 @@ public final class AcslGenerator {
         connectionAcsl.ifPresent(
                 p -> sb.append("include \"").append(p.getFileName().toString()).append("\";\n\n"));
 
+        String ghostPatternsBlock =
+                GhostOperationsCiGenerator.formatGhostPatternsAxiomaticBlock(machineEl, baseName);
+        if (!ghostPatternsBlock.isBlank()) {
+            sb.append(ghostPatternsBlock);
+            if (!ghostPatternsBlock.endsWith("\n")) sb.append("\n");
+            sb.append("\n");
+        }
+
         // 1b) Variáveis: um bloco axiomatic por máquina (abstrata, depois cada fundida) + compreensões
-        String varsAbstract = BxmlMachineVariables.formatAxiomaticBlock(machineEl, ctx);
+        String varsAbstract =
+                BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
+                        machineEl, ctx, abstractVariableNamesForGhost);
         if (!varsAbstract.isBlank()) {
             sb.append(varsAbstract);
             if (!varsAbstract.endsWith("\n")) sb.append("\n");
@@ -310,7 +337,8 @@ public final class AcslGenerator {
         for (String inv : invariantPredicateNames) {
             ensures.add(inv);
         }
-        return new InitialisationAcsl(init.functionName(), ensures, init.assignsTargets());
+        return new InitialisationAcsl(
+                init.functionName(), ensures, init.assignsTargets(), init.includeGhostBehaviorAssert());
     }
 
     private static Document parseXml(Path path) throws Exception {

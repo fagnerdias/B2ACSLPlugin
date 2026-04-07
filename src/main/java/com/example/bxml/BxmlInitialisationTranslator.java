@@ -46,7 +46,8 @@ public final class BxmlInitialisationTranslator {
         }
 
         String functionName = machineName + "__INITIALISATION";
-        return new InitialisationAcsl(functionName, ensures, new ArrayList<>(additionalAssignTargets));
+        return new InitialisationAcsl(
+                functionName, ensures, new ArrayList<>(additionalAssignTargets), false);
     }
 
     private static void walkSubstitution(Element sub, List<String> ensures, BxmlTranslateContext ctx) {
@@ -141,7 +142,11 @@ public final class BxmlInitialisationTranslator {
     /**
      * Texto de contrato no estilo pedido (função + contract + ensures + assigns).
      */
-    public record InitialisationAcsl(String functionName, List<String> ensures, List<String> assignsTargets) {
+    public record InitialisationAcsl(
+            String functionName,
+            List<String> ensures,
+            List<String> assignsTargets,
+            boolean includeGhostBehaviorAssert) {
 
         public String toContractText() {
             StringBuilder sb = new StringBuilder();
@@ -152,6 +157,9 @@ public final class BxmlInitialisationTranslator {
             }
             for (String a : assignsTargets) {
                 sb.append("    assigns ").append(a).append(";\n");
+            }
+            if (includeGhostBehaviorAssert) {
+                sb.append("    at 1: assert ghost__initialisation;\n");
             }
             return sb.toString();
         }

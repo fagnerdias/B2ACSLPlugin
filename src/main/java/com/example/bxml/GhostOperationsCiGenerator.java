@@ -31,6 +31,90 @@ public final class GhostOperationsCiGenerator {
         return cDir.resolve(GHOST_FILE);
     }
 
+    /** Slug C/ACSL da operação (ex. {@code Add} → {@code add}, {@code INITIALISATION} → {@code initialisation}). */
+    public static String ghostOperationSlug(String bxmlOperationName) {
+        return sanitizeGhostFunctionName(bxmlOperationName);
+    }
+
+    public static boolean initialisationAssignsAbstract(
+            Element abstractMachineEl, Set<String> abstractVariableNames) {
+        if (abstractMachineEl == null
+                || abstractVariableNames == null
+                || abstractVariableNames.isEmpty()) {
+            return false;
+        }
+        Set<String> assigned = new LinkedHashSet<>();
+        collectAssignedAbstractVarsInInit(abstractMachineEl, abstractVariableNames, assigned);
+        return !assigned.isEmpty();
+    }
+
+    public static boolean operationAssignsAbstract(
+            Element operation, Set<String> abstractVariableNames) {
+        if (operation == null
+                || abstractVariableNames == null
+                || abstractVariableNames.isEmpty()) {
+            return false;
+        }
+        Element body = firstChildElement(operation, "Body");
+        if (body == null) return false;
+        Set<String> assigned = new LinkedHashSet<>();
+        collectAssignedAbstractVarsInBody(body, abstractVariableNames, assigned);
+        return !assigned.isEmpty();
+    }
+
+    /**
+     * Bloco {@code axiomatic Nome_ghost_patterns} com {@code logic integer dummy_ghost_<v>} e predicados
+     * {@code ghost_<op>} para inicialização e operações não puras.
+     */
+    public static String formatGhostPatternsAxiomaticBlock(
+            Element abstractMachineEl, String machineNamePrefix) {
+        if (abstractMachineEl == null
+                || machineNamePrefix == null
+                || machineNamePrefix.isBlank()) {
+            return "";
+        }
+        List<String> vars = listAbstractVariableNames(abstractMachineEl);
+        if (vars.isEmpty()) return "";
+
+        Set<String> abstractSet = new LinkedHashSet<>(vars);
+        StringBuilder sb = new StringBuilder();
+        sb.append("axiomatic ").append(machineNamePrefix).append("_ghost_patterns {\n\n");
+        for (String v : vars) {
+            sb.append("    logic int dummy_ghost_").append(v).append(";\n\n");
+        }
+        if (initialisationAssignsAbstract(abstractMachineEl, abstractSet)) {
+            sb.append("    predicate ghost__initialisation;\n\n");
+        }
+        Element operationsEl = firstChildElement(abstractMachineEl, "Operations");
+        if (operationsEl != null) {
+            NodeList opNodes = operationsEl.getChildNodes();
+            for (int i = 0; i < opNodes.getLength(); i++) {
+                Node n = opNodes.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element op = (Element) n;
+                if (!"Operation".equals(op.getLocalName())) continue;
+                String opName = op.getAttribute("name");
+                if (opName == null || opName.isBlank()) continue;
+                if (!operationAssignsAbstract(op, abstractSet)) continue;
+                String slug = ghostOperationSlug(opName);
+                sb.append("    predicate ghost__").append(slug);
+                List<Param> params = listInputParameters(op);
+                if (params.isEmpty()) {
+                    sb.append(";\n\n");
+                } else {
+                    sb.append("(");
+                    List<String> parts = new ArrayList<>();
+                    for (Param p : params) {
+                        parts.add("integer " + p.name());
+                    }
+                    sb.append(String.join(", ", parts)).append(");\n\n");
+                }
+            }
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
     /**
      * Escreve {@link #GHOST_FILE} em {@code cDir} a partir da máquina abstrata raiz.
      */
@@ -301,7 +385,8 @@ public final class GhostOperationsCiGenerator {
         }
     }
 
-    private static List<String> listAbstractVariableNames(Element machineEl) {
+    /** Nomes em {@code Abstract_Variables} (ordem do BXML). */
+    public static List<String> listAbstractVariableNames(Element machineEl) {
         List<String> out = new ArrayList<>();
         Element block = firstChildElement(machineEl, "Abstract_Variables");
         if (block == null) return out;

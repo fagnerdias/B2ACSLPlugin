@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -29,7 +30,16 @@ public final class BxmlMachineVariables {
      * declaradas ({@code name} do {@code <Machine>}).
      */
     public static String formatAxiomaticBlock(Element machineEl, BxmlTranslateContext ctx) {
-        return formatAxiomaticBlock(machineEl, ctx, null, null, Map.of());
+        return formatAxiomaticBlock(machineEl, ctx, null, null, Map.of(), null);
+    }
+
+    /**
+     * Bloco de variáveis da raiz com {@code reads dummy_ghost_<v>} nas variáveis abstratas listadas.
+     */
+    public static String formatAxiomaticBlockWithGhostDummyReads(
+            Element machineEl, BxmlTranslateContext ctx, Set<String> abstractVarNamesForGhostRead) {
+        return formatAxiomaticBlock(
+                machineEl, ctx, null, null, Map.of(), abstractVarNamesForGhostRead);
     }
 
     /**
@@ -42,7 +52,7 @@ public final class BxmlMachineVariables {
      */
     public static String formatAxiomaticBlock(
             Element machineEl, BxmlTranslateContext ctx, String rootAbstractMachineName) {
-        return formatAxiomaticBlock(machineEl, ctx, rootAbstractMachineName, null, Map.of());
+        return formatAxiomaticBlock(machineEl, ctx, rootAbstractMachineName, null, Map.of(), null);
     }
 
     /**
@@ -55,6 +65,17 @@ public final class BxmlMachineVariables {
             String rootAbstractMachineName,
             Element refinementParent,
             Map<String, String> gluing) {
+        return formatAxiomaticBlock(
+                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing, null);
+    }
+
+    private static String formatAxiomaticBlock(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractMachineName,
+            Element refinementParent,
+            Map<String, String> gluing,
+            Set<String> ghostDummyReadsForAbstractVars) {
         String machineName = machineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return "";
         boolean linkConcrete =
@@ -72,7 +93,8 @@ public final class BxmlMachineVariables {
                 linkRefinement,
                 refinementParent,
                 machineEl,
-                gl);
+                gl,
+                ghostDummyReadsForAbstractVars);
     }
 
     private static String formatVariablesBlock(
@@ -82,7 +104,8 @@ public final class BxmlMachineVariables {
             boolean refinementWithParent,
             Element refinementParent,
             Element refinementChild,
-            Map<String, String> gluing) {
+            Map<String, String> gluing,
+            Set<String> ghostDummyReadsForAbstractVars) {
         if (types.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic ").append(blockName).append("_variables {\n");
@@ -97,6 +120,10 @@ public final class BxmlMachineVariables {
                                 refinementParent, refinementChild, var, gluing);
                 abs.ifPresent(
                         a -> sb.append(" = return_valid_").append(var).append("(").append(a).append(")"));
+            }
+            if (ghostDummyReadsForAbstractVars != null
+                    && ghostDummyReadsForAbstractVars.contains(var)) {
+                sb.append(" reads dummy_ghost_").append(var);
             }
             sb.append(";\n");
         }
