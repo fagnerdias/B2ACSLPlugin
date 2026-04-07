@@ -20,6 +20,7 @@ import org.w3c.dom.NodeList;
 
 import com.example.bxml.BxmlInitialisationTranslator;
 import com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl;
+import com.example.bxml.BxmlConnectionAcsl;
 import com.example.bxml.BxmlConstantsAndProperties;
 import com.example.bxml.BxmlInvariantTranslator;
 import com.example.bxml.BxmlMachineVariables;
@@ -43,7 +44,9 @@ import com.example.model.Machine;
  * invariante da abstrata.
  *
  * <p>{@code Concrete_Constants} → {@code axiomatic Nome_constants}; {@code Properties} →
- * {@code axiomatic Nome_properties} com axiomas ({@link BxmlConstantsAndProperties}).
+ * {@code axiomatic Nome_properties} com axiomas ({@link BxmlConstantsAndProperties}); em seguida
+ * {@code include "connection.acsl"} se existir refinamento fundido na abstração ({@link BxmlConnectionAcsl},
+ * só elo abstração→refinamento).
  *
  * <p>Variáveis: um bloco {@code axiomatic NomeMaquina_variables} por máquina (abstrata e cada
  * refinamento/implementação fundido), tipos inferidos quando possível ({@link BxmlMachineVariables});
@@ -152,6 +155,12 @@ public final class AcslGenerator {
             sb.append("\n");
         }
 
+        Optional<Path> connectionAcsl =
+                BxmlConnectionAcsl.writeConnectionAcsl(
+                        outputDir, baseName, machineEl, mergedMachineElements, gluing);
+        connectionAcsl.ifPresent(
+                p -> sb.append("include \"").append(p.getFileName().toString()).append("\";\n\n"));
+
         // 1b) Variáveis: um bloco axiomatic por máquina (abstrata, depois cada fundida) + compreensões
         String varsAbstract = BxmlMachineVariables.formatAxiomaticBlock(machineEl, ctx);
         if (!varsAbstract.isBlank()) {
@@ -159,10 +168,13 @@ public final class AcslGenerator {
             if (!varsAbstract.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
+        Element refinementChainParent = machineEl;
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx = BxmlTranslateContext.forMachine(mel, gluing);
             String varsMerged =
-                    BxmlMachineVariables.formatAxiomaticBlock(mel, mctx, baseName);
+                    BxmlMachineVariables.formatAxiomaticBlock(
+                            mel, mctx, baseName, refinementChainParent, gluing);
+            refinementChainParent = mel;
             if (varsMerged.isBlank()) continue;
             sb.append(varsMerged);
             if (!varsMerged.endsWith("\n")) sb.append("\n");

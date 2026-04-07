@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -13,6 +14,8 @@ import org.w3c.dom.NodeList;
  * Declara variáveis de máquina B em blocos {@code axiomatic …_variables}, com tipos inferidos
  * preferencialmente a partir do invariante (ex.: {@code numbers <: NAT} → {@code Set<integer>}) e
  * recurso ao {@code typref} de {@code Abstract_Variables} / {@code Concrete_Variables}.
+ * Em refinamento fundido: {@code logic T v = return_valid_v(abs);} quando há ligação no invariante
+ * ({@link BxmlConnectionAcsl#linkingAbstractVariableName}).
  * Constantes concretas têm bloco próprio ({@link #inferConcreteConstantsLogicTypes} + contexto).
  *
  * <p>Sequências B ({@code iseq}, {@code POW(T*T)}) traduzem-se para {@code \list<elemento>} em ACSL.
@@ -26,7 +29,7 @@ public final class BxmlMachineVariables {
      * declaradas ({@code name} do {@code <Machine>}).
      */
     public static String formatAxiomaticBlock(Element machineEl, BxmlTranslateContext ctx) {
-        return formatAxiomaticBlock(machineEl, ctx, null);
+        return formatAxiomaticBlock(machineEl, ctx, null, null, Map.of());
     }
 
     /**
@@ -39,28 +42,61 @@ public final class BxmlMachineVariables {
      */
     public static String formatAxiomaticBlock(
             Element machineEl, BxmlTranslateContext ctx, String rootAbstractMachineName) {
+        return formatAxiomaticBlock(machineEl, ctx, rootAbstractMachineName, null, Map.of());
+    }
+
+    /**
+     * Variáveis fundidas: implementação com {@code Raiz__v}, ou refinamento com {@code = return_valid_v(abs)}
+     * quando {@code refinementParent} não é nulo ({@link BxmlConnectionAcsl}).
+     */
+    public static String formatAxiomaticBlock(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractMachineName,
+            Element refinementParent,
+            Map<String, String> gluing) {
         String machineName = machineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return "";
         boolean linkConcrete =
                 rootAbstractMachineName != null
                         && !rootAbstractMachineName.isBlank()
                         && isImplementationMachine(machineEl);
+        boolean linkRefinement =
+                refinementParent != null && isRefinementMachine(machineEl);
+        Map<String, String> gl =
+                gluing == null ? Map.of() : gluing;
         return formatVariablesBlock(
                 machineName,
                 inferVariableLogicTypes(machineEl, ctx),
-                linkConcrete ? rootAbstractMachineName.trim() : null);
+                linkConcrete ? rootAbstractMachineName.trim() : null,
+                linkRefinement,
+                refinementParent,
+                machineEl,
+                gl);
     }
 
     private static String formatVariablesBlock(
-            String blockName, Map<String, String> types, String abstractNameForRhs) {
+            String blockName,
+            Map<String, String> types,
+            String rootAbstractForImplRhs,
+            boolean refinementWithParent,
+            Element refinementParent,
+            Element refinementChild,
+            Map<String, String> gluing) {
         if (types.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic ").append(blockName).append("_variables {\n");
         for (Map.Entry<String, String> e : types.entrySet()) {
             String var = e.getKey();
             sb.append("    logic ").append(e.getValue()).append(" ").append(var);
-            if (abstractNameForRhs != null) {
-                sb.append(" = ").append(abstractNameForRhs).append("__").append(var);
+            if (rootAbstractForImplRhs != null) {
+                sb.append(" = ").append(rootAbstractForImplRhs).append("__").append(var);
+            } else if (refinementWithParent) {
+                Optional<String> abs =
+                        BxmlConnectionAcsl.linkingAbstractVariableName(
+                                refinementParent, refinementChild, var, gluing);
+                abs.ifPresent(
+                        a -> sb.append(" = return_valid_").append(var).append("(").append(a).append(")"));
             }
             sb.append(";\n");
         }
@@ -170,6 +206,11 @@ public final class BxmlMachineVariables {
     private static boolean isImplementationMachine(Element machineEl) {
         String t = machineEl.getAttribute("type");
         return t != null && "implementation".equalsIgnoreCase(t.trim());
+    }
+
+    private static boolean isRefinementMachine(Element machineEl) {
+        String t = machineEl.getAttribute("type");
+        return t != null && "refinement".equalsIgnoreCase(t.trim());
     }
 
     /**
