@@ -588,10 +588,15 @@ public final class B2ACSLPipeline {
     /**
      * Passo 6: reordena no merge os blocos {@code /*@ axiomatic X { ... } star-slash} que declaram
      * {@code logic} ou {@code predicate}, quando {@code X} é o primeiro axiomatic de um ficheiro da
-     * sequência {@link AcslLibIncludes#orderedLibFunctionAxiomaticNames()}. Depois, se existir bloco
-     * {@code Connection_*}, antecipa {@code sequence_iseq}, {@code is_seq_of} e {@code range_function}
-     * (ordem da lib) para antes desse bloco — caso contrário a permutação não desloca declarações para
-     * antes de anotações que já usam {@code ran} / {@code is_seq_of}.
+     * sequência {@link AcslLibIncludes#orderedLibFunctionAxiomaticNames()}. Em seguida agrupa
+     * {@code is_seq_of} e {@code range_function} imediatamente a seguir a {@code sequence_iseq}
+     * (ordem da lib), porque a permutação global só envolve blocos com nomes idênticos aos da lib —
+     * blocos intermédios com outros nomes (ex. axiomas Frama-C) deixavam {@code range_function} longe
+     * de {@code iSeq}/{@code is_seq_of}. Por fim, se existir {@code Connection_*}, antecipa o trio de
+     * sequência para antes desse bloco quando ainda estiverem depois dele. Depois, todos os
+     * {@code axiomatic …_axioms} são movidos para imediatamente a seguir ao último {@code axiomatic}
+     * não-{@code _axioms} que precede {@code Connection_*} (se houver), senão ao último não-{@code _axioms}
+     * do ficheiro.
      */
     private static void reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(Path mergedC) throws IOException {
         List<String> orderedNames = AcslLibIncludes.orderedLibFunctionAxiomaticNames();
@@ -603,7 +608,9 @@ public final class B2ACSLPipeline {
             }
             content = reorderLibAxiomaticBlocksInMerged(content, rank);
         }
+        content = clusterSequenceListAxiomaticsAfterIseq(content);
         content = moveSequenceListAxiomaticsBeforeConnection(content);
+        content = deferAxiomsSuffixBlocksAfterNonAxioms(content);
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -647,6 +654,62 @@ public final class B2ACSLPipeline {
      */
     private static final List<String> SEQUENCE_LIST_AXIOMATIC_ORDER =
             List.of("sequence_iseq", "is_seq_of", "range_function");
+
+    /**
+     * Garante a ordem {@code sequence_iseq} → {@code is_seq_of} → {@code range_function} com os dois
+     * últimos colados ao fim do bloco {@code sequence_iseq}. Remove {@code is_seq_of} e
+     * {@code range_function} das posições actuais (da direita para a esquerda) e reinsere-os após
+     * {@code sequence_iseq}.
+     */
+    private static String clusterSequenceListAxiomaticsAfterIseq(String content) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        AcsCommentSpan seq = null;
+        AcsCommentSpan isof = null;
+        AcsCommentSpan range = null;
+        for (AcsCommentSpan sp : spans) {
+            if (sp.axiomaticName == null || !LOGIC_OR_PREDICATE_IN_BLOCK.matcher(sp.text).find()) {
+                continue;
+            }
+            if ("sequence_iseq".equals(sp.axiomaticName) && seq == null) {
+                seq = sp;
+            } else if ("is_seq_of".equals(sp.axiomaticName) && isof == null) {
+                isof = sp;
+            } else if ("range_function".equals(sp.axiomaticName) && range == null) {
+                range = sp;
+            }
+        }
+        if (seq == null || range == null) {
+            return content;
+        }
+        List<AcsCommentSpan> toRemove = new ArrayList<>();
+        if (isof != null) {
+            toRemove.add(isof);
+        }
+        toRemove.add(range);
+        toRemove.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String cut = content;
+        for (AcsCommentSpan sp : toRemove) {
+            cut = cut.substring(0, sp.start) + cut.substring(sp.end);
+        }
+        spans = findAllAcsCommentSpans(cut);
+        AcsCommentSpan seqAfter = null;
+        for (AcsCommentSpan sp : spans) {
+            if ("sequence_iseq".equals(sp.axiomaticName)
+                    && LOGIC_OR_PREDICATE_IN_BLOCK.matcher(sp.text).find()) {
+                seqAfter = sp;
+                break;
+            }
+        }
+        if (seqAfter == null) {
+            return cut;
+        }
+        StringBuilder insert = new StringBuilder();
+        if (isof != null) {
+            insert.append(isof.text);
+        }
+        insert.append(range.text);
+        return cut.substring(0, seqAfter.end) + insert + cut.substring(seqAfter.end);
+    }
 
     /**
      * Remove da posição atual os blocos de sequência (lista) que estão depois do primeiro
@@ -704,6 +767,66 @@ public final class B2ACSLPipeline {
             }
         }
         return cut.substring(0, newConn) + insert + cut.substring(newConn);
+    }
+
+    /**
+     * Move todos os comentários {@code /*@ axiomatic Nome_axioms …} para imediatamente depois do último
+     * (por posição no ficheiro) comentário {@code axiomatic} com nome que <strong>não</strong> termina em
+     * {@code _axioms}, restringido aos que aparecem <strong>antes</strong> do primeiro
+     * {@code Connection_*} (se existir), para os axiomas da lib ficarem antes do elo de refinamento.
+     * Preserva a ordem relativa entre os blocos {@code _axioms}. Sem {@code Connection_*}, usa o último
+     * {@code axiomatic} não-{@code _axioms} de todo o ficheiro.
+     */
+    private static String deferAxiomsSuffixBlocksAfterNonAxioms(String content) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        List<AcsCommentSpan> axiomSuffixBlocks = new ArrayList<>();
+        for (AcsCommentSpan sp : spans) {
+            if (sp.axiomaticName == null) {
+                continue;
+            }
+            if (sp.axiomaticName.endsWith("_axioms")) {
+                axiomSuffixBlocks.add(sp);
+            }
+        }
+        if (axiomSuffixBlocks.isEmpty()) {
+            return content;
+        }
+        axiomSuffixBlocks.sort(Comparator.comparingInt((AcsCommentSpan a) -> a.start));
+        StringBuilder axiomBlob = new StringBuilder();
+        for (AcsCommentSpan sp : axiomSuffixBlocks) {
+            axiomBlob.append(sp.text);
+        }
+        axiomSuffixBlocks.sort(
+                Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String cut = content;
+        for (AcsCommentSpan sp : axiomSuffixBlocks) {
+            cut = cut.substring(0, sp.start) + cut.substring(sp.end);
+        }
+        List<AcsCommentSpan> after = findAllAcsCommentSpans(cut);
+        int connAfter = -1;
+        for (AcsCommentSpan sp : after) {
+            if (sp.axiomaticName != null && sp.axiomaticName.startsWith("Connection_")) {
+                connAfter = sp.start;
+                break;
+            }
+        }
+        AcsCommentSpan anchor = null;
+        for (AcsCommentSpan sp : after) {
+            if (sp.axiomaticName == null || sp.axiomaticName.endsWith("_axioms")) {
+                continue;
+            }
+            if (connAfter >= 0 && sp.start >= connAfter) {
+                continue;
+            }
+            if (anchor == null || sp.start > anchor.start) {
+                anchor = sp;
+            }
+        }
+        int insertAt =
+                anchor != null
+                        ? anchor.end
+                        : findPreambleInsertIndex(cut);
+        return cut.substring(0, insertAt) + axiomBlob + cut.substring(insertAt);
     }
 
     private static final Pattern AXIOMATIC_NAME_IN_ACSL_COMMENT =
