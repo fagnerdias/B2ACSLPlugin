@@ -12,6 +12,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -133,6 +134,49 @@ public final class AcslLibIncludes {
         }
         sb.append('\n');
         return sb.toString();
+    }
+
+    /**
+     * Caminhos relativos na {@code ACSL_Lib} no fecho transitivo de {@code include}, com as mesmas
+     * sementes que {@link #copyReferencedLibraryFiles} (tipos + ficheiros deduzidos do texto +
+     * {@code extraTextForSymbolScan}).
+     */
+    public static Set<String> transitiveLibRelativePathsForScan(String acslText, String extraTextForSymbolScan)
+            throws IOException {
+        String scan = acslText == null ? "" : acslText;
+        if (extraTextForSymbolScan != null && !extraTextForSymbolScan.isBlank()) {
+            scan = scan + "\n" + extraTextForSymbolScan;
+        }
+        List<String> seeds = orderedLibRelativePaths(scan);
+        List<String> seedsWithTypes = new ArrayList<>(seeds.size() + 1);
+        seedsWithTypes.add(TYPES_LIB_REL);
+        seedsWithTypes.addAll(seeds);
+        Path diskRoot = resolveAcslLibRootOnDisk();
+        List<String> all = transitiveAcslLibPaths(diskRoot, seedsWithTypes);
+        return new LinkedHashSet<>(all);
+    }
+
+    /**
+     * Símbolos da biblioteca mapeados em {@link #SYMBOL_TO_FILE} cujo ficheiro está no fecho
+     * {@link #transitiveLibRelativePathsForScan(String, String)}. Inclui {@code ran} quando entra
+     * {@code sequence_functions/range.acsl} ou {@code relation_functions/range.acsl}.
+     */
+    public static Set<String> allowedLibSymbolsForTransitiveIncludes(
+            String acslText, String extraTextForSymbolScan) throws IOException {
+        Set<String> paths = transitiveLibRelativePathsForScan(acslText, extraTextForSymbolScan);
+        if (paths.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> out = new LinkedHashSet<>();
+        for (Map.Entry<String, String> e : SYMBOL_TO_FILE.entrySet()) {
+            if (paths.contains(e.getValue())) {
+                out.add(e.getKey());
+            }
+        }
+        if (paths.contains("sequence_functions/range.acsl") || paths.contains("relation_functions/range.acsl")) {
+            out.add("ran");
+        }
+        return out;
     }
 
     /**

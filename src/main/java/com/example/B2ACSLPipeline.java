@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -285,6 +286,24 @@ public final class B2ACSLPipeline {
         Path mergedCode = cDir.resolve(MERGED_CODE_FILE_NAME);
 
         Path ghostCi = GhostOperationsCiGenerator.targetPath(cDir);
+        StringBuilder specScanForLemmas = new StringBuilder();
+        for (String part : acslPath.split("\\s+")) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            Path ap = Path.of(part);
+            if (Files.isRegularFile(ap)) {
+                specScanForLemmas.append(Files.readString(ap, StandardCharsets.UTF_8)).append('\n');
+            }
+        }
+        String ghostCiText =
+                Files.isRegularFile(ghostCi)
+                        ? Files.readString(ghostCi, StandardCharsets.UTF_8)
+                        : "";
+        Set<String> allowedLibSymbolsForLemmas =
+                AcslLibIncludes.allowedLibSymbolsForTransitiveIncludes(
+                        specScanForLemmas.toString(), ghostCiText);
+
         for (Path cFile : cFiles) {
             // frama-c -acsl-import <acsl> [ghost_operations.ci] <c> -print -no-unicode  (saída → merged_code.c)
             List<String> importCmd = new ArrayList<>();
@@ -321,7 +340,7 @@ public final class B2ACSLPipeline {
             replaceEnsuresGhostVarWithAssignsInMerged(mergedCode);
             addParenthesesToGhostInitialisationCall(mergedCode);
             reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
-            appendLemmasAcslLibToMergedEnd(mergedCode);
+            appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
 
             // frama-c -wp merged_code.c -wp-prover CVC5 --wp-smoke-tests -wp-rte -wp-status
             ProcessBuilder wpPb =
@@ -334,7 +353,7 @@ public final class B2ACSLPipeline {
                             "-wp-smoke-tests",
                             "-wp-rte",
                             "-wp-timeout",
-                            "20",
+                            "30",
                             "-wp-status");
             wpPb.directory(cDir.toFile());
             wpPb.inheritIO();
@@ -615,20 +634,83 @@ public final class B2ACSLPipeline {
     }
 
     /**
-     * Passo 10: anexa ao fim de {@code merged_code.c} o texto de {@code ACSL_Lib/lemmas.acsl} (classpath
-     * ou {@code src/main/resources} em desenvolvimento), dentro de um comentário ACSL
-     * {@code slash-star-at … star-slash}.
+     * Passo 10–11: lê {@code ACSL_Lib/lemmas.acsl}; passo 11 remove cada {@code admit lemma} que invoque
+     * (como chamada {@code nome(}) algum símbolo de biblioteca mapeado em {@link AcslLibIncludes} que não
+     * esteja no fecho de includes deduzido do texto dos ficheiros {@code .acsl} importados e do
+     * {@code ghost_operations.ci}. Passo 10 anexa o resultado ao fim de {@code merged_code.c} num
+     * comentário ACSL.
+     *
+     * @param allowedLibSymbols símbolos permitidos (ex.: {@code belongs}, {@code ran}); vazio → não anexa
      */
-    private static void appendLemmasAcslLibToMergedEnd(Path mergedC) throws IOException {
+    private static void appendLemmasAcslLibToMergedEnd(Path mergedC, Set<String> allowedLibSymbols)
+            throws IOException {
+        if (allowedLibSymbols == null || allowedLibSymbols.isEmpty()) {
+            return;
+        }
         Optional<String> lemmas = readAcslLibLemmasText();
         if (lemmas.isEmpty() || lemmas.get().isBlank()) {
             return;
         }
-        String body = lemmas.get().stripTrailing();
-        String wrapped = "/*@\n" + body + "\n */\n";
+        String filtered = filterLemmasByAllowedLibSymbols(lemmas.get(), allowedLibSymbols);
+        if (filtered.isBlank()) {
+            return;
+        }
+        String wrapped = "/*@\n" + filtered.stripTrailing() + "\n */\n";
         String existing = Files.readString(mergedC, StandardCharsets.UTF_8);
         String sep = existing.endsWith("\n") ? "" : "\n";
         Files.writeString(mergedC, existing + sep + wrapped, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Chamadas {@code identificador(} típicas da ACSL_Lib (identificador ASCII minúsculo, não precedido
+     * de {@code \} nem de carácter alfanumérico).
+     */
+    private static final Pattern LEMMA_LIB_STYLE_CALL =
+            Pattern.compile("(?<![A-Za-z0-9_\\\\])([a-z][a-z0-9_]*)\\s*\\(");
+
+    /**
+     * Mantém apenas lemas cujo corpo não contém chamadas a símbolos de lib fora de {@code allowed}.
+     */
+    private static String filterLemmasByAllowedLibSymbols(String lemmasFileText, Set<String> allowed) {
+        int open = lemmasFileText.indexOf('{');
+        int close = lemmasFileText.lastIndexOf('}');
+        if (open < 0 || close <= open) {
+            return lemmasFileText.stripTrailing();
+        }
+        String head = lemmasFileText.substring(0, open + 1);
+        String inner = lemmasFileText.substring(open + 1, close);
+        String tail = lemmasFileText.substring(close);
+        String[] chunks = inner.split("(?m)(?=^\\s*admit\\s+lemma\\s+)");
+        List<String> kept = new ArrayList<>();
+        for (String chunk : chunks) {
+            String t = chunk.trim();
+            if (t.isEmpty()) {
+                continue;
+            }
+            if (!t.startsWith("admit")) {
+                continue;
+            }
+            if (lemmaBodyUsesDisallowedLibCall(t, allowed)) {
+                continue;
+            }
+            kept.add(t);
+        }
+        if (kept.isEmpty()) {
+            return "";
+        }
+        return head + "\n\n    " + String.join("\n\n    ", kept) + "\n\n" + tail.stripLeading();
+    }
+
+    private static boolean lemmaBodyUsesDisallowedLibCall(String admitLemmaChunk, Set<String> allowed) {
+        Matcher m = LEMMA_LIB_STYLE_CALL.matcher(admitLemmaChunk);
+        while (m.find()) {
+            String name = m.group(1);
+            if (allowed.contains(name)) {
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 
     private static Optional<String> readAcslLibLemmasText() throws IOException {
