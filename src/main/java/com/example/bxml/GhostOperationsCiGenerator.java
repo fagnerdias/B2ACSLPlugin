@@ -256,6 +256,10 @@ public final class GhostOperationsCiGenerator {
             }
         }
         String rhsGhost = rewriteAbstractIdsWithOld(rhs, abstractVars);
+        if (lhsGhost.startsWith("dummy_")
+                && ("\\Nil".equals(rhsGhost) || "empty_seq".equals(rhsGhost))) {
+            return lhsGhost + " == \\Nil";
+        }
         return "equals(" + lhsGhost + ", " + rhsGhost + ")";
     }
 
@@ -346,9 +350,17 @@ public final class GhostOperationsCiGenerator {
         if ("EmptySet".equals(rhsExp.getLocalName())) {
             return "equals(dummy_" + v + ", empty(\\old(dummy_" + v + ")))";
         }
+        if ("EmptySeq".equals(rhsExp.getLocalName()) && isListLikeVariable(v, ctx)) {
+            return "dummy_" + v + " == \\Nil";
+        }
         String rhs = BxmlExpressionToAcsl.translate(rhsExp, ctx);
         String rhsGhost = rewriteAbstractIdsWithOld(rhs, abstractSet);
         return "equals(dummy_" + v + ", " + rhsGhost + ")";
+    }
+
+    private static boolean isListLikeVariable(String v, BxmlTranslateContext ctx) {
+        String t = ctx.variableLogicTypes().get(v);
+        return t != null && t.startsWith("\\list");
     }
 
     private static void collectAssignedAbstractVarsInInit(

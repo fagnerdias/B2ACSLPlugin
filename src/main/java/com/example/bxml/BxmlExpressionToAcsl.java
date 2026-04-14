@@ -142,7 +142,7 @@ public final class BxmlExpressionToAcsl {
             case "Integer_Literal" -> exp.getAttribute("value");
             case "Boolean_Literal" -> exp.getAttribute("value");
             case "EmptySet" -> translateEmptySet(exp, ctx.types());
-            case "EmptySeq" -> "empty_seq"; // placeholder: sequência vazia
+            case "EmptySeq" -> "\\Nil"; // lista ACSL vazia (E-ACSL / lógica de sequências)
             case "Unary_Exp" -> translateUnary(exp, ctx);
             case "Binary_Exp" -> translateBinary(exp, ctx);
             case "Nary_Exp" -> translateNary(exp, ctx);
