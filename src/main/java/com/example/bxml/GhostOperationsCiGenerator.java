@@ -18,8 +18,10 @@ import org.w3c.dom.NodeList;
 
 /**
  * Gera {@code ghost_operations.ci}: variáveis ghost por variável abstrata, axiomatica {@code dummy_ghost}
- * com tipo {@code DSet} paralelo a {@code Set}, e contratos ghost para inicialização e operações que
- * atribuem a variáveis abstratas.
+ * com tipo paralelo ao da especificação ({@code DSet<…>} para {@code Set<…>}, {@code \\list<…>} para
+ * sequências), declarações {@code logic DSet<integer> set_comprehension_k} para índices usados nos
+ * {@code ensures} ghost (e até ao máximo do registo de compreensões da máquina), e contratos ghost
+ * para inicialização e operações que atribuem a variáveis abstratas.
  */
 public final class GhostOperationsCiGenerator {
 
@@ -155,11 +157,30 @@ public final class GhostOperationsCiGenerator {
         }
         sb.append("\n");
 
-        sb.append(formatDummyAxiomatic(abstractVarNames, varTypes));
+        List<GhostOp> ghostOps = buildGhostOperations(abstractMachineEl, abstractSet, ctx);
+        List<String> allGhostEnsureLines = new ArrayList<>();
+        for (GhostOp go : ghostOps) {
+            allGhostEnsureLines.addAll(go.ghostEnsures());
+        }
+        int maxSetComp =
+                Math.max(
+                        ctx.comprehensions().maxComprehensionIndex(),
+                        maxSetComprehensionIndexInGhostText(allGhostEnsureLines));
 
+        sb.append(formatDummyAxiomatic(abstractVarNames, varTypes, maxSetComp));
+
+        for (GhostOp go : ghostOps) {
+            sb.append(go.format());
+        }
+
+        Files.createDirectories(cDir);
+        Files.writeString(cDir.resolve(GHOST_FILE), sb.toString(), StandardCharsets.UTF_8);
+    }
+
+    private static List<GhostOp> buildGhostOperations(
+            Element abstractMachineEl, Set<String> abstractSet, BxmlTranslateContext ctx) {
         List<GhostOp> ops = new ArrayList<>();
-        List<String> initEnsures =
-                collectGhostEnsuresFromInit(abstractMachineEl, abstractSet, ctx);
+        List<String> initEnsures = collectGhostEnsuresFromInit(abstractMachineEl, abstractSet, ctx);
         Set<String> initAssigned = new LinkedHashSet<>();
         collectAssignedAbstractVarsInInit(abstractMachineEl, abstractSet, initAssigned);
         if (!initAssigned.isEmpty() && !initEnsures.isEmpty()) {
@@ -200,24 +221,49 @@ public final class GhostOperationsCiGenerator {
                                 ghostEnsures));
             }
         }
-
-        for (GhostOp go : ops) {
-            sb.append(go.format());
-        }
-
-        Files.createDirectories(cDir);
-        Files.writeString(cDir.resolve(GHOST_FILE), sb.toString(), StandardCharsets.UTF_8);
+        return ops;
     }
 
-    private static String formatDummyAxiomatic(List<String> abstractVarNames, Map<String, String> varTypes) {
+    private static final Pattern SET_COMPREHENSION_INDEX =
+            Pattern.compile("set_comprehension_(\\d+)");
+
+    private static int maxSetComprehensionIndexInGhostText(Iterable<String> lines) {
+        int m = 0;
+        if (lines == null) {
+            return 0;
+        }
+        for (String line : lines) {
+            if (line == null || line.isBlank()) {
+                continue;
+            }
+            Matcher mm = SET_COMPREHENSION_INDEX.matcher(line);
+            while (mm.find()) {
+                try {
+                    m = Math.max(m, Integer.parseInt(mm.group(1)));
+                } catch (NumberFormatException ignored) {
+                    // skip
+                }
+            }
+        }
+        return m;
+    }
+
+    private static String formatDummyAxiomatic(
+            List<String> abstractVarNames, Map<String, String> varTypes, int maxSetComprehensionIndex) {
         StringBuilder sb = new StringBuilder();
         sb.append("/*@\n");
         sb.append("    axiomatic dummy_ghost {\n\n");
         sb.append("        type DSet<A>;\n\n");
+        sb.append("        type DRelation<A, B>;\n\n");
         for (String v : abstractVarNames) {
             String t = varTypes.getOrDefault(v, "Set<integer>");
-            String d = toDSetType(t);
+            String d = dummyAxiomaticLogicType(t);
             sb.append("        logic ").append(d).append(" dummy_").append(v).append(";\n\n");
+        }
+        if (maxSetComprehensionIndex > 0) {
+            for (int k = 1; k <= maxSetComprehensionIndex; k++) {
+                sb.append("        logic DSet<integer> set_comprehension_").append(k).append(";\n\n");
+            }
         }
         sb.append("        logic A empty<A>(A a);\n");
         sb.append("        predicate belongs<A, B>(A a, B b);\n");
@@ -225,14 +271,30 @@ public final class GhostOperationsCiGenerator {
         sb.append("        logic A set_union<A, B>(A a, B b);\n");
         sb.append("        logic integer card<A>(A a);\n");
         sb.append("        logic DSet<integer> singleton<A>(A a);\n");
-        sb.append("        predicate is_finite<A>(A a);\n\n");
+        sb.append("        predicate is_finite<A>(A a);\n");
+        sb.append(
+                "        logic DRelation<A, B> domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
         sb.append("    }\n*/\n");
         return sb.toString();
     }
 
-    private static String toDSetType(String setOrLogicType) {
-        if (setOrLogicType != null && setOrLogicType.startsWith("Set<") && setOrLogicType.endsWith(">")) {
-            return "DSet" + setOrLogicType.substring(3);
+    /**
+     * Tipo ACSL da variável lógica {@code dummy_<v>} no axiomatica comentado: espelha {@code Set<…>}
+     * como {@code DSet<…>}, {@code \\list<…>} inalterado, {@code Relation_*} inalterado.
+     */
+    private static String dummyAxiomaticLogicType(String inferred) {
+        if (inferred == null || inferred.isBlank()) {
+            return "DSet<integer>";
+        }
+        String t = inferred.trim();
+        if (t.startsWith("\\list")) {
+            return t;
+        }
+        if (t.startsWith("Set<") && t.endsWith(">")) {
+            return "DSet" + t.substring(3);
+        }
+        if (t.startsWith("Relation_")) {
+            return t;
         }
         return "DSet<integer>";
     }

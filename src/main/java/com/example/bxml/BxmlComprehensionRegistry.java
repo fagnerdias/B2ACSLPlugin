@@ -206,6 +206,14 @@ public final class BxmlComprehensionRegistry {
         return ordered.isEmpty();
     }
 
+    /**
+     * Maior índice {@code k} usado em {@code set_comprehension_k} após {@link #assignDedupIndices()} (0 se
+     * não houver compreensões).
+     */
+    public int maxComprehensionIndex() {
+        return maxIndex();
+    }
+
     /** Nome ACSL do conjunto, ex. {@code set_comprehension_1} ({@code Quantified_Set} ou intervalo {@code ..}). */
     public String referenceName(Element comprehensionElement) {
         Integer idx = elementToIndex.get(comprehensionElement);
