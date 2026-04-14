@@ -135,6 +135,27 @@ public final class BxmlExpressionToAcsl {
         return "<|".equals(o) || "&lt;|".equals(o);
     }
 
+    /** B append à sequência {@code s <- x} → {@code \\concat(s, [| x |])} (E-ACSL / listas). */
+    private static boolean isSequenceAppendOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "<-".equals(o) || "&lt;-".equals(o);
+    }
+
+    /**
+     * B cons à sequência {@code x -> s} → {@code \\concat([| x |], s)}. Não confundir com
+     * {@code --&gt;} / {@code -->} (tipo conjunto de funções).
+     */
+    private static boolean isSequencePrependOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "->".equals(o) || "-&gt;".equals(o);
+    }
+
     public static String translate(Element exp, BxmlTranslateContext ctx) {
         String ln = exp.getLocalName();
         return switch (ln) {
@@ -226,6 +247,12 @@ public final class BxmlExpressionToAcsl {
         if ("..".equals(op == null ? "" : op.trim())) {
             String named = ctx.comprehensions().referenceName(b);
             return named != null ? named : "/* interval .. */";
+        }
+        if (isSequenceAppendOp(op)) {
+            return "(" + "\\concat(" + left + ", [|" + right + "|])" + ")";
+        }
+        if (isSequencePrependOp(op)) {
+            return "\\concat([|" + left + "|], " + right + ")";
         }
         if ("mod".equals(op)) return "(" + left + " % " + right + ")";
         String infix = integerBinaryOpToAcsl(op);
