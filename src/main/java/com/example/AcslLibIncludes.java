@@ -85,7 +85,8 @@ public final class AcslLibIncludes {
             Map.entry("domain_restriction", "relation_functions/domain_restriction.acsl"),
             Map.entry("range_restriction", "relation_functions/range_restriction.acsl"),
             Map.entry("iSeq", "sequence_functions/iseq.acsl"),
-            Map.entry("is_seq_of", "sequence_functions/is_seq_of.acsl"));
+            Map.entry("is_seq_of", "sequence_functions/is_seq_of.acsl"),
+            Map.entry("is_total_function", "function_functions/is_total.acsl"));
 
     /**
      * Ordem dos {@code include} para {@code set_functions/} (dependências lógicas da ACSL_Lib), depois
@@ -109,6 +110,10 @@ public final class AcslLibIncludes {
             "set_functions/disjoint.acsl",
             "relation_functions/domain.acsl",
             "relation_functions/range.acsl",
+            "tuple_functions/tuple_couple.acsl",
+            "function_functions/is_function.acsl",
+            "function_functions/is_partial.acsl",
+            "function_functions/is_total.acsl",
             "relation_functions/inverse.acsl",
             "relation_functions/domain_restriction.acsl",
             "relation_functions/range_restriction.acsl",
@@ -292,6 +297,7 @@ public final class AcslLibIncludes {
             }
         }
         addRangeIncludesForRan(acslText, files);
+        addIsTotalFunctionLibIncludes(acslText, files);
         if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
             files.add(VARIABLES_LIB_REL);
         }
@@ -312,6 +318,24 @@ public final class AcslLibIncludes {
      * {@code relation_functions/range.acsl} ({@code ran(Relation_*)}) e
      * {@code sequence_functions/range.acsl} ({@code ran(\list<...>)}).
      */
+    /**
+     * {@code is_total_function} depende de predicados noutros ficheiros da lib sem cadeia de
+     * {@code include} explícita entre axiomatics.
+     */
+    private static void addIsTotalFunctionLibIncludes(String acslText, LinkedHashSet<String> files) {
+        if (!containsSymbolCall(acslText, "is_total_function")) {
+            return;
+        }
+        files.add("relation_functions/domain.acsl");
+        files.add("relation_functions/range.acsl");
+        files.add("set_functions/inclusion.acsl");
+        files.add("set_functions/equals.acsl");
+        files.add("tuple_functions/tuple_couple.acsl");
+        files.add("function_functions/is_function.acsl");
+        files.add("function_functions/is_partial.acsl");
+        files.add("function_functions/is_total.acsl");
+    }
+
     private static void addRangeIncludesForRan(String acslText, LinkedHashSet<String> files) {
         if (!containsSymbolCall(acslText, "ran")) {
             return;

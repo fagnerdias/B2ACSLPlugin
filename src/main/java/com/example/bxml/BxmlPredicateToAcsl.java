@@ -108,6 +108,15 @@ public final class BxmlPredicateToAcsl {
                     return "is_seq_of(" + left + ", " + setAtom + ")";
                 }
             }
+            // f : (S --> T) com S intervalo/compreensão — função total (ACSL_Lib function_functions/is_total.acsl)
+            if (BxmlExpressionToAcsl.isFunctionArrowType(rightEl)) {
+                Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+                if (domRng[0] == null || domRng[1] == null) return "";
+                String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+                String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+                return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")";
+            }
             String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
             String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
             // x : T — pertença (ex.: nn : NAT → belongs(nn, NAT)) — ACSL_Lib/set_functions/belongs.acsl
@@ -189,6 +198,22 @@ public final class BxmlPredicateToAcsl {
             case "NAT", "INTEGER", "BOOL", "INT", "REAL" -> true;
             default -> false;
         };
+    }
+
+    /** Codomínio B (ex. {@code NAT}) → nome do conjunto ACSL da lib (ex. {@code NAT}). */
+    private static String functionArrowRangeSet(Element codomainEl, BxmlTranslateContext ctx) {
+        if (codomainEl != null && "Id".equals(codomainEl.getLocalName())) {
+            String v = codomainEl.getAttribute("value");
+            if (v == null) {
+                v = "";
+            }
+            return switch (v.trim()) {
+                case "NAT", "INTEGER", "INT" -> "NAT";
+                case "BOOL" -> "BOOL";
+                default -> BxmlExpressionToAcsl.translate(codomainEl, ctx);
+            };
+        }
+        return BxmlExpressionToAcsl.translate(codomainEl, ctx);
     }
 
     private static Element firstNonAttrElementChild(Element parent) {

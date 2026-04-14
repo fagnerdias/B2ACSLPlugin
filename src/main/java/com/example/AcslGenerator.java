@@ -137,7 +137,7 @@ public final class AcslGenerator {
                         machineEl, sharedComprehensions, gluing);
 
         List<String> allInvariantPredicateNames =
-                listAllInvariantPredicateNames(machineEl, ctx, mergePaths, gluing);
+                listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
         List<String> implementationAssignTargets =
                 BxmlMachineVariables.listImplementationAssignTargets(baseName, mergedMachineElements);
         InitialisationAcsl initBare =
@@ -266,7 +266,7 @@ public final class AcslGenerator {
             if (!invariantPredicates.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
-        appendMergedInvariantPredicatesOnly(sb, mergePaths, gluing, ctx.comprehensions());
+        appendMergedInvariantPredicatesOnly(sb, mergedMachineElements, gluing, ctx.comprehensions());
 
         // 3) Funções: inicialização e operações
         if (isAbstraction && init != null) {
@@ -309,14 +309,13 @@ public final class AcslGenerator {
     /** Apenas {@code predicate} de invariantes de refinamentos/implementações. */
     private static void appendMergedInvariantPredicatesOnly(
             StringBuilder sb,
-            List<Path> mergePaths,
+            List<Element> mergedMachineRoots,
             Map<String, String> gluing,
-            BxmlComprehensionRegistry sharedComprehensions)
-            throws Exception {
-        if (mergePaths.isEmpty()) return;
-        for (Path p : mergePaths) {
-            Element mel = parseMachineElement(p);
-            String src = mel.getAttribute("name");
+            BxmlComprehensionRegistry sharedComprehensions) {
+        if (mergedMachineRoots == null || mergedMachineRoots.isEmpty()) {
+            return;
+        }
+        for (Element mel : mergedMachineRoots) {
             BxmlTranslateContext ctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(mel, sharedComprehensions, gluing);
             String inv = BxmlInvariantTranslator.formatInvariantPredicates(mel, ctx);
@@ -342,18 +341,19 @@ public final class AcslGenerator {
 
     /**
      * Invariante(s) da abstrata seguido(s) dos invariantes de cada refinamento/implementação em
-     * {@code mergePaths} (mesma ordem que em {@link #appendMergedInvariantPredicatesOnly}), para
+     * {@code mergedMachineRoots} (mesma ordem que em {@link #appendMergedInvariantPredicatesOnly}), para
      * repetir em {@code requires}/{@code ensures} das operações e em {@code ensures} da inicialização.
      */
     private static List<String> listAllInvariantPredicateNames(
             Element machineEl,
             BxmlTranslateContext ctx,
-            List<Path> mergePaths,
-            Map<String, String> gluing)
-            throws Exception {
+            List<Element> mergedMachineRoots,
+            Map<String, String> gluing) {
         List<String> out = new ArrayList<>(BxmlInvariantTranslator.listInvariantPredicateNames(machineEl, ctx));
-        for (Path p : mergePaths) {
-            Element mel = parseMachineElement(p);
+        if (mergedMachineRoots == null) {
+            return out;
+        }
+        for (Element mel : mergedMachineRoots) {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
                             mel, ctx.comprehensions(), gluing);

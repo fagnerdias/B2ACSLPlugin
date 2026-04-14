@@ -96,6 +96,45 @@ public final class BxmlExpressionToAcsl {
         return "..".equals(op == null ? "" : op.trim());
     }
 
+    /**
+     * Conjunto nomeado {@code set_comprehension_k} para intervalo ou {@code Quantified_Set} registado;
+     * caso contrário delega em {@link #translate}.
+     */
+    public static String intervalOrSetComprehensionRef(Element e, BxmlTranslateContext ctx) {
+        if (e == null) {
+            return "/* null */";
+        }
+        if (isIntervalBinaryExp(e) || "Quantified_Set".equals(e.getLocalName())) {
+            String n = ctx.comprehensions().referenceName(e);
+            return n != null ? n : translate(e, ctx);
+        }
+        return translate(e, ctx);
+    }
+
+    /** Tipo conjunto de funções B {@code S --> T} em {@code Binary_Exp}. */
+    public static boolean isFunctionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        return isFunctionArrowOp(e.getAttribute("op"));
+    }
+
+    private static boolean isFunctionArrowOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "-->".equals(o) || "--&gt;".equals(o);
+    }
+
+    private static boolean isDomainRestrictionOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "<|".equals(o) || "&lt;|".equals(o);
+    }
+
     public static String translate(Element exp, BxmlTranslateContext ctx) {
         String ln = exp.getLocalName();
         return switch (ln) {
@@ -173,6 +212,11 @@ public final class BxmlExpressionToAcsl {
         String op = b.getAttribute("op");
         Element[] pair = twoDirectExpChildren(b);
         if (pair[0] == null || pair[1] == null) return "/* binary */";
+        if (isDomainRestrictionOp(op)) {
+            String setRef = intervalOrSetComprehensionRef(pair[0], ctx);
+            String rel = translate(pair[1], ctx);
+            return "domain_restriction(" + rel + ", " + setRef + ")";
+        }
         String left = translate(pair[0], ctx);
         String right = translate(pair[1], ctx);
         if (isSetUnion(op)) {
