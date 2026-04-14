@@ -52,7 +52,8 @@ public final class BxmlExpressionToAcsl {
             }
             case "EmptySet" -> true;
             case "Quantified_Set" -> true;
-            case "Binary_Exp" -> isSetUnion(exp.getAttribute("op"));
+            case "Binary_Exp" ->
+                    isSetUnion(exp.getAttribute("op")) || isIntervalBinaryExp(exp);
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
             default -> false;
         };
@@ -84,6 +85,15 @@ public final class BxmlExpressionToAcsl {
         if (t == null || t.isBlank()) return false;
         if (t.startsWith("Set<")) return true;
         return t.startsWith("Relation_");
+    }
+
+    /** Intervalo B {@code a..b} em {@code Binary_Exp} (conjunto de inteiros). */
+    public static boolean isIntervalBinaryExp(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String op = e.getAttribute("op");
+        return "..".equals(op == null ? "" : op.trim());
     }
 
     public static String translate(Element exp, BxmlTranslateContext ctx) {
@@ -169,8 +179,30 @@ public final class BxmlExpressionToAcsl {
             // B: \/ — união → set_union (ACSL_Lib/set_functions/union.acsl)
             return "set_union(" + left + ", " + right + ")";
         }
+        if ("..".equals(op == null ? "" : op.trim())) {
+            String named = ctx.comprehensions().referenceName(b);
+            return named != null ? named : "/* interval .. */";
+        }
         if ("mod".equals(op)) return "(" + left + " % " + right + ")";
-        return "(" + left + " " + op + " " + right + ")";
+        String infix = integerBinaryOpToAcsl(op);
+        return "(" + left + " " + infix + " " + right + ")";
+    }
+
+    /**
+     * Operadores binários inteiros B (ex. {@code -i}, {@code +i}) → infixo C/ACSL ({@code -}, {@code +}).
+     */
+    private static String integerBinaryOpToAcsl(String bOp) {
+        if (bOp == null) {
+            return "";
+        }
+        String o = bOp.trim();
+        return switch (o) {
+            case "+i" -> "+";
+            case "-i" -> "-";
+            case "*i" -> "*";
+            case "/i" -> "/";
+            default -> o;
+        };
     }
 
     private static String translateNary(Element n, BxmlTranslateContext ctx) {

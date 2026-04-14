@@ -28,12 +28,32 @@ public record BxmlTranslateContext(
     public static BxmlTranslateContext forMachine(Element machineEl, Map<String, String> gluingSubstitutions) {
         BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machineEl);
         BxmlComprehensionRegistry reg = BxmlComprehensionRegistry.fromMachine(machineEl);
-        reg.setGluingSubstitutions(gluingSubstitutions);
-        reg.assignDedupIndices(types);
+        Map<String, String> gl = gluingSubstitutions == null ? Map.of() : gluingSubstitutions;
+        reg.setGluingSubstitutions(gl);
+        reg.assignDedupIndices();
         BxmlTranslateContext tmp = new BxmlTranslateContext(types, reg, Map.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
         return new BxmlTranslateContext(types, reg, merged);
+    }
+
+    /**
+     * Como {@link #forMachine(Element, Map)}, mas usa um registo de compreensões já construído (ex.
+     * {@link BxmlComprehensionRegistry#fromMachineChain(java.util.List, Map)}) e indexado — não chama
+     * {@link BxmlComprehensionRegistry#assignDedupIndices()} de novo.
+     */
+    public static BxmlTranslateContext forMachineWithSharedComprehensions(
+            Element machineEl,
+            BxmlComprehensionRegistry sharedComprehensions,
+            Map<String, String> gluingSubstitutions) {
+        BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machineEl);
+        Map<String, String> gl = gluingSubstitutions == null ? Map.of() : gluingSubstitutions;
+        sharedComprehensions.setGluingSubstitutions(gl);
+        BxmlTranslateContext tmp = new BxmlTranslateContext(types, sharedComprehensions, Map.of());
+        LinkedHashMap<String, String> merged = new LinkedHashMap<>();
+        merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
+        merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
+        return new BxmlTranslateContext(types, sharedComprehensions, merged);
     }
 }
