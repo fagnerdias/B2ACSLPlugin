@@ -96,7 +96,8 @@ public final class BxmlMachineVariables {
                 refinementParent,
                 machineEl,
                 gl,
-                ghostDummyReadsForAbstractVars);
+                ghostDummyReadsForAbstractVars,
+                ctx);
     }
 
     private static String formatVariablesBlock(
@@ -107,15 +108,31 @@ public final class BxmlMachineVariables {
             Element refinementParent,
             Element refinementChild,
             Map<String, String> gluing,
-            Set<String> ghostDummyReadsForAbstractVars) {
+            Set<String> ghostDummyReadsForAbstractVars,
+            BxmlTranslateContext ctx) {
         if (types.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic ").append(blockName).append("_variables {\n");
         for (Map.Entry<String, String> e : types.entrySet()) {
             String var = e.getKey();
-            sb.append("    logic ").append(e.getValue()).append(" ").append(var);
+            String logicType = e.getValue();
+            String implRhs = null;
+            if (rootAbstractForImplRhs != null
+                    && refinementChild != null
+                    && ctx != null
+                    && concreteVariableInvIsTotalArrowFunction(refinementChild, var)) {
+                logicType = relationLogicTypeToFunctionLogicType(logicType);
+                implRhs =
+                        implementationRhsTotalFunctionFromArray(
+                                rootAbstractForImplRhs.trim(), var, refinementChild, ctx);
+            }
+            sb.append("    logic ").append(logicType).append(" ").append(var);
             if (rootAbstractForImplRhs != null) {
-                sb.append(" = ").append(rootAbstractForImplRhs).append("__").append(var);
+                sb.append(" = ")
+                        .append(
+                                implRhs != null
+                                        ? implRhs
+                                        : rootAbstractForImplRhs + "__" + var);
             } else if (refinementWithParent) {
                 Optional<String> abs =
                         BxmlConnectionAcsl.linkingAbstractVariableName(
@@ -430,6 +447,156 @@ public final class BxmlMachineVariables {
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Element e = (Element) n;
             if (localName.equals(e.getLocalName())) return e;
+        }
+        return null;
+    }
+
+    /**
+     * B: {@code v : Dom --> Cod} num invariante → tipo {@code logic} como função total ({@code
+     * Function_*_*}) em vez de {@code Relation_*_*}.
+     */
+    private static String relationLogicTypeToFunctionLogicType(String relationLogicType) {
+        if (relationLogicType == null || relationLogicType.isBlank()) {
+            return "Function_int_int";
+        }
+        return switch (relationLogicType.trim()) {
+            case "Relation_int_int" -> "Function_int_int";
+            case "Relation_int_bool" -> "Function_int_bool";
+            case "Relation_bool_int" -> "Function_bool_int";
+            default -> relationLogicType;
+        };
+    }
+
+    private static boolean concreteVariableInvIsTotalArrowFunction(Element implMachineEl, String varName) {
+        return concreteVariableFunctionArrowElement(implMachineEl, varName) != null;
+    }
+
+    /** {@code Binary_Exp} {@code -->} que tipa {@code varName}, ou null. */
+    private static Element concreteVariableFunctionArrowElement(Element implMachineEl, String varName) {
+        if (implMachineEl == null || varName == null || varName.isBlank()) {
+            return null;
+        }
+        Element inv = firstChildElement(implMachineEl, "Invariant");
+        if (inv == null) {
+            return null;
+        }
+        Element pred = firstPredChild(inv);
+        return findFunctionArrowExpForVariableMembership(pred, varName);
+    }
+
+    private static Element findFunctionArrowExpForVariableMembership(Element pred, String varName) {
+        if (pred == null) {
+            return null;
+        }
+        String ln = pred.getLocalName();
+        if ("Exp_Comparison".equals(ln)) {
+            String op = normalizeColonLikeOp(pred.getAttribute("op"));
+            if (":".equals(op)) {
+                Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
+                if (pair[0] != null
+                        && "Id".equals(pair[0].getLocalName())
+                        && varName.equals(pair[0].getAttribute("value").trim())
+                        && pair[1] != null
+                        && BxmlExpressionToAcsl.isFunctionArrowType(pair[1])) {
+                    return pair[1];
+                }
+            }
+            return null;
+        }
+        if ("Nary_Pred".equals(ln)) {
+            NodeList nl = pred.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if ("Attr".equals(ch.getLocalName())) continue;
+                Element found = findFunctionArrowExpForVariableMembership(ch, varName);
+                if (found != null) {
+                    return found;
+                }
+            }
+            return null;
+        }
+        if ("Unary_Pred".equals(ln)) {
+            return findFunctionArrowExpForVariableMembership(firstPredChild(pred), varName);
+        }
+        if ("Binary_Pred".equals(ln)) {
+            Element[] pair = twoDirectPredChildren(pred);
+            if (pair[0] != null) {
+                Element f = findFunctionArrowExpForVariableMembership(pair[0], varName);
+                if (f != null) {
+                    return f;
+                }
+            }
+            if (pair[1] != null) {
+                return findFunctionArrowExpForVariableMembership(pair[1], varName);
+            }
+        }
+        return null;
+    }
+
+    private static String normalizeColonLikeOp(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String o = raw.trim();
+        if (":".equals(o)) {
+            return ":";
+        }
+        return o;
+    }
+
+    private static Element[] twoDirectPredChildren(Element parent) {
+        Element[] out = new Element[2];
+        int k = 0;
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            out[k++] = e;
+            if (k == 2) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Lado direito da ligação à implementação C: array {@code Raiz__v} como função (índices 0..n-1).
+     */
+    private static String implementationRhsTotalFunctionFromArray(
+            String rootAbstractName,
+            String varName,
+            Element implMachineEl,
+            BxmlTranslateContext ctx) {
+        Element arrow = concreteVariableFunctionArrowElement(implMachineEl, varName);
+        String len = arrow != null ? arrayDomainCardinalityAcsl(arrow, ctx) : null;
+        if (len == null || len.isBlank()) {
+            len = "1";
+        }
+        String q = rootAbstractName + "__" + varName;
+        return "array_to_function((int32_t*)(" + q + "), " + len + ")";
+    }
+
+    /** Cardinalidade do intervalo/domínio de {@code -->} (ex. {@code 0..maximum} → {@code (maximum + 1)}). */
+    private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx) {
+        if (arrowEl == null || ctx == null) {
+            return null;
+        }
+        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
+        if (domRng[0] == null) {
+            return null;
+        }
+        Element domain = domRng[0];
+        if (BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
+            Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
+            if (lr[0] != null && lr[1] != null) {
+                String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
+                String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
+                return "(" + high + " - (" + low + ") + 1)";
+            }
         }
         return null;
     }

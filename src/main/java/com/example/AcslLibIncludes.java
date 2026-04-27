@@ -90,6 +90,8 @@ public final class AcslLibIncludes {
             Map.entry("range_restriction", "relation_functions/range_restriction.acsl"),
             Map.entry("iSeq", "sequence_functions/iseq.acsl"),
             Map.entry("is_seq_of", "sequence_functions/is_seq_of.acsl"),
+            Map.entry("array_to_function", "function_functions/array_to_function.acsl"),
+            Map.entry("function_apply", "function_functions/apply.acsl"),
             Map.entry("is_total_function", "function_functions/is_total.acsl"));
 
     /**
@@ -120,6 +122,8 @@ public final class AcslLibIncludes {
             "function_functions/is_function.acsl",
             "function_functions/is_partial.acsl",
             "function_functions/is_total.acsl",
+            "function_functions/apply.acsl",
+            "function_functions/array_to_function.acsl",
             "relation_functions/inverse.acsl",
             "relation_functions/domain_restriction.acsl",
             "relation_functions/range_restriction.acsl",
@@ -365,6 +369,7 @@ public final class AcslLibIncludes {
         }
         addRangeIncludesForRan(acslText, files);
         addIsTotalFunctionLibIncludes(acslText, files);
+        addArrayToFunctionLibIncludes(acslText, files);
         addDependencyMapIncludes(acslText, files);
         if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
             files.add(VARIABLES_LIB_REL);
@@ -419,6 +424,17 @@ public final class AcslLibIncludes {
         files.add("function_functions/is_function.acsl");
         files.add("function_functions/is_partial.acsl");
         files.add("function_functions/is_total.acsl");
+    }
+
+    /**
+     * {@code array_to_function} usa {@code function_apply} nos axiomas; garante {@code apply.acsl}
+     * na lista de includes quando o texto referencia {@code array_to_function}, alinhado ao mapa JSON.
+     */
+    private static void addArrayToFunctionLibIncludes(String acslText, LinkedHashSet<String> files) {
+        if (!containsSymbolCall(acslText, "array_to_function")) {
+            return;
+        }
+        files.add("function_functions/apply.acsl");
     }
 
     private static void addRangeIncludesForRan(String acslText, LinkedHashSet<String> files) {

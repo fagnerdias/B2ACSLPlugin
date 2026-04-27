@@ -240,6 +240,14 @@ public final class GhostOperationsCiGenerator {
     }
 
     private static final Pattern SET_COMPREHENSION_INDEX =
+            Pattern.compile("dummy_set_comprehension_(\\d+)");
+
+    /** ACSL sem prefixo ghost; no {@code dummy_ghost} usam-se {@link #dummySetComprehensionRef}. */
+    private static final Pattern SET_COMPREHENSION_INDEX_UNPREFIXED =
+            Pattern.compile("^set_comprehension_(\\d+)$");
+
+    /** Para contar índices em ensures completos (subexpressão). */
+    private static final Pattern SET_COMPREHENSION_INDEX_IN_TEXT =
             Pattern.compile("set_comprehension_(\\d+)");
 
     /**
@@ -272,8 +280,33 @@ public final class GhostOperationsCiGenerator {
                     // skip
                 }
             }
+            mm = SET_COMPREHENSION_INDEX_IN_TEXT.matcher(line);
+            while (mm.find()) {
+                try {
+                    m = Math.max(m, Integer.parseInt(mm.group(1)));
+                } catch (NumberFormatException ignored) {
+                    // skip
+                }
+            }
         }
         return m;
+    }
+
+    /**
+     * Segundo argumento de {@code domain_restriction(..., S)} no axiomatic ghost: nomes de set
+     * comprehension vêm do tradutor como {@code set_comprehension_k}; aqui alinham-se a
+     * {@code dummy_set_comprehension_k} declarado em {@link #formatDummyAxiomatic}.
+     */
+    private static String dummySetComprehensionRef(String domainRestrictionSecondArg) {
+        if (domainRestrictionSecondArg == null) {
+            return "";
+        }
+        String s = domainRestrictionSecondArg.trim();
+        Matcher um = SET_COMPREHENSION_INDEX_UNPREFIXED.matcher(s);
+        if (um.matches()) {
+            return "dummy_set_comprehension_" + um.group(1);
+        }
+        return s;
     }
 
     private static String formatDummyAxiomatic(
@@ -295,7 +328,7 @@ public final class GhostOperationsCiGenerator {
         appendDummyConcreteConstantDeclarations(sb, machineEl, ctx);
         if (maxSetComprehensionIndex > 0) {
             for (int k = 1; k <= maxSetComprehensionIndex; k++) {
-                sb.append("        logic DSet<integer> set_comprehension_").append(k).append(";\n\n");
+                sb.append("        logic DSet<integer> dummy_set_comprehension_").append(k).append(";\n\n");
             }
         }
         sb.append("        logic A empty<A>(A a);\n");
@@ -308,7 +341,7 @@ public final class GhostOperationsCiGenerator {
         sb.append(
                 "        logic DRelation<A, B> domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
         sb.append("        logic DRelation<integer, A> list_to_function<A>(\\list<A> l);\n\n");
-        sb.append("        logic DRelation<integer, integer> array_to_function(int *x, integer length);\n");
+        sb.append("        logic DRelation<integer, integer> dummy_array_to_function(int *x, integer length);\n");
         sb.append("    }\n*/\n");
         return sb.toString();
     }
@@ -547,12 +580,12 @@ public final class GhostOperationsCiGenerator {
         }
         return "list_to_function(dummy_"
                 + seqVar
-                + ") == domain_restriction(array_to_function("
+                + ") == domain_restriction(dummy_array_to_function("
                 + relationParam
                 + ", "
                 + len
                 + "), "
-                + domainRestrictionSecondArg
+                + dummySetComprehensionRef(domainRestrictionSecondArg)
                 + ")";
     }
 
