@@ -33,10 +33,14 @@ import java.util.regex.Pattern;
  *       {@code import/} (default: {@code target/b2acsl-acsl}).</li>
  * </ul>
  *
- * <p>Durante a geração, os ficheiros necessários (funções + {@code include} transitivos, p.ex.
- * axiomas) são copiados para junto do {@code .acsl} e para {@code b2acsl.targetAcslDir}. Com
- * ficheiros no disco, usa-se o comando {@code cp}; em fallback (só classpath/JAR), usa-se
- * {@link Files#copy}.
+ * <p>O bloco {@code include} inserido na <strong>especificação {@code .acsl} gerada</strong> lista o
+ * fecho transitivo dos ficheiros da lib (ordem estável com {@link #FILE_ORDER} quando aplicável), exceto
+ * ficheiros em pastas {@code *_axioms/} — esses entram apenas via {@code include} nos ficheiros-pai na
+ * cópia {@code import/}; {@link #copyReferencedLibraryFiles} continua a materializar todos os ficheiros
+ * necessários.
+ *
+ * <p>Os ficheiros são também copiados para junto do {@code .acsl} e para {@code b2acsl.targetAcslDir}.
+ * Com ficheiros no disco, usa-se {@code cp}; em fallback (só classpath/JAR), usa-se {@link Files#copy}.
  */
 public final class AcslLibIncludes {
 
@@ -93,6 +97,9 @@ public final class AcslLibIncludes {
      * relações e sequências.
      */
     private static final List<String> FILE_ORDER = List.of(
+            "tuple_functions/tuple_couple.acsl",
+            "tuple_functions/accessors.acsl",
+            "tuple_functions/equals.acsl",
             "set_functions/belongs.acsl",
             "set_functions/variables.acsl",
             "set_functions/empty.acsl",
@@ -107,10 +114,9 @@ public final class AcslLibIncludes {
             "set_functions/finite.acsl",
             "set_functions/equals.acsl",
             "set_functions/cartesian_product.acsl",
-            "set_functions/disjoint.acsl",
+            "set_functions/disjoint.acsl",            
             "relation_functions/domain.acsl",
             "relation_functions/range.acsl",
-            "tuple_functions/tuple_couple.acsl",
             "function_functions/is_function.acsl",
             "function_functions/is_partial.acsl",
             "function_functions/is_total.acsl",
@@ -275,18 +281,79 @@ public final class AcslLibIncludes {
         if (extraTextForSymbolScan != null && !extraTextForSymbolScan.isBlank()) {
             scan = scan + "\n" + extraTextForSymbolScan;
         }
-        List<String> ordered = orderedLibRelativePaths(scan);
-        if (ordered.isEmpty()) return List.of();
+        List<String> seeds = orderedLibRelativePaths(scan);
+        if (seeds.isEmpty()) return List.of();
+
+        List<String> seedsWithTypes = new ArrayList<>(seeds.size() + 1);
+        seedsWithTypes.add(TYPES_LIB_REL);
+        seedsWithTypes.addAll(seeds);
+
+        Path diskRoot = resolveAcslLibRootOnDisk();
+        List<String> transitive;
+        try {
+            transitive = transitiveAcslLibPaths(diskRoot, seedsWithTypes);
+        } catch (IOException e) {
+            transitive = seedsWithTypes;
+        }
+
+        transitive = omitAxiomFolderIncludesFromEmittedSpec(transitive);
+
+        List<String> merged = mergeTransitiveIncludesForEmit(transitive);
 
         String base = propertyOrEmpty("b2acsl.acslLibIncludeBase");
         String middle = propertyOrEmpty("b2acsl.acslLibIncludeMiddle");
 
-        List<String> lines = new ArrayList<>(ordered.size() + 1);
-        lines.add(buildIncludeLine(base, middle, TYPES_LIB_REL));
-        for (String rel : ordered) {
+        List<String> lines = new ArrayList<>(merged.size());
+        for (String rel : merged) {
             lines.add(buildIncludeLine(base, middle, rel));
         }
         return lines;
+    }
+
+    /**
+     * Ordena o fecho transitivo para emissão no {@code .acsl}: {@link #TYPES_LIB_REL} primeiro, depois
+     * entradas de {@link #FILE_ORDER} presentes no fecho, depois o restante na ordem do BFS em
+     * {@link #transitiveAcslLibPaths}.
+     */
+    private static List<String> mergeTransitiveIncludesForEmit(List<String> transitiveBfsOrder) {
+        LinkedHashSet<String> present = new LinkedHashSet<>(transitiveBfsOrder);
+        List<String> out = new ArrayList<>(transitiveBfsOrder.size());
+        if (present.contains(TYPES_LIB_REL)) {
+            out.add(TYPES_LIB_REL);
+        }
+        for (String path : FILE_ORDER) {
+            if (present.contains(path) && !TYPES_LIB_REL.equals(path)) {
+                out.add(path);
+            }
+        }
+        for (String f : transitiveBfsOrder) {
+            if (!out.contains(f)) {
+                out.add(f);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Para o texto da especificação gerada: não emitir {@code include "…​_axioms/…​"} — esses axiomas já
+     * são puxados pelos {@code include} relativos dentro dos ficheiros de funções/definições.
+     */
+    private static List<String> omitAxiomFolderIncludesFromEmittedSpec(List<String> relPaths) {
+        List<String> out = new ArrayList<>(relPaths.size());
+        for (String rel : relPaths) {
+            if (!isUnderLibAxiomFolder(rel)) {
+                out.add(rel);
+            }
+        }
+        return out;
+    }
+
+    /** {@code true} para caminhos sob {@code *_axioms/} na ACSL_Lib (ex. {@code set_axioms/card_axioms.acsl}). */
+    static boolean isUnderLibAxiomFolder(String relativeLibPath) {
+        if (relativeLibPath == null || relativeLibPath.isBlank()) {
+            return false;
+        }
+        return relativeLibPath.replace('\\', '/').contains("_axioms/");
     }
 
     private static List<String> orderedLibRelativePaths(String acslText) {
@@ -298,6 +365,7 @@ public final class AcslLibIncludes {
         }
         addRangeIncludesForRan(acslText, files);
         addIsTotalFunctionLibIncludes(acslText, files);
+        addDependencyMapIncludes(acslText, files);
         if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
             files.add(VARIABLES_LIB_REL);
         }
@@ -318,6 +386,23 @@ public final class AcslLibIncludes {
      * {@code relation_functions/range.acsl} ({@code ran(Relation_*)}) e
      * {@code sequence_functions/range.acsl} ({@code ran(\list<...>)}).
      */
+    /**
+     * Acrescenta ficheiros da {@code ACSL_Lib} segundo {@link AcslLibSymbolDependencyMap}: para cada
+     * símbolo da biblioteca presente no texto, inclui o fecho transitivo de dependências de símbolo e de
+     * {@code include} (ex.: {@code dom} → {@code couple} → {@code tuple_functions/tuple_couple.acsl}).
+     */
+    private static void addDependencyMapIncludes(String acslText, LinkedHashSet<String> files) {
+        AcslLibSymbolDependencyMap m = AcslLibSymbolDependencyMap.instance();
+        if (!m.isLoaded()) {
+            return;
+        }
+        for (String sym : m.allKnownSymbols()) {
+            if (containsSymbolCall(acslText, sym)) {
+                files.addAll(m.transitiveLibRelativePathsForSymbol(sym));
+            }
+        }
+    }
+
     /**
      * {@code is_total_function} depende de predicados noutros ficheiros da lib sem cadeia de
      * {@code include} explícita entre axiomatics.
