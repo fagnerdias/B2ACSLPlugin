@@ -22,6 +22,12 @@ import org.w3c.dom.NodeList;
  * sequências), declarações {@code logic DSet<integer> set_comprehension_k} para índices usados nos
  * {@code ensures} ghost (e até ao máximo do registo de compreensões da máquina), e contratos ghost
  * para inicialização e operações que atribuem a variáveis abstratas.
+ *
+ * <p>Para atribuições do tipo sequência definida por restrição de domínio sobre um array (função parcial em
+ * B), o {@code ensures} ghost compara relações com {@code list_to_function(dummy_<seq>)} e
+ * {@code array_to_function(<param>, <tamanho>)} — o tamanho infere-se do intervalo do domínio na pré-condição
+ * ({@code low..high}); constantes concretas da máquina aparecem na axiomatica como {@code dummy_<c>} e nas
+ * expressões de comprimento.
  */
 public final class GhostOperationsCiGenerator {
 
@@ -118,7 +124,7 @@ public final class GhostOperationsCiGenerator {
                     sb.append("(");
                     List<String> parts = new ArrayList<>();
                     for (Param p : params) {
-                        parts.add("integer " + p.name());
+                        parts.add(formatCParameterDecl(p.type(), p.name()));
                     }
                     sb.append(String.join(", ", parts)).append(");\n\n");
                 }
@@ -146,6 +152,7 @@ public final class GhostOperationsCiGenerator {
         Set<String> abstractSet = new LinkedHashSet<>(abstractVarNames);
         Map<String, String> varTypes =
                 BxmlMachineVariables.inferVariableLogicTypes(abstractMachineEl, ctx);
+        Set<String> concreteConstants = concreteConstantNames(abstractMachineEl);
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* ghost_operations.ci — operações ghost não puras (gerado) — ")
@@ -157,7 +164,8 @@ public final class GhostOperationsCiGenerator {
         }
         sb.append("\n");
 
-        List<GhostOp> ghostOps = buildGhostOperations(abstractMachineEl, abstractSet, ctx);
+        List<GhostOp> ghostOps =
+                buildGhostOperations(abstractMachineEl, abstractSet, ctx, varTypes, concreteConstants);
         List<String> allGhostEnsureLines = new ArrayList<>();
         for (GhostOp go : ghostOps) {
             allGhostEnsureLines.addAll(go.ghostEnsures());
@@ -167,7 +175,7 @@ public final class GhostOperationsCiGenerator {
                         ctx.comprehensions().maxComprehensionIndex(),
                         maxSetComprehensionIndexInGhostText(allGhostEnsureLines));
 
-        sb.append(formatDummyAxiomatic(abstractVarNames, varTypes, maxSetComp));
+        sb.append(formatDummyAxiomatic(abstractVarNames, varTypes, maxSetComp, abstractMachineEl, ctx));
 
         for (GhostOp go : ghostOps) {
             sb.append(go.format());
@@ -178,7 +186,11 @@ public final class GhostOperationsCiGenerator {
     }
 
     private static List<GhostOp> buildGhostOperations(
-            Element abstractMachineEl, Set<String> abstractSet, BxmlTranslateContext ctx) {
+            Element abstractMachineEl,
+            Set<String> abstractSet,
+            BxmlTranslateContext ctx,
+            Map<String, String> varTypes,
+            Set<String> concreteConstants) {
         List<GhostOp> ops = new ArrayList<>();
         List<String> initEnsures = collectGhostEnsuresFromInit(abstractMachineEl, abstractSet, ctx);
         Set<String> initAssigned = new LinkedHashSet<>();
@@ -204,15 +216,18 @@ public final class GhostOperationsCiGenerator {
                 collectAssignedAbstractVarsInBody(body, abstractSet, assigned);
                 if (assigned.isEmpty()) continue;
 
+                List<Param> params = listInputParameters(op);
                 List<String> ensures = new ArrayList<>();
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
                 List<String> ghostEnsures = new ArrayList<>();
                 for (String e : ensures) {
-                    ghostEnsures.add(toGhostEnsure(e, abstractSet));
+                    String ge = toGhostEnsure(e, abstractSet);
+                    ge = rewriteGhostEnsureForListDomainRestriction(
+                            ge, op, varTypes, params, ctx, concreteConstants);
+                    ghostEnsures.add(ge);
                 }
                 if (ghostEnsures.isEmpty()) continue;
 
-                List<Param> params = listInputParameters(op);
                 ops.add(
                         new GhostOp(
                                 sanitizeGhostFunctionName(opName),
@@ -226,6 +241,19 @@ public final class GhostOperationsCiGenerator {
 
     private static final Pattern SET_COMPREHENSION_INDEX =
             Pattern.compile("set_comprehension_(\\d+)");
+
+    /**
+     * Após {@link #toGhostEnsure}: {@code \\old(dummy_seq)==domain_restriction(rel, S)} vindo de
+     * {@code myseq == domain_restriction(...)}.
+     */
+    private static final Pattern GHOST_ENSURE_OLD_EQ_DOMAIN_RESTRICTION =
+            Pattern.compile(
+                    "^\\\\old\\(dummy_(\\w+)\\)\\s*==\\s*domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*$");
+
+    /** Idem no formato {@code equals(dummy_seq, domain_restriction(rel, S))}. */
+    private static final Pattern GHOST_ENSURE_EQUALS_DOMAIN_RESTRICTION =
+            Pattern.compile(
+                    "^equals\\(dummy_(\\w+)\\s*,\\s*domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\)\\s*$");
 
     private static int maxSetComprehensionIndexInGhostText(Iterable<String> lines) {
         int m = 0;
@@ -249,7 +277,11 @@ public final class GhostOperationsCiGenerator {
     }
 
     private static String formatDummyAxiomatic(
-            List<String> abstractVarNames, Map<String, String> varTypes, int maxSetComprehensionIndex) {
+            List<String> abstractVarNames,
+            Map<String, String> varTypes,
+            int maxSetComprehensionIndex,
+            Element machineEl,
+            BxmlTranslateContext ctx) {
         StringBuilder sb = new StringBuilder();
         sb.append("/*@\n");
         sb.append("    axiomatic dummy_ghost {\n\n");
@@ -260,6 +292,7 @@ public final class GhostOperationsCiGenerator {
             String d = dummyAxiomaticLogicType(t);
             sb.append("        logic ").append(d).append(" dummy_").append(v).append(";\n\n");
         }
+        appendDummyConcreteConstantDeclarations(sb, machineEl, ctx);
         if (maxSetComprehensionIndex > 0) {
             for (int k = 1; k <= maxSetComprehensionIndex; k++) {
                 sb.append("        logic DSet<integer> set_comprehension_").append(k).append(";\n\n");
@@ -274,8 +307,91 @@ public final class GhostOperationsCiGenerator {
         sb.append("        predicate is_finite<A>(A a);\n");
         sb.append(
                 "        logic DRelation<A, B> domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
+        sb.append("        logic DRelation<integer, A> list_to_function<A>(\\list<A> l);\n\n");
+        sb.append("        logic DRelation<integer, integer> array_to_function(int *x, integer length);\n");
         sb.append("    }\n*/\n");
         return sb.toString();
+    }
+
+    /** Nomes em {@code Concrete_Constants} (ordem de declaração no BXML). */
+    private static Set<String> concreteConstantNames(Element machineEl) {
+        Set<String> out = new LinkedHashSet<>();
+        Element block = firstChildElement(machineEl, "Concrete_Constants");
+        if (block == null) {
+            return out;
+        }
+        NodeList ch = block.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            if (!"Id".equals(e.getLocalName())) continue;
+            String name = e.getAttribute("value");
+            if (name != null && !name.isBlank()) {
+                out.add(name.trim());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Declarações {@code logic τ dummy_<c>} para cada constante concreta (espelho ghost no universo
+     * {@code dummy_ghost}).
+     */
+    private static void appendDummyConcreteConstantDeclarations(
+            StringBuilder sb, Element machineEl, BxmlTranslateContext ctx) {
+        if (machineEl == null || ctx == null) {
+            return;
+        }
+        Element block = firstChildElement(machineEl, "Concrete_Constants");
+        if (block == null) {
+            return;
+        }
+        NodeList ch = block.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            if (!"Id".equals(e.getLocalName())) continue;
+            String name = e.getAttribute("value");
+            if (name == null || name.isBlank()) continue;
+            String logicType = "integer";
+            String tr = e.getAttribute("typref");
+            if (!tr.isBlank()) {
+                try {
+                    int typref = Integer.parseInt(tr.trim());
+                    String t = ctx.types().acslVariableLogicTypeFromTypref(typref);
+                    if (t != null && !t.isBlank()) {
+                        logicType = t;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            sb.append("        logic ").append(logicType).append(" dummy_").append(name.trim()).append(";\n\n");
+        }
+    }
+
+    /** Substitui referências a constantes concretas por {@code dummy_<nome>} numa expressão ACSL já escrita. */
+    private static String ghostDummyConcreteRefs(String acslExpr, Set<String> concreteConstantNames) {
+        if (acslExpr == null || concreteConstantNames == null || concreteConstantNames.isEmpty()) {
+            return acslExpr;
+        }
+        String out = acslExpr;
+        List<String> names = new ArrayList<>(concreteConstantNames);
+        names.sort((a, b) -> Integer.compare(b.length(), a.length()));
+        for (String c : names) {
+            Pattern pat = Pattern.compile("\\b" + Pattern.quote(c) + "\\b");
+            Matcher m = pat.matcher(out);
+            StringBuffer sb = new StringBuffer();
+            while (m.find()) {
+                m.appendReplacement(sb, Matcher.quoteReplacement("dummy_" + c));
+            }
+            m.appendTail(sb);
+            out = sb.toString();
+        }
+        return out;
     }
 
     /**
@@ -355,6 +471,216 @@ public final class GhostOperationsCiGenerator {
             out = sb.toString();
         }
         return out;
+    }
+
+    /**
+     * Sequência atribuída por restrição de domínio sobre array (função parcial em B): compara como
+     * relações via {@code list_to_function} / {@code array_to_function}.
+     */
+    private static String rewriteGhostEnsureForListDomainRestriction(
+            String ensure,
+            Element operation,
+            Map<String, String> varTypes,
+            List<Param> params,
+            BxmlTranslateContext ctx,
+            Set<String> concreteConstantNames) {
+        if (ensure == null || operation == null || varTypes == null || ctx == null) {
+            return ensure;
+        }
+        String t = ensure.trim();
+        Matcher mOld = GHOST_ENSURE_OLD_EQ_DOMAIN_RESTRICTION.matcher(t);
+        if (mOld.matches()) {
+            String r =
+                    tryRewriteListDomainRestrictionEquality(
+                            mOld.group(1),
+                            mOld.group(2),
+                            mOld.group(3).trim(),
+                            varTypes,
+                            params,
+                            operation,
+                            ctx,
+                            concreteConstantNames);
+            if (r != null) {
+                return r;
+            }
+        }
+        Matcher mEq = GHOST_ENSURE_EQUALS_DOMAIN_RESTRICTION.matcher(t);
+        if (mEq.matches()) {
+            String r =
+                    tryRewriteListDomainRestrictionEquality(
+                            mEq.group(1),
+                            mEq.group(2),
+                            mEq.group(3).trim(),
+                            varTypes,
+                            params,
+                            operation,
+                            ctx,
+                            concreteConstantNames);
+            if (r != null) {
+                return r;
+            }
+        }
+        return ensure;
+    }
+
+    private static String tryRewriteListDomainRestrictionEquality(
+            String seqVar,
+            String relationParam,
+            String domainRestrictionSecondArg,
+            Map<String, String> varTypes,
+            List<Param> params,
+            Element operation,
+            BxmlTranslateContext ctx,
+            Set<String> concreteConstantNames) {
+        String listType = varTypes.get(seqVar);
+        if (listType == null || !listType.startsWith("\\list")) {
+            return null;
+        }
+        if (!isPointerGhostParam(params, relationParam)) {
+            return null;
+        }
+        String len =
+                inferPartialFunctionDomainLengthAcsl(
+                        operation, relationParam, ctx, concreteConstantNames);
+        if (len == null || len.isBlank()) {
+            return null;
+        }
+        return "list_to_function(dummy_"
+                + seqVar
+                + ") == domain_restriction(array_to_function("
+                + relationParam
+                + ", "
+                + len
+                + "), "
+                + domainRestrictionSecondArg
+                + ")";
+    }
+
+    private static boolean isPointerGhostParam(List<Param> params, String name) {
+        if (params == null || name == null || name.isBlank()) {
+            return false;
+        }
+        for (Param p : params) {
+            if (name.equals(p.name())) {
+                String tp = p.type();
+                return tp != null && tp.endsWith("*");
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Expressão ACSL para o segundo argumento de {@code array_to_function}: obtida do domínio da função
+     * parcial em B ({@code low..high}), tipicamente o nome da constante do limite superior (ex.
+     * {@code maximum} para {@code 0..maximum}).
+     */
+    private static String inferPartialFunctionDomainLengthAcsl(
+            Element operation,
+            String paramName,
+            BxmlTranslateContext ctx,
+            Set<String> concreteConstantNames) {
+        Element domain = partialFunctionDomainFromPrecondition(operation, paramName);
+        return arrayLengthAcslFromDomain(domain, ctx, concreteConstantNames);
+    }
+
+    private static Element partialFunctionDomainFromPrecondition(Element operation, String paramName) {
+        Element pre = firstChildElement(operation, "Precondition");
+        if (pre == null) {
+            return null;
+        }
+        return partialFunctionDomainFromPreconditionInPred(pre, paramName);
+    }
+
+    private static Element partialFunctionDomainFromPreconditionInPred(Element pred, String paramName) {
+        if (pred == null) {
+            return null;
+        }
+        String ln = pred.getLocalName();
+        if ("Precondition".equals(ln)) {
+            NodeList nl = pred.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if ("Attr".equals(ch.getLocalName())) continue;
+                Element d = partialFunctionDomainFromPreconditionInPred(ch, paramName);
+                if (d != null) {
+                    return d;
+                }
+            }
+            return null;
+        }
+        if ("Exp_Comparison".equals(ln)) {
+            String op = normalizeColonLikeOp(pred.getAttribute("op"));
+            if (":".equals(op)) {
+                Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
+                if (pair[0] != null
+                        && "Id".equals(pair[0].getLocalName())
+                        && paramName.equals(pair[0].getAttribute("value").trim())
+                        && pair[1] != null
+                        && BxmlExpressionToAcsl.isFunctionArrowType(pair[1])) {
+                    Element[] arrow = BxmlExpressionToAcsl.twoDirectExpChildren(pair[1]);
+                    if (arrow[0] != null) {
+                        return arrow[0];
+                    }
+                }
+            }
+            return null;
+        }
+        if ("Nary_Pred".equals(ln)) {
+            NodeList nl = pred.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if ("Attr".equals(ch.getLocalName())) continue;
+                Element d = partialFunctionDomainFromPreconditionInPred(ch, paramName);
+                if (d != null) {
+                    return d;
+                }
+            }
+            return null;
+        }
+        if ("Unary_Pred".equals(ln)) {
+            Element inner = firstPredChildElement(pred);
+            return partialFunctionDomainFromPreconditionInPred(inner, paramName);
+        }
+        if ("Binary_Pred".equals(ln)) {
+            Element[] pair = twoDirectPredChildren(pred);
+            if (pair[0] != null) {
+                Element d = partialFunctionDomainFromPreconditionInPred(pair[0], paramName);
+                if (d != null) {
+                    return d;
+                }
+            }
+            if (pair[1] != null) {
+                return partialFunctionDomainFromPreconditionInPred(pair[1], paramName);
+            }
+        }
+        return null;
+    }
+
+    private static String arrayLengthAcslFromDomain(
+            Element domain, BxmlTranslateContext ctx, Set<String> concreteConstantNames) {
+        if (domain == null || ctx == null) {
+            return null;
+        }
+        if (BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
+            Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
+            if (lr[0] == null || lr[1] == null) {
+                return null;
+            }
+            String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
+            String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
+            String raw;
+            if ("0".equals(low)) {
+                raw = high;
+            } else {
+                raw = "(" + high + " - (" + low + ") + 1)";
+            }
+            return ghostDummyConcreteRefs(raw, concreteConstantNames);
+        }
+        return null;
     }
 
     private static List<String> collectGhostEnsuresFromInit(
@@ -502,16 +828,232 @@ public final class GhostOperationsCiGenerator {
             if ("Id".equals(e.getLocalName())) {
                 String name = e.getAttribute("value");
                 if (name == null || name.isBlank()) continue;
-                String cType = cTypeFromTypref(e.getAttribute("typref"));
+                String cType = ghostParamTypeFromPrecondition(operation, name.trim());
+                if (cType == null || cType.isBlank()) {
+                    cType = cGhostParamTypeFromTypref(operation, e);
+                }
                 out.add(new Param(cType, sanitizeCIdent(name)));
             }
         }
         return out;
     }
 
-    private static String cTypeFromTypref(String typrefAttr) {
-        if (typrefAttr == null || typrefAttr.isBlank()) return "int";
+    /**
+     * Tipo C do parâmetro ghost a partir do {@code Precondition} (ex. {@code ee : NAT} → {@code int};
+     * {@code xx : S --> T} → {@code int *}; conjunto de relações {@code POW(A*B)} → {@code int *}).
+     */
+    private static String ghostParamTypeFromPrecondition(Element operation, String paramName) {
+        Element pre = firstChildElement(operation, "Precondition");
+        if (pre == null) {
+            return null;
+        }
+        return findMembershipTypeForParam(pre, paramName);
+    }
+
+    private static String findMembershipTypeForParam(Element pred, String paramName) {
+        if (pred == null) {
+            return null;
+        }
+        String ln = pred.getLocalName();
+        if ("Precondition".equals(ln)) {
+            NodeList nl = pred.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if ("Attr".equals(ch.getLocalName())) continue;
+                String t = findMembershipTypeForParam(ch, paramName);
+                if (t != null && !t.isBlank()) {
+                    return t;
+                }
+            }
+            return null;
+        }
+        if ("Exp_Comparison".equals(ln)) {
+            String op = normalizeColonLikeOp(pred.getAttribute("op"));
+            if (":".equals(op)) {
+                Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
+                if (pair[0] != null
+                        && "Id".equals(pair[0].getLocalName())
+                        && paramName.equals(pair[0].getAttribute("value").trim())
+                        && pair[1] != null) {
+                    return cGhostParamTypeFromMembershipRhs(pair[1]);
+                }
+            }
+            return null;
+        }
+        if ("Nary_Pred".equals(ln)) {
+            NodeList nl = pred.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if ("Attr".equals(ch.getLocalName())) continue;
+                String t = findMembershipTypeForParam(ch, paramName);
+                if (t != null && !t.isBlank()) {
+                    return t;
+                }
+            }
+            return null;
+        }
+        if ("Unary_Pred".equals(ln)) {
+            Element inner = firstPredChildElement(pred);
+            return findMembershipTypeForParam(inner, paramName);
+        }
+        if ("Binary_Pred".equals(ln)) {
+            Element[] pair = twoDirectPredChildren(pred);
+            if (pair[0] != null) {
+                String t = findMembershipTypeForParam(pair[0], paramName);
+                if (t != null && !t.isBlank()) {
+                    return t;
+                }
+            }
+            if (pair[1] != null) {
+                return findMembershipTypeForParam(pair[1], paramName);
+            }
+        }
+        return null;
+    }
+
+    private static String normalizeColonLikeOp(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String o = raw.trim();
+        if (":".equals(o)) {
+            return ":";
+        }
+        return o;
+    }
+
+    private static Element firstPredChildElement(Element parent) {
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            return e;
+        }
+        return null;
+    }
+
+    private static Element[] twoDirectPredChildren(Element parent) {
+        Element[] out = new Element[2];
+        int k = 0;
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            out[k++] = e;
+            if (k == 2) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Lado direito de {@code v : RHS} no precondition → tipo C do parâmetro (sem tipos lógicos ACSL
+     * como {@code Relation_*}).
+     */
+    private static String cGhostParamTypeFromMembershipRhs(Element rhs) {
+        if (rhs == null) {
+            return null;
+        }
+        if ("Id".equals(rhs.getLocalName())) {
+            String v = rhs.getAttribute("value");
+            if (v == null) {
+                v = "";
+            }
+            return switch (v.trim()) {
+                case "NAT", "INTEGER", "INT" -> "int";
+                case "BOOL" -> "int";
+                default -> null;
+            };
+        }
+        if (BxmlExpressionToAcsl.isFunctionArrowType(rhs)) {
+            return "int *";
+        }
+        if ("Unary_Exp".equals(rhs.getLocalName()) && "POW".equals(rhs.getAttribute("op"))) {
+            Element inner = firstNonAttrElementChild(rhs);
+            if (inner != null
+                    && "Binary_Exp".equals(inner.getLocalName())
+                    && "*".equals(trimOp(inner.getAttribute("op")))) {
+                return "int *";
+            }
+        }
+        return null;
+    }
+
+    private static String trimOp(String op) {
+        return op == null ? "" : op.trim();
+    }
+
+    private static Element firstNonAttrElementChild(Element parent) {
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName())) continue;
+            return e;
+        }
+        return null;
+    }
+
+    /** Fallback a partir de {@code typref} + {@code TypeInfos}: relações → {@code int *}. */
+    private static String cGhostParamTypeFromTypref(Element operation, Element paramId) {
+        Element machine = findAncestorMachine(operation);
+        if (machine == null) {
+            return "int";
+        }
+        String tr = paramId.getAttribute("typref");
+        if (tr == null || tr.isBlank()) {
+            return "int";
+        }
+        try {
+            int id = Integer.parseInt(tr.trim());
+            BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machine);
+            String acsl = types.acslVariableLogicTypeFromTypref(id);
+            if (acsl != null && acsl.startsWith("Relation_")) {
+                return "int *";
+            }
+        } catch (NumberFormatException ignored) {
+            // fall through
+        }
         return "int";
+    }
+
+    private static Element findAncestorMachine(Element el) {
+        Node n = el;
+        while (n != null) {
+            if (n.getNodeType() == Node.ELEMENT_NODE) {
+                Element e = (Element) n;
+                if ("Machine".equals(e.getLocalName())) {
+                    return e;
+                }
+            }
+            n = n.getParentNode();
+        }
+        return null;
+    }
+
+    /**
+     * Declaração de parâmetro C: {@code int *xx} (sem espaço entre {@code *} e o identificador);
+     * escalares mantêm espaço ({@code int ee}).
+     */
+    private static String formatCParameterDecl(String type, String name) {
+        if (type == null || type.isBlank()) {
+            return name;
+        }
+        String t = type.trim();
+        if (t.endsWith("*")) {
+            return t + name;
+        }
+        return t + " " + name;
     }
 
     private static String sanitizeCIdent(String name) {
@@ -587,7 +1129,7 @@ public final class GhostOperationsCiGenerator {
             if (params.isEmpty()) return "void";
             List<String> parts = new ArrayList<>();
             for (Param p : params) {
-                parts.add(p.type + " " + p.name);
+                parts.add(formatCParameterDecl(p.type(), p.name()));
             }
             return String.join(", ", parts);
         }
