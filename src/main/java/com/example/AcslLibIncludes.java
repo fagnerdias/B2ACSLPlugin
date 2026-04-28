@@ -50,7 +50,10 @@ public final class AcslLibIncludes {
 
     /** Ficheiros da lib que não devem aparecer no bloco include do .acsl gerado. */
     private static final Set<String> OMIT_FROM_EMITTED_SPEC_INCLUDES =
-            Set.of("function_functions/singleton.acsl");
+            Set.of(
+                    "function_functions/singleton.acsl",
+                    "sequence_functions/list_to_function.acsl",
+                    "sequence_functions/function_to_list.acsl");
 
     private static final Pattern INCLUDE_IN_LIB =
             Pattern.compile("include\\s+\"([^\"]+)\"\\s*;", Pattern.MULTILINE);

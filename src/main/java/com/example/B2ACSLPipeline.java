@@ -339,6 +339,7 @@ public final class B2ACSLPipeline {
             replaceAssertGhostWithGhostKeyword(mergedCode);
             replaceEnsuresGhostVarWithAssignsInMerged(mergedCode);
             addParenthesesToGhostInitialisationCall(mergedCode);
+            placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
             reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
             appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
 
@@ -602,6 +603,287 @@ public final class B2ACSLPipeline {
                         .matcher(content)
                         .replaceAll("ghost initialisation();");
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    private static final Pattern GHOST_OP_BLOCK_IN_CI =
+            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+([A-Za-z_]\\w*)\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
+    private static final Pattern GHOST_INITIALISATION_BLOCK_IN_CI =
+            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
+    private static final Pattern GHOST_INITIALISATION_BLOCK_IN_MERGED =
+            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/\\s*");
+    private static final Pattern INITIALISATION_FUNCTION_DEFINITION =
+            Pattern.compile("\\bvoid\\s+[A-Za-z_]\\w*__INITIALISATION\\s*\\([^;{}]*\\)\\s*\\{");
+    private static final String INITIALISATION_GHOST_CALL_MARKER = "/*@ ghost initialisation(); */";
+
+    /**
+     * Novo passo pré-WP: move especificações ghost de operações para imediatamente acima da função C
+     * correspondente (ex.: bloco {@code initialisation} acima de {@code Deck__INITIALISATION}).
+     */
+    private static void placeGhostOperationSpecsAboveFunctions(Path mergedC, Path ghostCi) throws IOException {
+        if (!Files.isRegularFile(ghostCi)) {
+            return;
+        }
+        String merged = Files.readString(mergedC, StandardCharsets.UTF_8);
+        String ghostText = Files.readString(ghostCi, StandardCharsets.UTF_8).replace("dummy_", "");
+
+        Matcher bm = GHOST_OP_BLOCK_IN_CI.matcher(ghostText);
+        List<String> opNames = new ArrayList<>();
+        List<String> blocks = new ArrayList<>();
+        while (bm.find()) {
+            opNames.add(bm.group(1));
+            blocks.add(bm.group().stripTrailing() + "\n\n");
+        }
+        if (opNames.isEmpty()) {
+            return;
+        }
+
+        // Remove blocos ghost de operação já presentes para evitar duplicação.
+        Matcher existingGhostBlocks = GHOST_VAR_BLOCK_COMMENT.matcher(merged);
+        StringBuilder cleaned = new StringBuilder();
+        while (existingGhostBlocks.find()) {
+            String block = existingGhostBlocks.group();
+            if (Pattern.compile("\\bvoid\\s+[A-Za-z_]\\w*\\s*\\(").matcher(block).find()) {
+                existingGhostBlocks.appendReplacement(cleaned, "");
+            } else {
+                existingGhostBlocks.appendReplacement(cleaned, Matcher.quoteReplacement(block));
+            }
+        }
+        existingGhostBlocks.appendTail(cleaned);
+        merged = cleaned.toString();
+
+        for (int i = 0; i < opNames.size(); i++) {
+            String opName = opNames.get(i);
+            String ghostBlock = blocks.get(i);
+            if ("initialisation".equalsIgnoreCase(opName)) {
+                merged = placeInitialisationGhostAndContract(merged, ghostBlock);
+            } else {
+                int insertAt = findFunctionStartForGhostSpec(merged, opName);
+                if (insertAt < 0) {
+                    continue;
+                }
+                merged = merged.substring(0, insertAt) + ghostBlock + merged.substring(insertAt);
+            }
+        }
+        Files.writeString(mergedC, merged, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Tratamento especial para {@code initialisation}: o Frama-C costuma colocar o contrato de
+     * {@code Deck__INITIALISATION} no topo do ficheiro, separado da sua definição. Este método
+     * remove o contrato flutuante e o reinsere, junto com o bloco ghost, imediatamente acima da
+     * definição da função, produzindo a ordem: bloco-ghost → contrato → definição.
+     */
+    private static String placeInitialisationGhostAndContract(String content, String ghostBlock) {
+        // Find the function definition (with body).
+        Matcher defMatcher = INITIALISATION_FUNCTION_DEFINITION.matcher(content);
+        if (!defMatcher.find()) {
+            return content;
+        }
+        int defStart = defMatcher.start();
+
+        // Check if a contract is already immediately adjacent (just before the definition).
+        int lastSpecStart = content.lastIndexOf("/*@", defStart);
+        if (lastSpecStart >= 0) {
+            int lastSpecEnd = content.indexOf("*/", lastSpecStart);
+            if (lastSpecEnd >= 0 && lastSpecEnd < defStart) {
+                String between = content.substring(lastSpecEnd + 2, defStart).trim();
+                if (between.isEmpty()) {
+                    // Contract is adjacent — just insert ghost block above the contract.
+                    int lineStart = content.lastIndexOf('\n', lastSpecStart);
+                    int insertAt = lineStart < 0 ? 0 : lineStart + 1;
+                    return content.substring(0, insertAt) + ghostBlock + content.substring(insertAt);
+                }
+            }
+        }
+
+        // Contract is NOT adjacent. Look for a floating ensures/assigns contract before the definition.
+        Pattern floatingContractPat =
+                Pattern.compile("(?s)/\\*@(?!\\s*(?:ghost|axiomatic)\\b)([\\s\\S]*?)\\*/");
+        Matcher fcm = floatingContractPat.matcher(content.substring(0, defStart));
+        String floatingContract = null;
+        int fcStart = -1;
+        int fcEnd = -1;
+        while (fcm.find()) {
+            String blk = fcm.group();
+            if (blk.contains("ensures") || blk.contains("assigns")) {
+                floatingContract = blk;
+                fcStart = fcm.start();
+                fcEnd = fcm.end();
+            }
+        }
+
+        if (floatingContract == null) {
+            // No floating contract found — just insert ghost block before the definition.
+            int lineStart = content.lastIndexOf('\n', defStart);
+            int insertAt = lineStart < 0 ? 0 : lineStart + 1;
+            return content.substring(0, insertAt) + ghostBlock + content.substring(insertAt);
+        }
+
+        // Expand removal range to consume surrounding blank lines neatly.
+        int removeStart = fcStart;
+        while (removeStart > 0 && content.charAt(removeStart - 1) == '\n') {
+            removeStart--;
+        }
+        int removeEnd = fcEnd;
+        while (removeEnd < content.length() && content.charAt(removeEnd) == '\n') {
+            removeEnd++;
+        }
+
+        String withoutContract = content.substring(0, removeStart) + content.substring(removeEnd);
+
+        // Re-locate definition (offsets shifted after removal).
+        Matcher defMatcher2 = INITIALISATION_FUNCTION_DEFINITION.matcher(withoutContract);
+        if (!defMatcher2.find()) {
+            return content; // Safety fallback — restore original.
+        }
+        int newDefStart = defMatcher2.start();
+        int lineStart = withoutContract.lastIndexOf('\n', newDefStart);
+        int insertAt = lineStart < 0 ? 0 : lineStart + 1;
+
+        String toInsert = ghostBlock + floatingContract + "\n";
+        return withoutContract.substring(0, insertAt) + toInsert + withoutContract.substring(insertAt);
+    }
+
+    private static int findFunctionStartForGhostSpec(String content, String opName) {
+        if (content == null || content.isBlank() || opName == null || opName.isBlank()) {
+            return -1;
+        }
+        List<Pattern> candidates = new ArrayList<>();
+        if ("initialisation".equalsIgnoreCase(opName)) {
+            candidates.add(
+                    Pattern.compile(
+                            "\\bvoid\\s+[A-Za-z_]\\w*__INITIALISATION\\s*\\([^;{}]*\\)\\s*\\{"));
+        }
+        candidates.add(
+                Pattern.compile(
+                        "\\bvoid\\s+[A-Za-z_]\\w*__" + Pattern.quote(opName) + "\\s*\\([^;{}]*\\)\\s*\\{"));
+        for (Pattern p : candidates) {
+            Matcher m = p.matcher(content);
+            if (!m.find()) {
+                continue;
+            }
+            int idx = m.start();
+            int specStart = content.lastIndexOf("/*@", idx);
+            if (specStart >= 0) {
+                int specEnd = content.indexOf("*/", specStart);
+                if (specEnd >= 0 && specEnd < idx) {
+                    String between = content.substring(specEnd + 2, idx).trim();
+                    if (between.isEmpty()) {
+                        idx = specStart;
+                    }
+                }
+            }
+            int lineStart = content.lastIndexOf('\n', idx);
+            return lineStart < 0 ? 0 : lineStart + 1;
+        }
+        return -1;
+    }
+
+    /**
+     * Garante especificamente o bloco ghost de {@code initialisation} imediatamente acima de
+     * {@code Deck__INITIALISATION} (ou equivalente), mesmo se etapas anteriores falharem em casos
+     * degenerados do merge.
+     */
+    private static void enforceInitialisationGhostSpecPlacement(Path mergedC, Path ghostCi) throws IOException {
+        if (!Files.isRegularFile(ghostCi)) {
+            return;
+        }
+        String ghostText = Files.readString(ghostCi, StandardCharsets.UTF_8).replace("dummy_", "");
+        Matcher gm = GHOST_INITIALISATION_BLOCK_IN_CI.matcher(ghostText);
+        if (!gm.find()) {
+            return;
+        }
+        String initGhostBlock = gm.group().stripTrailing() + "\n\n";
+
+        String merged = Files.readString(mergedC, StandardCharsets.UTF_8);
+        merged = GHOST_INITIALISATION_BLOCK_IN_MERGED.matcher(merged).replaceAll("");
+
+        int insertAt = findInitialisationAnchorBeforeDefinition(merged);
+        if (insertAt < 0) {
+            insertAt = findInitialisationAnchorFromGhostCall(merged);
+        }
+        if (insertAt < 0) {
+            Files.writeString(mergedC, merged, StandardCharsets.UTF_8);
+            return;
+        }
+        merged = merged.substring(0, insertAt) + initGhostBlock + merged.substring(insertAt);
+        Files.writeString(mergedC, merged, StandardCharsets.UTF_8);
+    }
+
+    private static int findInitialisationAnchorBeforeDefinition(String content) {
+        Matcher def = INITIALISATION_FUNCTION_DEFINITION.matcher(content);
+        if (!def.find()) {
+            return -1;
+        }
+        int idx = def.start();
+        int specStart = content.lastIndexOf("/*@", idx);
+        if (specStart >= 0) {
+            int specEnd = content.indexOf("*/", specStart);
+            if (specEnd >= 0 && specEnd < idx) {
+                String between = content.substring(specEnd + 2, idx).trim();
+                if (between.isEmpty()) {
+                    idx = specStart;
+                }
+            }
+        }
+        int lineStart = content.lastIndexOf('\n', idx);
+        return lineStart < 0 ? 0 : lineStart + 1;
+    }
+
+    /**
+     * Fallback robusto: localiza o marcador {@code ghost initialisation();} no corpo da função e
+     * recua até a definição de {@code __INITIALISATION}, ancorando acima da especificação contígua.
+     */
+    private static int findInitialisationAnchorFromGhostCall(String content) {
+        int callIdx = content.indexOf(INITIALISATION_GHOST_CALL_MARKER);
+        if (callIdx < 0) {
+            return -1;
+        }
+        Matcher def = INITIALISATION_FUNCTION_DEFINITION.matcher(content);
+        int defStart = -1;
+        while (def.find()) {
+            if (def.start() > callIdx) {
+                break;
+            }
+            defStart = def.start();
+        }
+        if (defStart < 0) {
+            return -1;
+        }
+        int idx = defStart;
+        int specStart = content.lastIndexOf("/*@", idx);
+        if (specStart >= 0) {
+            int specEnd = content.indexOf("*/", specStart);
+            if (specEnd >= 0 && specEnd < idx) {
+                String between = content.substring(specEnd + 2, idx).trim();
+                if (between.isEmpty()) {
+                    idx = specStart;
+                }
+            }
+        }
+        int lineStart = content.lastIndexOf('\n', idx);
+        return lineStart < 0 ? 0 : lineStart + 1;
+    }
+
+    /**
+     * Garante a ordem canónica imediatamente antes da definição de função:
+     * bloco ghost da operação -> bloco de especificação da função -> definição com corpo.
+     */
+    private static void normalizeGhostBlockOrderBeforeFunctionDefinitions(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        Pattern p =
+                Pattern.compile(
+                        "(?s)(/\\*@\\s*(?!ghost\\b)[\\s\\S]*?\\*/\\s*)" // spec normal
+                                + "(/\\*@\\s*ghost\\b[\\s\\S]*?\\*/\\s*)" // spec ghost
+                                + "(void\\s+[A-Za-z_]\\w*__\\w+\\s*\\([^;{}]*\\)\\s*\\{)"); // definição
+        Matcher m = p.matcher(content);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String replacement = m.group(2) + m.group(1) + m.group(3);
+            m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(sb);
+        Files.writeString(mergedC, sb.toString(), StandardCharsets.UTF_8);
     }
 
     /**
