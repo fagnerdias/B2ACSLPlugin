@@ -263,6 +263,28 @@ public final class GhostOperationsCiGenerator {
             Pattern.compile(
                     "^equals\\(dummy_(\\w+)\\s*,\\s*domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\)\\s*$");
 
+    /**
+     * Variante equivalente após {@link #toGhostEnsure}: {@code domain_restriction(rel, S) ==
+     * list_to_function(\\old(dummy_seq))}.
+     */
+    private static final Pattern GHOST_ENSURE_DOMAIN_RESTRICTION_EQ_LIST_OLD =
+            Pattern.compile(
+                    "^domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*==\\s*list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)\\s*$");
+
+    /**
+     * Variante simétrica: {@code list_to_function(\\old(dummy_seq)) == domain_restriction(rel, S)}.
+     */
+    private static final Pattern GHOST_ENSURE_LIST_OLD_EQ_DOMAIN_RESTRICTION =
+            Pattern.compile(
+                    "^list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)\\s*==\\s*domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*$");
+
+    /**
+     * Caso legado de listas: o tradutor pode produzir {@code lhs == list_to_function((list_expr))}.
+     * Para variáveis de tipo lista, a comparação deve permanecer lista-vs-lista.
+     */
+    private static final Pattern GHOST_ENSURE_EQ_LIST_TO_FUNCTION_OF_LIST_EXPR =
+            Pattern.compile("^(.+?)\\s*==\\s*list_to_function\\(\\((.+)\\)\\)\\s*$");
+
     private static int maxSetComprehensionIndexInGhostText(Iterable<String> lines) {
         int m = 0;
         if (lines == null) {
@@ -553,7 +575,80 @@ public final class GhostOperationsCiGenerator {
                 return r;
             }
         }
+        Matcher mDrEqListOld = GHOST_ENSURE_DOMAIN_RESTRICTION_EQ_LIST_OLD.matcher(t);
+        if (mDrEqListOld.matches()) {
+            String r =
+                    tryRewriteListDomainRestrictionEquality(
+                            mDrEqListOld.group(3),
+                            mDrEqListOld.group(1),
+                            mDrEqListOld.group(2).trim(),
+                            varTypes,
+                            params,
+                            operation,
+                            ctx,
+                            concreteConstantNames);
+            if (r != null) {
+                return r;
+            }
+        }
+        Matcher mListOldEqDr = GHOST_ENSURE_LIST_OLD_EQ_DOMAIN_RESTRICTION.matcher(t);
+        if (mListOldEqDr.matches()) {
+            String r =
+                    tryRewriteListDomainRestrictionEquality(
+                            mListOldEqDr.group(1),
+                            mListOldEqDr.group(2),
+                            mListOldEqDr.group(3).trim(),
+                            varTypes,
+                            params,
+                            operation,
+                            ctx,
+                            concreteConstantNames);
+            if (r != null) {
+                return r;
+            }
+        }
+        String listEq =
+                tryRewriteListEqualityWithoutListToFunction(
+                        t, varTypes, concreteConstantNames);
+        if (listEq != null) {
+            return listEq;
+        }
         return ensure;
+    }
+
+    private static String tryRewriteListEqualityWithoutListToFunction(
+            String ensure,
+            Map<String, String> varTypes,
+            Set<String> concreteConstantNames) {
+        if (ensure == null || varTypes == null) {
+            return null;
+        }
+        Matcher m = GHOST_ENSURE_EQ_LIST_TO_FUNCTION_OF_LIST_EXPR.matcher(ensure);
+        if (!m.matches()) {
+            return null;
+        }
+        String lhs = m.group(1).trim();
+        String rhsListExpr = m.group(2).trim();
+        String seqVar = extractOldDummyListVarFromExpr(lhs);
+        if (seqVar == null) {
+            return null;
+        }
+        String listType = varTypes.get(seqVar);
+        if (listType == null || !listType.startsWith("\\list")) {
+            return null;
+        }
+        return lhs + " == " + ghostDummyConcreteRefs(rhsListExpr, concreteConstantNames);
+    }
+
+    private static String extractOldDummyListVarFromExpr(String expr) {
+        if (expr == null) {
+            return null;
+        }
+        Matcher m = Pattern.compile("^\\\\old\\(dummy_(\\w+)\\)$").matcher(expr.trim());
+        if (m.matches()) {
+            return m.group(1);
+        }
+        return null;
     }
 
     private static String tryRewriteListDomainRestrictionEquality(
