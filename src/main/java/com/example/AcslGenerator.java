@@ -139,7 +139,7 @@ public final class AcslGenerator {
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
         List<String> implementationAssignTargets =
-                BxmlMachineVariables.listImplementationAssignTargets(baseName, mergedMachineElements);
+                BxmlMachineVariables.listImplementationAssignTargets(baseName, mergedMachineElements, ctx);
         InitialisationAcsl initBare =
                 BxmlInitialisationTranslator.translate(
                         machineEl, implementationAssignTargets, ctx);

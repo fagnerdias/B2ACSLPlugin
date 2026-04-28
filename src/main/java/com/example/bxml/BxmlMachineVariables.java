@@ -235,7 +235,8 @@ public final class BxmlMachineVariables {
             Element rootMachine,
             List<Element> mergedOrdered,
             Set<String> assignedAbstractNames,
-            Map<String, String> gluing) {
+            Map<String, String> gluing,
+            BxmlTranslateContext ctx) {
         if (rootAbstractMachineName == null
                 || rootAbstractMachineName.isBlank()
                 || rootMachine == null
@@ -264,7 +265,9 @@ public final class BxmlMachineVariables {
                 if (!Collections.disjoint(invIds, linked)) {
                     for (String c : BxmlConnectionAcsl.introducedStateVariableIds(mel)) {
                         if (invIds.contains(c)) {
-                            targets.add(rootAbstractMachineName.trim() + "__" + c);
+                            String base = rootAbstractMachineName.trim() + "__" + c;
+                            String ranged = implementationAssignTargetWithRange(base, c, mel, ctx);
+                            targets.add(ranged == null ? base : ranged);
                         }
                     }
                 }
@@ -278,6 +281,18 @@ public final class BxmlMachineVariables {
 
     public static List<String> listImplementationAssignTargets(
             String abstractMachineName, List<Element> mergedMachineElements) {
+        return listImplementationAssignTargets(abstractMachineName, mergedMachineElements, null);
+    }
+
+    /**
+     * Como {@link #listImplementationAssignTargets(String, List)}, mas quando a variável concreta
+     * é array (domínio de função total com intervalo), gera alvo com fatia ACSL:
+     * {@code Raiz__v[low .. high]}.
+     */
+    public static List<String> listImplementationAssignTargets(
+            String abstractMachineName,
+            List<Element> mergedMachineElements,
+            BxmlTranslateContext ctx) {
         if (abstractMachineName == null || abstractMachineName.isBlank()) return List.of();
         List<String> out = new ArrayList<>();
         for (Element mel : mergedMachineElements) {
@@ -293,11 +308,51 @@ public final class BxmlMachineVariables {
                 if (!"Id".equals(e.getLocalName())) continue;
                 String v = e.getAttribute("value");
                 if (v != null && !v.isBlank()) {
-                    out.add(abstractMachineName + "__" + v);
+                    String base = abstractMachineName + "__" + v;
+                    String ranged = implementationAssignTargetWithRange(base, v, mel, ctx);
+                    out.add(ranged == null ? base : ranged);
                 }
             }
         }
         return out;
+    }
+
+    private static String implementationAssignTargetWithRange(
+            String baseTarget, String varName, Element implMachineEl, BxmlTranslateContext ctx) {
+        if (baseTarget == null || varName == null || implMachineEl == null || ctx == null) {
+            return null;
+        }
+        Element arrow = concreteVariableFunctionArrowElement(implMachineEl, varName);
+        String range = arrayDomainRangeAcsl(arrow, ctx);
+        if (range == null || range.isBlank()) {
+            return null;
+        }
+        return baseTarget + "[" + range + "]";
+    }
+
+    /** Intervalo do domínio de {@code -->} (ex. {@code 0..maximum} -> {@code 0 .. maximum}). */
+    private static String arrayDomainRangeAcsl(Element arrowEl, BxmlTranslateContext ctx) {
+        if (arrowEl == null || ctx == null) {
+            return null;
+        }
+        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
+        if (domRng[0] == null) {
+            return null;
+        }
+        Element domain = domRng[0];
+        if (!BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
+            return null;
+        }
+        Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
+        if (lr[0] == null || lr[1] == null) {
+            return null;
+        }
+        String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
+        String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
+        if (low.isBlank() || high.isBlank()) {
+            return null;
+        }
+        return low + " .. " + high;
     }
 
     private static boolean isImplementationMachine(Element machineEl) {

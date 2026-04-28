@@ -48,6 +48,10 @@ public final class AcslLibIncludes {
 
     private AcslLibIncludes() {}
 
+    /** Ficheiros da lib que não devem aparecer no bloco include do .acsl gerado. */
+    private static final Set<String> OMIT_FROM_EMITTED_SPEC_INCLUDES =
+            Set.of("function_functions/singleton.acsl");
+
     private static final Pattern INCLUDE_IN_LIB =
             Pattern.compile("include\\s+\"([^\"]+)\"\\s*;", Pattern.MULTILINE);
 
@@ -74,8 +78,7 @@ public final class AcslLibIncludes {
             Map.entry("belongs", "set_functions/belongs.acsl"),
             Map.entry("not_belongs", "set_functions/belongs.acsl"),
             Map.entry("inclusion", "set_functions/inclusion.acsl"),
-            Map.entry("set_union", "set_functions/union.acsl"),
-            Map.entry("singleton", "set_functions/singleton.acsl"),
+            Map.entry("set_union", "set_functions/union.acsl"),            
             Map.entry("empty", "set_functions/empty.acsl"),
             Map.entry("card", "set_functions/card.acsl"),
             Map.entry("is_finite", "set_functions/finite.acsl"),
@@ -92,7 +95,8 @@ public final class AcslLibIncludes {
             Map.entry("range_restriction", "relation_functions/range_restriction.acsl"),
             Map.entry("iSeq", "sequence_functions/iseq.acsl"),
             Map.entry("is_seq_of", "sequence_functions/is_seq_of.acsl"),
-            Map.entry("list_to_function", "sequence_functions/list_to_function.acsl"),
+            Map.entry("list_to_function", "sequence_functions/mapping_functions.acsl"),
+            Map.entry("function_to_list", "sequence_functions/mapping_functions.acsl"),
             Map.entry("array_to_function", "function_functions/array_to_function.acsl"),
             Map.entry("function_apply", "function_functions/apply.acsl"),
             Map.entry("is_total_function", "function_functions/is_total.acsl"));
@@ -126,13 +130,15 @@ public final class AcslLibIncludes {
             "function_functions/is_partial.acsl",
             "function_functions/is_total.acsl",
             "function_functions/apply.acsl",
-            "function_functions/array_to_function.acsl",
+            "function_functions/array_to_function.acsl",            
             "relation_functions/inverse.acsl",
             "relation_functions/domain_restriction.acsl",
             "relation_functions/range_restriction.acsl",
             "sequence_functions/iseq.acsl",
             "sequence_functions/is_seq_of.acsl",
-            "sequence_functions/list_to_function.acsl",
+            "sequence_functions/length.acsl",
+            "sequence_functions/is_sequence.acsl",            
+            "sequence_functions/mapping_functions.acsl",            
             "sequence_functions/range.acsl");
 
     public static String formatIncludeBlock(String acslText) {
@@ -349,7 +355,9 @@ public final class AcslLibIncludes {
     private static List<String> omitAxiomFolderIncludesFromEmittedSpec(List<String> relPaths) {
         List<String> out = new ArrayList<>(relPaths.size());
         for (String rel : relPaths) {
-            if (!isUnderLibAxiomFolder(rel)) {
+            String normalized = rel == null ? "" : rel.replace('\\', '/');
+            if (!isUnderLibAxiomFolder(normalized)
+                    && !OMIT_FROM_EMITTED_SPEC_INCLUDES.contains(normalized)) {
                 out.add(rel);
             }
         }

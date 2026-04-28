@@ -2,10 +2,12 @@ package com.example.bxml;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -113,6 +115,7 @@ public final class BxmlOperationsTranslator {
             Element pre = firstChildElement(child, "Precondition");
             if (pre != null) {
                 requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
+                rewriteRequiresForArrayBackedFunctionParams(requires, child, ctx);
             }
 
             List<String> outputParams = parseOutputParameterNames(child);
@@ -174,7 +177,8 @@ public final class BxmlOperationsTranslator {
                                     machineEl,
                                     mergedRefinementChain,
                                     assignedAbs,
-                                    gluing);
+                                    gluing,
+                                    ctx);
                 }
             }
 
@@ -261,6 +265,104 @@ public final class BxmlOperationsTranslator {
             if (localName.equals(e.getLocalName())) return e;
         }
         return null;
+    }
+
+    /**
+     * Em operações cuja entrada concreta é array/pointer representando função total em B
+     * ({@code xx : A --> B}), reescreve chamadas de contrato que esperam {@code Function_int_int}
+     * para usar {@code array_to_function(xx, len)}.
+     */
+    private static void rewriteRequiresForArrayBackedFunctionParams(
+            List<String> requires, Element operation, BxmlTranslateContext ctx) {
+        if (requires == null || requires.isEmpty() || operation == null || ctx == null) {
+            return;
+        }
+        Map<String, String> lensByParam = inferArrayFunctionParamLengths(operation, ctx);
+        if (lensByParam.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < requires.size(); i++) {
+            String req = requires.get(i);
+            if (req == null || req.isBlank()) {
+                continue;
+            }
+            String rewritten = req;
+            for (Map.Entry<String, String> e : lensByParam.entrySet()) {
+                String p = e.getKey();
+                String len = e.getValue();
+                rewritten =
+                        rewritten.replaceAll(
+                                "\\bis_total_function\\s*\\(\\s*"
+                                        + Pattern.quote(p)
+                                        + "\\b",
+                                "is_total_function(array_to_function(" + p + ", " + len + ")");
+            }
+            requires.set(i, rewritten);
+        }
+    }
+
+    private static Map<String, String> inferArrayFunctionParamLengths(
+            Element operation, BxmlTranslateContext ctx) {
+        Map<String, String> out = new LinkedHashMap<>();
+        Element pre = firstChildElement(operation, "Precondition");
+        if (pre == null) {
+            return out;
+        }
+        collectArrayFunctionParamLengths(pre, ctx, out);
+        return out;
+    }
+
+    private static void collectArrayFunctionParamLengths(
+            Element pred, BxmlTranslateContext ctx, Map<String, String> out) {
+        if (pred == null || ctx == null) {
+            return;
+        }
+        String ln = pred.getLocalName();
+        if ("Exp_Comparison".equals(ln)) {
+            String op = pred.getAttribute("op");
+            if (":".equals(op == null ? "" : op.trim())) {
+                Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
+                if (pair[0] != null
+                        && "Id".equals(pair[0].getLocalName())
+                        && pair[1] != null
+                        && BxmlExpressionToAcsl.isFunctionArrowType(pair[1])) {
+                    String p = pair[0].getAttribute("value");
+                    String len = arrayDomainCardinalityAcsl(pair[1], ctx);
+                    if (p != null && !p.isBlank() && len != null && !len.isBlank()) {
+                        out.put(p.trim(), len);
+                    }
+                }
+            }
+        }
+        NodeList nl = pred.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element ch = (Element) n;
+            if ("Attr".equals(ch.getLocalName())) continue;
+            collectArrayFunctionParamLengths(ch, ctx, out);
+        }
+    }
+
+    private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx) {
+        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
+        if (domRng[0] == null) {
+            return null;
+        }
+        Element domain = domRng[0];
+        if (!BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
+            return null;
+        }
+        Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
+        if (lr[0] == null || lr[1] == null) {
+            return null;
+        }
+        String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
+        String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
+        if (low.isBlank() || high.isBlank()) {
+            return null;
+        }
+        return "(" + high + " - (" + low + ") + 1)";
     }
 
     public record OperationAcsl(
