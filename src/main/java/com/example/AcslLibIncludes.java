@@ -21,6 +21,8 @@ import java.util.regex.Pattern;
  * Detecta símbolos da {@code ACSL_Lib} no texto ACSL gerado e produz linhas {@code include "..."}
  * para os ficheiros correspondentes em {@code src/main/resources/ACSL_Lib}. Usos de {@code NAT},
  * {@code NAT1} ou {@code BOOL} como identificadores incluem {@code set_functions/variables.acsl}.
+ * O operador lógico {@code \\length} (E-ACSL) sobre {@code \\list} não confunde com
+ * {@code length} da {@code sequence_functions/length.acsl} (sequência como função int → int).
  *
  * <p>Propriedades opcionais (JVM / {@code META-INF/b2acsl.properties}):
  * <ul>
@@ -90,6 +92,7 @@ public final class AcslLibIncludes {
             Map.entry("range_restriction", "relation_functions/range_restriction.acsl"),
             Map.entry("iSeq", "sequence_functions/iseq.acsl"),
             Map.entry("is_seq_of", "sequence_functions/is_seq_of.acsl"),
+            Map.entry("list_to_function", "sequence_functions/list_to_function.acsl"),
             Map.entry("array_to_function", "function_functions/array_to_function.acsl"),
             Map.entry("function_apply", "function_functions/apply.acsl"),
             Map.entry("is_total_function", "function_functions/is_total.acsl"));
@@ -129,6 +132,7 @@ public final class AcslLibIncludes {
             "relation_functions/range_restriction.acsl",
             "sequence_functions/iseq.acsl",
             "sequence_functions/is_seq_of.acsl",
+            "sequence_functions/list_to_function.acsl",
             "sequence_functions/range.acsl");
 
     public static String formatIncludeBlock(String acslText) {
@@ -653,9 +657,36 @@ public final class AcslLibIncludes {
         return "include \"" + path + "\";";
     }
 
+    /**
+     * Identifica chamadas {@code symbol(} da ACSL_Lib no texto. Tratamento especial: {@code length}
+     * da biblioteca (sequência vista como função) não deve confundir-se com o operador E-ACSL
+     * {@code \\length(...)} sobre {@code \\list}.
+     */
     private static boolean containsSymbolCall(String text, String symbol) {
+        if ("length".equals(symbol)) {
+            return containsLibraryLengthCall(text);
+        }
         Pattern pat =
                 Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(symbol) + "\\s*\\(");
         return pat.matcher(text).find();
+    }
+
+    /**
+     * {@code true} se existir {@code length(} como símbolo da lib; {@code false} para apenas
+     * {@code \\length(} (comprimento de lista em lógica ACSL, sem {@code sequence_functions/length.acsl}).
+     */
+    private static boolean containsLibraryLengthCall(String text) {
+        if (text == null || text.isEmpty()) {
+            return false;
+        }
+        Matcher m = Pattern.compile("(?<![A-Za-z0-9_])length\\s*\\(").matcher(text);
+        while (m.find()) {
+            int i = m.start();
+            if (i > 0 && text.charAt(i - 1) == '\\') {
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 }

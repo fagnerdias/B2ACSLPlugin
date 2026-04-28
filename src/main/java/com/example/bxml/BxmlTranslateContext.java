@@ -47,12 +47,37 @@ public record BxmlTranslateContext(
             Element machineEl,
             BxmlComprehensionRegistry sharedComprehensions,
             Map<String, String> gluingSubstitutions) {
+        return forMachineWithSharedComprehensions(
+                machineEl, sharedComprehensions, gluingSubstitutions, null);
+    }
+
+    /**
+     * Como {@link #forMachineWithSharedComprehensions(Element, BxmlComprehensionRegistry, Map)}, mas
+     * para refinamentos/implementações fundidas: funde os tipos {@code logic} das variáveis inferidos
+     * na máquina abstrata {@code abstractMachineElForSharedVariableTypes} (ex. {@code myseq} como
+     * {@code \\list}) antes dos tipos da máquina concreta, para invariantes que referenciam estado
+     * abstrato.
+     */
+    public static BxmlTranslateContext forMachineWithSharedComprehensions(
+            Element machineEl,
+            BxmlComprehensionRegistry sharedComprehensions,
+            Map<String, String> gluingSubstitutions,
+            Element abstractMachineElForSharedVariableTypes) {
         BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machineEl);
         Map<String, String> gl = gluingSubstitutions == null ? Map.of() : gluingSubstitutions;
         sharedComprehensions.setGluingSubstitutions(gl);
         BxmlTranslateContext tmp = new BxmlTranslateContext(types, sharedComprehensions, Map.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
+        if (abstractMachineElForSharedVariableTypes != null) {
+            BxmlTypeRegistry absTypes =
+                    BxmlTypeRegistry.fromMachine(abstractMachineElForSharedVariableTypes);
+            BxmlTranslateContext tmpAbs =
+                    new BxmlTranslateContext(absTypes, sharedComprehensions, Map.of());
+            merged.putAll(
+                    BxmlMachineVariables.inferVariableLogicTypes(
+                            abstractMachineElForSharedVariableTypes, tmpAbs));
+        }
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
         return new BxmlTranslateContext(types, sharedComprehensions, merged);
     }

@@ -132,6 +132,14 @@ public final class BxmlPredicateToAcsl {
             return "inclusion(" + left + ", " + right + ")";
         }
         if ("=".equals(op)) {
+            if (BxmlExpressionToAcsl.isListValued(leftEl, ctx)
+                    && BxmlExpressionToAcsl.isRelationOrFunctionValued(rightEl, ctx)) {
+                return "(" + right + " == list_to_function(" + left + "))";
+            }
+            if (BxmlExpressionToAcsl.isListValued(rightEl, ctx)
+                    && BxmlExpressionToAcsl.isRelationOrFunctionValued(leftEl, ctx)) {
+                return "(" + left + " == list_to_function(" + right + "))";
+            }
             if (BxmlExpressionToAcsl.isSetValued(leftEl, ctx)
                     && BxmlExpressionToAcsl.isSetValued(rightEl, ctx)) {
                 return "equals(" + left + ", " + right + ")";

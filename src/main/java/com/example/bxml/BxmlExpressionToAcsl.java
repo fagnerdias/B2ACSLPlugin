@@ -6,7 +6,9 @@ import org.w3c.dom.NodeList;
 
 /**
  * Traduz sub-árvores de expressão BXML ({@code Exp}) para texto ACSL usando símbolos alinhados a {@code ACSL_Lib}
- * (ex.: {@code empty}, {@code set_union} em {@code set_functions/}).
+ * (ex.: {@code empty}, {@code set_union} em {@code set_functions/}). Para sequências ({@code \\list}), o
+ * operador unário B {@code size} → {@code \\length(...)} na especificação ACSL (ex.
+ * {@code size(myseq) > 0} → {@code \\length(myseq) > 0}).
  *
  * @see <a href="https://www.atelierb.eu/wp-content/uploads/2023/10/bxml-1.0.html">BXML 1.0</a>
  */
@@ -23,6 +25,18 @@ public final class BxmlExpressionToAcsl {
      * {@code card(…)}).
      */
     public static String formatEquality(Element leftExp, Element rightExp, BxmlTranslateContext ctx) {
+        if (isListValued(leftExp, ctx) && isRelationOrFunctionValued(rightExp, ctx)) {
+            return translate(rightExp, ctx)
+                    + " == list_to_function("
+                    + translate(leftExp, ctx)
+                    + ")";
+        }
+        if (isListValued(rightExp, ctx) && isRelationOrFunctionValued(leftExp, ctx)) {
+            return translate(leftExp, ctx)
+                    + " == list_to_function("
+                    + translate(rightExp, ctx)
+                    + ")";
+        }
         String l = translate(leftExp, ctx);
         String r = translate(rightExp, ctx);
         if (isSetValued(leftExp, ctx) && isSetValued(rightExp, ctx)) {
@@ -85,6 +99,87 @@ public final class BxmlExpressionToAcsl {
         if (t == null || t.isBlank()) return false;
         if (t.startsWith("Set<")) return true;
         return t.startsWith("Relation_");
+    }
+
+    /**
+     * Expressão cuja sorte em ACSL é lista ({@code \\list<…>}) — para {@code Unary_Exp size} →
+     * {@code \\length(expr)} (invariantes, pré/pós-condições, etc.).
+     */
+    public static boolean isListValued(Element exp, BxmlTranslateContext ctx) {
+        if (exp == null || ctx == null) {
+            return false;
+        }
+        String ln = exp.getLocalName();
+        return switch (ln) {
+            case "Id" -> isListValuedId(exp, ctx);
+            case "EmptySeq" -> true;
+            case "Binary_Exp" -> {
+                String bOp = exp.getAttribute("op");
+                yield isSequenceAppendOp(bOp) || isSequencePrependOp(bOp);
+            }
+            default -> false;
+        };
+    }
+
+    private static boolean isListValuedId(Element idEl, BxmlTranslateContext ctx) {
+        String name = idEl.getAttribute("value");
+        String t = ctx.variableLogicTypes().get(name);
+        if (t != null && t.startsWith("\\list")) {
+            return true;
+        }
+        String trAttr = idEl.getAttribute("typref");
+        if (trAttr == null || trAttr.isBlank()) {
+            return false;
+        }
+        try {
+            int tr = Integer.parseInt(trAttr.trim());
+            String inferred = ctx.types().acslVariableLogicTypeFromTypref(tr);
+            return inferred != null && inferred.startsWith("\\list");
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Valor relação/função parcial em ACSL ({@code Relation_*}, {@code Function_*}) ou restrição de
+     * domínio B {@code <|} — para igualdade com {@code \\list} via {@code list_to_function}.
+     */
+    public static boolean isRelationOrFunctionValued(Element exp, BxmlTranslateContext ctx) {
+        if (exp == null || ctx == null) {
+            return false;
+        }
+        String ln = exp.getLocalName();
+        return switch (ln) {
+            case "Id" -> isRelationOrFunctionValuedId(exp, ctx);
+            case "Binary_Exp" -> isDomainRestrictionOp(exp.getAttribute("op"));
+            default -> false;
+        };
+    }
+
+    private static boolean isRelationLikeVariableType(String t) {
+        if (t == null || t.isBlank()) {
+            return false;
+        }
+        return t.startsWith("Relation_") || t.startsWith("Function_");
+    }
+
+    private static boolean isRelationOrFunctionValuedId(Element idEl, BxmlTranslateContext ctx) {
+        String name = idEl.getAttribute("value");
+        String t = ctx.variableLogicTypes().get(name);
+        if (isRelationLikeVariableType(t)) {
+            return true;
+        }
+        String trAttr = idEl.getAttribute("typref");
+        if (trAttr == null || trAttr.isBlank()) {
+            return false;
+        }
+        try {
+            int tr = Integer.parseInt(trAttr.trim());
+            String inferred = ctx.types().acslVariableLogicTypeFromTypref(tr);
+            return isRelationLikeVariableType(inferred);
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     /** Intervalo B {@code a..b} em {@code Binary_Exp} (conjunto de inteiros). */
@@ -223,9 +318,12 @@ public final class BxmlExpressionToAcsl {
             return "card(" + translateQuantifiedSet(arg, ctx) + ")"; // card.acsl
         }
         String a = translate(arg, ctx);
-        return switch (op) {
+        String opTrim = op == null ? "" : op.trim();
+        return switch (opTrim) {
             case "card" -> "card(" + a + ")";
-            default -> op + "(" + a + ")";
+            case "size" ->
+                    isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
+            default -> opTrim + "(" + a + ")";
         };
     }
 

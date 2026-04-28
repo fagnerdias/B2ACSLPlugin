@@ -225,7 +225,11 @@ public final class BxmlComprehensionRegistry {
         return ordered.size();
     }
 
-    public String formatAxiomaticBlock(String machineName) {
+    /**
+     * @param translateCtx contexto da máquina (tipos {@code logic} das variáveis); necessário para
+     *     expressões como {@code size(myseq)} → {@code \\length(myseq)} nos axiomas de compreensão.
+     */
+    public String formatAxiomaticBlock(String machineName, BxmlTranslateContext translateCtx) {
         if (isEmpty()) return "";
         int maxIdx = maxIndex();
         if (maxIdx == 0) return "";
@@ -244,7 +248,7 @@ public final class BxmlComprehensionRegistry {
                     .append(idx)
                     .append(";\n");
             if (axioms.length() > 0) axioms.append("\n");
-            appendComprehensionAxiom(axioms, qs, idx, types);
+            appendComprehensionAxiom(axioms, qs, idx, types, translateCtx);
         }
 
         String blockName = machineName + "_comprehension_sets";
@@ -255,6 +259,11 @@ public final class BxmlComprehensionRegistry {
         sb.append(axioms);
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /** Como {@link #formatAxiomaticBlock(String, BxmlTranslateContext)} sem tipos de variáveis (só para testes / fallback). */
+    public String formatAxiomaticBlock(String machineName) {
+        return formatAxiomaticBlock(machineName, null);
     }
 
     /**
@@ -280,15 +289,27 @@ public final class BxmlComprehensionRegistry {
         if (!local.isEmpty() && seen.containsAll(local)) {
             return "";
         }
-        String out = formatAxiomaticBlock(machineName);
+        String out = formatAxiomaticBlock(machineName, null);
         seen.addAll(local);
         return out;
     }
 
+    /** Contexto para traduzir o predicado da compreensão com os mesmos {@code logic} que o resto da máquina. */
+    private BxmlTranslateContext comprehensionCtx(
+            BxmlTypeRegistry types, BxmlTranslateContext translateCtx) {
+        Map<String, String> vt =
+                translateCtx != null ? translateCtx.variableLogicTypes() : Map.of();
+        return new BxmlTranslateContext(types, this, vt);
+    }
+
     private void appendComprehensionAxiom(
-            StringBuilder sb, Element qs, int index, BxmlTypeRegistry types) {
+            StringBuilder sb,
+            Element qs,
+            int index,
+            BxmlTypeRegistry types,
+            BxmlTranslateContext translateCtx) {
         if (BxmlExpressionToAcsl.isIntervalBinaryExp(qs)) {
-            appendIntervalComprehensionAxiom(sb, qs, index, types);
+            appendIntervalComprehensionAxiom(sb, qs, index, types, translateCtx);
             return;
         }
         Element vars = firstChildElement(qs, "Variables");
@@ -305,7 +326,7 @@ public final class BxmlComprehensionRegistry {
         }
         if (idNodes.isEmpty()) return;
 
-        BxmlTranslateContext ctx = new BxmlTranslateContext(types, this, Map.of());
+        BxmlTranslateContext ctx = comprehensionCtx(types, translateCtx);
         String pred = BxmlPredicateToAcsl.translateBodyPredicate(body, ctx);
 
         String ref = "set_comprehension_" + index;
@@ -342,12 +363,16 @@ public final class BxmlComprehensionRegistry {
     }
 
     private void appendIntervalComprehensionAxiom(
-            StringBuilder sb, Element intervalEl, int index, BxmlTypeRegistry types) {
+            StringBuilder sb,
+            Element intervalEl,
+            int index,
+            BxmlTypeRegistry types,
+            BxmlTranslateContext translateCtx) {
         Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(intervalEl);
         if (pair[0] == null || pair[1] == null) {
             return;
         }
-        BxmlTranslateContext ctx = new BxmlTranslateContext(types, this, Map.of());
+        BxmlTranslateContext ctx = comprehensionCtx(types, translateCtx);
         String left = BxmlExpressionToAcsl.translate(pair[0], ctx);
         String right = BxmlExpressionToAcsl.translate(pair[1], ctx);
         left = BxmlGluingNormalizer.applySubstitutions(left, gluingSubstitutions);

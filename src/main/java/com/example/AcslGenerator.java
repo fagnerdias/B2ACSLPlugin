@@ -237,7 +237,8 @@ public final class AcslGenerator {
         Element refinementChainParent = machineEl;
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx =
-                    BxmlTranslateContext.forMachineWithSharedComprehensions(mel, ctx.comprehensions(), gluing);
+                    BxmlTranslateContext.forMachineWithSharedComprehensions(
+                            mel, ctx.comprehensions(), gluing, machineEl);
             String valuesMerged = BxmlConstantsAndProperties.formatValuesBlock(mel, mctx);
             if (!valuesMerged.isBlank()) {
                 sb.append(valuesMerged);
@@ -254,7 +255,7 @@ public final class AcslGenerator {
             sb.append("\n");
         }
         if (!ctx.comprehensions().isEmpty()) {
-            sb.append(ctx.comprehensions().formatAxiomaticBlock(baseName));
+            sb.append(ctx.comprehensions().formatAxiomaticBlock(baseName, ctx));
             sb.append("\n");
         }
 
@@ -266,7 +267,8 @@ public final class AcslGenerator {
             if (!invariantPredicates.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
-        appendMergedInvariantPredicatesOnly(sb, mergedMachineElements, gluing, ctx.comprehensions());
+        appendMergedInvariantPredicatesOnly(
+                sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl);
 
         // 3) Funções: inicialização e operações
         if (isAbstraction && init != null) {
@@ -311,13 +313,15 @@ public final class AcslGenerator {
             StringBuilder sb,
             List<Element> mergedMachineRoots,
             Map<String, String> gluing,
-            BxmlComprehensionRegistry sharedComprehensions) {
+            BxmlComprehensionRegistry sharedComprehensions,
+            Element rootAbstractMachineEl) {
         if (mergedMachineRoots == null || mergedMachineRoots.isEmpty()) {
             return;
         }
         for (Element mel : mergedMachineRoots) {
             BxmlTranslateContext ctx =
-                    BxmlTranslateContext.forMachineWithSharedComprehensions(mel, sharedComprehensions, gluing);
+                    BxmlTranslateContext.forMachineWithSharedComprehensions(
+                            mel, sharedComprehensions, gluing, rootAbstractMachineEl);
             String inv = BxmlInvariantTranslator.formatInvariantPredicates(mel, ctx);
             if (inv.isBlank()) continue;
             sb.append("\n");
@@ -356,7 +360,7 @@ public final class AcslGenerator {
         for (Element mel : mergedMachineRoots) {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
-                            mel, ctx.comprehensions(), gluing);
+                            mel, ctx.comprehensions(), gluing, machineEl);
             out.addAll(BxmlInvariantTranslator.listInvariantPredicateNames(mel, mctx));
         }
         return out;
