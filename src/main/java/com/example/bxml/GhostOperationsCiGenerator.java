@@ -24,7 +24,7 @@ import org.w3c.dom.NodeList;
  * para inicialização e operações que atribuem a variáveis abstratas.
  *
  * <p>Para atribuições do tipo sequência definida por restrição de domínio sobre um array (função parcial em
- * B), o {@code ensures} ghost compara relações com {@code list_to_function(dummy_<seq>)} e
+ * B), o {@code ensures} ghost compara relações com {@code dummy_list_to_function(dummy_<seq>)} e
  * {@code array_to_function(<param>, <tamanho>)} — o tamanho infere-se do intervalo do domínio na pré-condição
  * ({@code low..high}); constantes concretas da máquina aparecem na axiomatica como {@code dummy_<c>} e nas
  * expressões de comprimento.
@@ -265,25 +265,25 @@ public final class GhostOperationsCiGenerator {
 
     /**
      * Variante equivalente após {@link #toGhostEnsure}: {@code domain_restriction(rel, S) ==
-     * list_to_function(\\old(dummy_seq))}.
+     * dummy_list_to_function(\\old(dummy_seq))}.
      */
     private static final Pattern GHOST_ENSURE_DOMAIN_RESTRICTION_EQ_LIST_OLD =
             Pattern.compile(
-                    "^domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*==\\s*list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)\\s*$");
+                    "^domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*==\\s*(?:dummy_)?list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)\\s*$");
 
     /**
-     * Variante simétrica: {@code list_to_function(\\old(dummy_seq)) == domain_restriction(rel, S)}.
+     * Variante simétrica: {@code dummy_list_to_function(\\old(dummy_seq)) == domain_restriction(rel, S)}.
      */
     private static final Pattern GHOST_ENSURE_LIST_OLD_EQ_DOMAIN_RESTRICTION =
             Pattern.compile(
-                    "^list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)\\s*==\\s*domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*$");
+                    "^(?:dummy_)?list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)\\s*==\\s*domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*$");
 
     /**
-     * Caso legado de listas: o tradutor pode produzir {@code lhs == list_to_function((list_expr))}.
+     * Caso legado de listas: o tradutor pode produzir {@code lhs == dummy_list_to_function((list_expr))}.
      * Para variáveis de tipo lista, a comparação deve permanecer lista-vs-lista.
      */
     private static final Pattern GHOST_ENSURE_EQ_LIST_TO_FUNCTION_OF_LIST_EXPR =
-            Pattern.compile("^(.+?)\\s*==\\s*list_to_function\\(\\((.+)\\)\\)\\s*$");
+            Pattern.compile("^(.+?)\\s*==\\s*(?:dummy_)?list_to_function\\(\\((.+)\\)\\)\\s*$");
 
     private static int maxSetComprehensionIndexInGhostText(Iterable<String> lines) {
         int m = 0;
@@ -362,7 +362,7 @@ public final class GhostOperationsCiGenerator {
         sb.append("        predicate is_finite<A>(A a);\n");
         sb.append(
                 "        logic DRelation<A, B> domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
-        sb.append("        logic DRelation<integer, A> list_to_function<A>(\\list<A> l);\n\n");
+        sb.append("        logic DRelation<integer, A> dummy_list_to_function<A>(\\list<A> l);\n\n");
         sb.append("        logic DRelation<integer, integer> dummy_array_to_function(int *x, integer length);\n");
         sb.append("    }\n*/\n");
         return sb.toString();
@@ -673,15 +673,16 @@ public final class GhostOperationsCiGenerator {
         if (len == null || len.isBlank()) {
             return null;
         }
-        return "list_to_function(dummy_"
-                + seqVar
-                + ") == domain_restriction(dummy_array_to_function("
+        return "domain_restriction(dummy_array_to_function("
                 + relationParam
                 + ", "
                 + len
                 + "), "
-                + dummySetComprehensionRef(domainRestrictionSecondArg)
-                + ")";
+                + "dummy_"
+                + domainRestrictionSecondArg
+                + ") == dummy_list_to_function(\\old(dummy_"
+                + seqVar
+                + "))";
     }
 
     private static boolean isPointerGhostParam(List<Param> params, String name) {
