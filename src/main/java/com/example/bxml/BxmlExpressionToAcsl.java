@@ -320,7 +320,8 @@ public final class BxmlExpressionToAcsl {
         String a = translate(arg, ctx);
         String opTrim = op == null ? "" : op.trim();
         return switch (opTrim) {
-            case "card" -> "card(" + a + ")";
+            case "card" ->
+                    isListValued(arg, ctx) ? "\\length(" + a + ")" : "card(" + a + ")";
             case "size" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
             default -> opTrim + "(" + a + ")";
