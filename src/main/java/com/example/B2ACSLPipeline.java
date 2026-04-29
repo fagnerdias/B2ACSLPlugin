@@ -756,7 +756,9 @@ public final class B2ACSLPipeline {
         }
         candidates.add(
                 Pattern.compile(
-                        "\\bvoid\\s+[A-Za-z_]\\w*__" + Pattern.quote(opName) + "\\s*\\([^;{}]*\\)\\s*\\{"));
+                        "\\bvoid\\s+[A-Za-z_]\\w*__(?i:"
+                                + Pattern.quote(opName)
+                                + ")\\s*\\([^;{}]*\\)\\s*\\{"));
         for (Pattern p : candidates) {
             Matcher m = p.matcher(content);
             if (!m.find()) {
