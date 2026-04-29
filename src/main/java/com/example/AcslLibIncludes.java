@@ -96,8 +96,10 @@ public final class AcslLibIncludes {
             Map.entry("relation_inverse", "relation_functions/inverse.acsl"),
             Map.entry("domain_restriction", "relation_functions/domain_restriction.acsl"),
             Map.entry("range_restriction", "relation_functions/range_restriction.acsl"),
+            Map.entry("front", "sequence_functions/front.acsl"),
             Map.entry("iSeq", "sequence_functions/iseq.acsl"),
             Map.entry("is_seq_of", "sequence_functions/is_seq_of.acsl"),
+            Map.entry("last", "sequence_functions/last.acsl"),
             Map.entry("list_to_function", "sequence_functions/mapping_functions.acsl"),
             Map.entry("function_to_list", "sequence_functions/mapping_functions.acsl"),
             Map.entry("array_to_function", "function_functions/array_to_function.acsl"),
@@ -137,10 +139,12 @@ public final class AcslLibIncludes {
             "relation_functions/inverse.acsl",
             "relation_functions/domain_restriction.acsl",
             "relation_functions/range_restriction.acsl",
+            "sequence_functions/front.acsl",
             "sequence_functions/iseq.acsl",
             "sequence_functions/is_seq_of.acsl",
             "sequence_functions/length.acsl",
             "sequence_functions/is_sequence.acsl",            
+            "sequence_functions/last.acsl",
             "sequence_functions/mapping_functions.acsl",            
             "sequence_functions/range.acsl");
 
@@ -387,6 +391,7 @@ public final class AcslLibIncludes {
         addIsSequenceLibIncludes(acslText, files);
         addArrayToFunctionLibIncludes(acslText, files);
         addDependencyMapIncludes(acslText, files);
+        removeSpuriousSequenceFirstInclude(acslText, files);
         if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
             files.add(VARIABLES_LIB_REL);
         }
@@ -422,6 +427,18 @@ public final class AcslLibIncludes {
                 files.addAll(m.transitiveLibRelativePathsForSymbol(sym));
             }
         }
+    }
+
+    /**
+     * Evita incluir o {@code first} de listas quando a especificação não usa explicitamente
+     * {@code first(...)}; esse include pode surgir por sobrecarga do nome {@code first} no mapa de
+     * dependências (versão de tuplos).
+     */
+    private static void removeSpuriousSequenceFirstInclude(String acslText, LinkedHashSet<String> files) {
+        if (containsSymbolCall(acslText, "first")) {
+            return;
+        }
+        files.remove("sequence_functions/first.acsl");
     }
 
     /**

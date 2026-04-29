@@ -893,6 +893,8 @@ public final class B2ACSLPipeline {
      * {@code logic} ou {@code predicate}, quando {@code X} é o primeiro axiomatic de um ficheiro da
      * sequência {@link AcslLibIncludes#orderedLibFunctionAxiomaticNames()}. Em seguida agrupa
      * {@code is_seq_of} e {@code range_function} imediatamente a seguir a {@code sequence_iseq}
+     * e, quando presente, posiciona {@code mapping_function} imediatamente abaixo de
+     * {@code axiomatic new_types}. A ordem da lib,
      * (ordem da lib), porque a permutação global só envolve blocos com nomes idênticos aos da lib —
      * blocos intermédios com outros nomes (ex. axiomas Frama-C) deixavam {@code range_function} longe
      * de {@code iSeq}/{@code is_seq_of}. Por fim, se existir {@code Connection_*}, antecipa o trio de
@@ -911,6 +913,7 @@ public final class B2ACSLPipeline {
             }
             content = reorderLibAxiomaticBlocksInMerged(content, rank);
         }
+        content = placeMappingFunctionImmediatelyAfterNewTypes(content);
         content = clusterSequenceListAxiomaticsAfterIseq(content);
         content = moveSequenceListAxiomaticsBeforeConnection(content);
         content = deferAxiomsSuffixBlocksAfterNonAxioms(content);
@@ -1075,6 +1078,43 @@ public final class B2ACSLPipeline {
         }
         insert.append(range.text);
         return cut.substring(0, seqAfter.end) + insert + cut.substring(seqAfter.end);
+    }
+
+    /**
+     * Quando o bloco {@code axiomatic mapping_function} existir no merge, move-o para imediatamente
+     * depois de {@code axiomatic new_types} para manter as definições de mapeamento de listas junto
+     * da declaração de tipos base.
+     */
+    private static String placeMappingFunctionImmediatelyAfterNewTypes(String content) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        AcsCommentSpan mapping = null;
+        AcsCommentSpan newTypes = null;
+        for (AcsCommentSpan sp : spans) {
+            if ("mapping_function".equals(sp.axiomaticName)
+                    && LOGIC_OR_PREDICATE_IN_BLOCK.matcher(sp.text).find()
+                    && mapping == null) {
+                mapping = sp;
+            } else if ("new_types".equals(sp.axiomaticName) && newTypes == null) {
+                newTypes = sp;
+            }
+        }
+        if (mapping == null || newTypes == null) {
+            return content;
+        }
+
+        String cut = content.substring(0, mapping.start) + content.substring(mapping.end);
+        List<AcsCommentSpan> cutSpans = findAllAcsCommentSpans(cut);
+        AcsCommentSpan newTypesAfter = null;
+        for (AcsCommentSpan sp : cutSpans) {
+            if ("new_types".equals(sp.axiomaticName)) {
+                newTypesAfter = sp;
+                break;
+            }
+        }
+        if (newTypesAfter == null) {
+            return content;
+        }
+        return cut.substring(0, newTypesAfter.end) + mapping.text + cut.substring(newTypesAfter.end);
     }
 
     /**
