@@ -384,6 +384,7 @@ public final class AcslLibIncludes {
         }
         addRangeIncludesForRan(acslText, files);
         addIsTotalFunctionLibIncludes(acslText, files);
+        addIsSequenceLibIncludes(acslText, files);
         addArrayToFunctionLibIncludes(acslText, files);
         addDependencyMapIncludes(acslText, files);
         if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
@@ -450,6 +451,17 @@ public final class AcslLibIncludes {
             return;
         }
         files.add("function_functions/apply.acsl");
+    }
+
+    /**
+     * {@code is_sequence} é definido por axiomas que usam {@code is_functional}; garante o include
+     * de {@code function_functions/is_function.acsl} na geração da especificação.
+     */
+    private static void addIsSequenceLibIncludes(String acslText, LinkedHashSet<String> files) {
+        if (!containsSymbolCall(acslText, "is_sequence")) {
+            return;
+        }
+        files.add("function_functions/is_function.acsl");
     }
 
     private static void addRangeIncludesForRan(String acslText, LinkedHashSet<String> files) {
