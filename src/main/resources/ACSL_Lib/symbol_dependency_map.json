@@ -121,9 +121,13 @@
     ],
     "array_to_function": [
       "belongs",
+      "couple",
       "dom",
+      "first",
       "function_apply",
-      "is_functional"
+      "is_functional",
+      "is_total_function",
+      "second"
     ],
     "becomes_element_of": [
       "belongs",
@@ -163,10 +167,7 @@
     ],
     "domain_restriction": [
       "belongs",
-      "couple",
-      "first",
-      "second",
-      "third"
+      "first"
     ],
     "empty": [
       "not_belongs"
@@ -241,7 +242,8 @@
     ],
     "is_sequence": [
       "dom",
-      "inclusion"
+      "inclusion",
+      "is_functional"
     ],
     "is_surjective": [
       "belongs",
@@ -365,14 +367,14 @@
     ]
   },
   "includes_from": {
+    "function_axioms/array_to_function_axioms.acsl": [
+      "function_functions/apply.acsl"
+    ],
     "function_functions/apply.acsl": [
       "function_axioms/apply_axioms.acsl"
     ],
     "function_functions/array_to_function.acsl": [
       "function_axioms/array_to_function_axioms.acsl"
-    ],
-    "relation_axioms/relation_domain_restriction.acsl": [
-      "tuple_functions/accessors.acsl"
     ],
     "relation_functions/apply.acsl": [
       "relation_axioms/relation_apply.acsl"
