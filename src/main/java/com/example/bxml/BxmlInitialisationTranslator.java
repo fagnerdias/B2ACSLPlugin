@@ -75,8 +75,67 @@ public final class BxmlInitialisationTranslator {
             }
             case "Skip" -> { /* nada */ }
             case "Bloc_Sub" -> walkSubstitution(firstSubChild(sub), ensures, ctx);
+            case "ANY_Sub" -> {
+                /* Tratado como contrato ghost por GhostOperationsCiGenerator; nada a emitir aqui. */
+            }
             default -> { /* outras substituições: extensão futura */ }
         }
+    }
+
+    /**
+     * Procura {@code ANY_Sub} no topo de um {@code <Body>} (atravessando {@code Bloc_Sub}); útil para o
+     * gerador de operações ghost decidir se a operação tem contrato ghost derivado de {@code ANY_Sub}.
+     */
+    public static Element findTopLevelAnySub(Element body) {
+        if (body == null) return null;
+        Element sub = firstSubChild(body);
+        while (sub != null && "Bloc_Sub".equals(sub.getLocalName())) {
+            sub = firstSubChild(sub);
+        }
+        if (sub != null && "ANY_Sub".equals(sub.getLocalName())) {
+            return sub;
+        }
+        return null;
+    }
+
+    /**
+     * {@code ANY v WHERE P THEN Q} → {@code \forall T v; P ==> (tradução de Q)} (uma única cláusula).
+     *
+     * <p>A tradução das atribuições em {@code Then} reusa {@link #walkSubstitution} (mesmas regras
+     * que {@code Initialisation} / corpos de operação).
+     */
+    public static String translateAnySubAsForall(Element anySub, BxmlTranslateContext ctx) {
+        if (anySub == null) return "";
+        Element vars = firstChildElement(anySub, "Variables");
+        Element predEl = firstChildElement(anySub, "Pred");
+        Element thenEl = firstChildElement(anySub, "Then");
+        if (vars == null || predEl == null || thenEl == null) {
+            return "";
+        }
+        String p = BxmlPredicateToAcsl.translateInvariantContent(predEl, ctx).trim();
+        if (p.isBlank()) {
+            p = "\\true";
+        }
+        List<Element> varIds = directExpChildren(vars);
+        List<String> binders = new ArrayList<>();
+        for (Element vid : varIds) {
+            if (!"Id".equals(vid.getLocalName())) {
+                continue;
+            }
+            String vn = vid.getAttribute("value").trim();
+            if (vn.isBlank()) {
+                continue;
+            }
+            String ty = BxmlPredicateToAcsl.acslQuantifierLogicTypeForAnyVariable(predEl, vid, ctx);
+            binders.add(ty + " " + vn);
+        }
+        if (binders.isEmpty()) {
+            return "";
+        }
+        List<String> inner = new ArrayList<>();
+        walkSubstitution(firstSubChild(thenEl), inner, ctx);
+        String q = inner.isEmpty() ? "\\true" : String.join(" && ", inner);
+        return "\\forall " + String.join(", ", binders) + "; " + p + " ==> (" + q + ")";
     }
 
     private static void parseSimultaneous(Element narySub, List<String> ensures, BxmlTranslateContext ctx) {

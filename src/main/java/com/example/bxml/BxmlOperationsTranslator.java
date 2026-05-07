@@ -136,10 +136,18 @@ public final class BxmlOperationsTranslator {
 
             List<String> inputParamNames = parseInputParameterNames(child);
             String ghostSlug = "";
-            if (abstractVariableNames != null
-                    && !abstractVariableNames.isEmpty()
-                    && GhostOperationsCiGenerator.operationAssignsAbstract(child, abstractVariableNames)) {
+            boolean assignsAbstract =
+                    abstractVariableNames != null
+                            && !abstractVariableNames.isEmpty()
+                            && GhostOperationsCiGenerator.operationAssignsAbstract(
+                                    child, abstractVariableNames);
+            boolean bodyHasAnySub = GhostOperationsCiGenerator.operationBodyHasAnySub(child);
+            if (assignsAbstract || bodyHasAnySub) {
                 ghostSlug = GhostOperationsCiGenerator.ghostOperationSlug(opName);
+            }
+            List<String> ghostBehaviorArgs = new ArrayList<>(inputParamNames);
+            if (bodyHasAnySub) {
+                ghostBehaviorArgs.addAll(GhostOperationsCiGenerator.listOutputParameterNames(child));
             }
             if (libScanGhostOperationBodies != null && !ghostSlug.isBlank()) {
                 for (String line : bodyEnsuresOnly) {
@@ -148,25 +156,23 @@ public final class BxmlOperationsTranslator {
                     }
                 }
             }
-            if (!ghostSlug.isBlank()
+            if (assignsAbstract
                     && invariantPredicateNames != null
                     && !invariantPredicateNames.isEmpty()) {
                 Set<String> invariantOnly = new HashSet<>(invariantPredicateNames);
                 ensures.removeIf(e -> !invariantOnly.contains(e));
             }
             List<String> dummyGhostEnsureVars =
-                    ghostSlug.isBlank()
-                            ? List.of()
-                            : GhostOperationsCiGenerator.listAbstractVariableNames(machineEl);
+                    assignsAbstract
+                            ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
+                            : List.of();
 
             List<String> connectionConcreteAssigns = List.of();
-            if (!ghostSlug.isBlank()
+            if (assignsAbstract
                     && rootAbstractMachineName != null
                     && !rootAbstractMachineName.isBlank()
                     && mergedRefinementChain != null
-                    && !mergedRefinementChain.isEmpty()
-                    && abstractVariableNames != null
-                    && !abstractVariableNames.isEmpty()) {
+                    && !mergedRefinementChain.isEmpty()) {
                 Set<String> assignedAbs =
                         GhostOperationsCiGenerator.assignedAbstractVariablesInOperation(
                                 child, abstractVariableNames);
@@ -189,7 +195,7 @@ public final class BxmlOperationsTranslator {
                             ensures,
                             outputParams,
                             ghostSlug,
-                            inputParamNames,
+                            ghostBehaviorArgs,
                             dummyGhostEnsureVars,
                             connectionConcreteAssigns));
         }

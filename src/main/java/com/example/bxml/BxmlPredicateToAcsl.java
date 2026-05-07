@@ -48,6 +48,158 @@ public final class BxmlPredicateToAcsl {
         return translatePred(predElement, ctx);
     }
 
+    /**
+     * Lado direito {@code S --> T} de uma restrição {@code v : S --> T} dentro do predicado (ex.
+     * cláusula {@code WHERE} de {@code ANY_Sub}), ou {@code null}.
+     */
+    public static Element findFunctionArrowRhsForVariable(Element predRoot, String varName) {
+        if (predRoot == null || varName == null || varName.isBlank()) {
+            return null;
+        }
+        return findFunctionArrowRhsForVariable0(predRoot, varName.trim());
+    }
+
+    /**
+     * Tipo {@code logic} para quantificador {@code \\forall} (ex. {@code Function_int_int}) a partir
+     * de {@code <Pred>} e do {@code Id} da variável de {@code ANY_Sub}: usa {@code v : A --> B} no
+     * predicado; senão cai no {@code typref} (ex. {@code Relation_int_int} → {@code Function_int_int}).
+     */
+    public static String acslQuantifierLogicTypeForAnyVariable(
+            Element predParent, Element varId, BxmlTranslateContext ctx) {
+        if (varId == null || ctx == null) {
+            return "integer";
+        }
+        String name = varId.getAttribute("value");
+        if (name == null) {
+            name = "";
+        }
+        name = name.trim();
+        Element p0 = firstPredChild(predParent);
+        Element arrow = p0 != null ? findFunctionArrowRhsForVariable(p0, name) : null;
+        if (arrow != null) {
+            return functionArrowBinaryToAcslFunctionType(arrow);
+        }
+        String trAttr = varId.getAttribute("typref");
+        if (trAttr != null && !trAttr.isBlank()) {
+            try {
+                int tr = Integer.parseInt(trAttr.trim());
+                String t = ctx.types().acslVariableLogicTypeFromTypref(tr);
+                return relationOrFallbackQuantifierType(t);
+            } catch (NumberFormatException ignored) {
+                // fall through
+            }
+        }
+        return "integer";
+    }
+
+    private static String relationOrFallbackQuantifierType(String t) {
+        if (t == null || t.isBlank()) {
+            return "integer";
+        }
+        return switch (t.trim()) {
+            case "Relation_int_int" -> "Function_int_int";
+            case "Relation_int_bool" -> "Function_int_bool";
+            case "Relation_bool_int" -> "Function_bool_int";
+            case "Relation_int_tuple_int_int_int" -> "Function_int_tuple_int_int_int";
+            default -> {
+                if (t.startsWith("Relation_")) {
+                    yield "Function_" + t.substring("Relation_".length());
+                }
+                yield t;
+            }
+        };
+    }
+
+    private static String functionArrowBinaryToAcslFunctionType(Element arrow) {
+        Element[] dr = BxmlExpressionToAcsl.twoDirectExpChildren(arrow);
+        if (dr[0] == null || dr[1] == null) {
+            return "Function_int_int";
+        }
+        String lhs = arrowEndToBNameForProduct(dr[0]);
+        String rhs = arrowEndToBNameForProduct(dr[1]);
+        String relation = BxmlTypeRegistry.powCartesianProductToAcslRelationType(lhs + "*" + rhs);
+        return relationOrFallbackQuantifierType(relation);
+    }
+
+    /** Extremidade B de {@code -->} como nome de tipo escalar para {@link BxmlTypeRegistry}. */
+    private static String arrowEndToBNameForProduct(Element e) {
+        if (e == null) {
+            return "INTEGER";
+        }
+        String ln = e.getLocalName();
+        if ("Binary_Exp".equals(ln) && BxmlExpressionToAcsl.isIntervalBinaryExp(e)) {
+            return "INTEGER";
+        }
+        if ("Id".equals(ln)) {
+            String v = e.getAttribute("value").trim();
+            return switch (v) {
+                case "BOOL" -> "BOOL";
+                case "NAT", "NAT1", "INTEGER", "INT" -> "INTEGER";
+                default -> "INTEGER";
+            };
+        }
+        if ("Unary_Exp".equals(ln)) {
+            String u = e.getAttribute("op");
+            if ("seq".equals(u) || "iseq".equals(u)) {
+                return "INTEGER";
+            }
+        }
+        return "INTEGER";
+    }
+
+    private static Element findFunctionArrowRhsForVariable0(Element pred, String varName) {
+        if (pred == null) {
+            return null;
+        }
+        String ln = pred.getLocalName();
+        if ("Exp_Comparison".equals(ln) && isColonTypingComparison(pred)) {
+            Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
+            if (pair[0] != null
+                    && "Id".equals(pair[0].getLocalName())
+                    && varName.equals(pair[0].getAttribute("value").trim())
+                    && pair[1] != null
+                    && BxmlExpressionToAcsl.isFunctionArrowType(pair[1])) {
+                return pair[1];
+            }
+            return null;
+        }
+        if ("Nary_Pred".equals(ln)) {
+            NodeList nl = pred.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if ("Attr".equals(ch.getLocalName())) continue;
+                Element found = findFunctionArrowRhsForVariable0(ch, varName);
+                if (found != null) {
+                    return found;
+                }
+            }
+            return null;
+        }
+        if ("Unary_Pred".equals(ln)) {
+            return findFunctionArrowRhsForVariable0(firstPredChild(pred), varName);
+        }
+        if ("Binary_Pred".equals(ln)) {
+            Element[] pair = twoDirectPredChildren(pred);
+            if (pair[0] != null) {
+                Element f = findFunctionArrowRhsForVariable0(pair[0], varName);
+                if (f != null) {
+                    return f;
+                }
+            }
+            if (pair[1] != null) {
+                return findFunctionArrowRhsForVariable0(pair[1], varName);
+            }
+        }
+        return null;
+    }
+
+    private static boolean isColonTypingComparison(Element cmp) {
+        String op = cmp.getAttribute("op");
+        return op != null && ":".equals(op.trim());
+    }
+
     private static Element firstPredChild(Element parent) {
         NodeList nl = parent.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
