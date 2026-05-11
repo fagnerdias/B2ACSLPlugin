@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -340,6 +341,7 @@ public final class B2ACSLPipeline {
             replaceEnsuresGhostVarWithAssignsInMerged(mergedCode);
             addParenthesesToGhostInitialisationCall(mergedCode);
             placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
+            liftPureGhostEnsuresToOperationContracts(mergedCode);
             reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
             appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
 
@@ -779,6 +781,89 @@ public final class B2ACSLPipeline {
             return lineStart < 0 ? 0 : lineStart + 1;
         }
         return -1;
+    }
+
+    /**
+     * Para operações cujo contrato ghost não altera variáveis abstratas
+     * ({@code assigns \nothing;}), remove o bloco ghost e injeta os seus
+     * {@code ensures} no contrato normal da operação imediatamente adjacente.
+     */
+    private static void liftPureGhostEnsuresToOperationContracts(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        Pattern ghostThenNormalBeforeDefinition =
+                Pattern.compile(
+                        "(?s)"
+                                + "(/\\*@\\s*ghost\\b[\\s\\S]*?\\*/\\s*)"
+                                + "(/\\*@(?!\\s*(?:ghost|axiomatic)\\b)[\\s\\S]*?\\*/\\s*)"
+                                + "(void\\s+[A-Za-z_]\\w*__([A-Za-z_]\\w*)\\s*\\([^;{}]*\\)\\s*\\{)");
+        Pattern pureGhostAssignsNothing =
+                Pattern.compile("(?m)^\\s*/?@\\s*assigns\\s+\\\\nothing\\s*;");
+        Pattern ghostEnsureLine = Pattern.compile("(?m)^\\s*@\\s*ensures\\s+(.+?)\\s*;\\s*$");
+
+        Matcher m = ghostThenNormalBeforeDefinition.matcher(content);
+        StringBuilder sb = new StringBuilder();
+        Set<String> liftedOps = new LinkedHashSet<>();
+        while (m.find()) {
+            String ghostBlock = m.group(1);
+            String normalContract = m.group(2);
+            String functionDef = m.group(3);
+            String opSuffix = m.group(4);
+
+            if (!pureGhostAssignsNothing.matcher(ghostBlock).find()) {
+                m.appendReplacement(sb, Matcher.quoteReplacement(m.group()));
+                continue;
+            }
+
+            Matcher em = ghostEnsureLine.matcher(ghostBlock);
+            List<String> ensuresToLift = new ArrayList<>();
+            while (em.find()) {
+                ensuresToLift.add(em.group(1).trim());
+            }
+            if (ensuresToLift.isEmpty()) {
+                m.appendReplacement(sb, Matcher.quoteReplacement(normalContract + functionDef));
+                continue;
+            }
+
+            int contractEnd = normalContract.lastIndexOf("*/");
+            if (contractEnd < 0) {
+                m.appendReplacement(sb, Matcher.quoteReplacement(normalContract + functionDef));
+                continue;
+            }
+
+            StringBuilder liftedEnsures = new StringBuilder();
+            for (String ensure : ensuresToLift) {
+                liftedEnsures.append("  @ ensures ").append(ensure).append(";\n");
+            }
+            String mergedContract =
+                    normalContract.substring(0, contractEnd)
+                            + liftedEnsures
+                            + normalContract.substring(contractEnd);
+            liftedOps.add(opSuffix);
+            m.appendReplacement(sb, Matcher.quoteReplacement(mergedContract + functionDef));
+        }
+        m.appendTail(sb);
+        String rewritten = sb.toString();
+        for (String opSuffix : liftedOps) {
+            rewritten = removeGhostCallFromMergedCode(rewritten, opSuffix);
+        }
+        Files.writeString(mergedC, rewritten, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Remove do merge a chamada de anotação ghost
+     * (ex.: {@code slash-star-at ghost op(...); star-slash}) referente à própria operação quando
+     * o contrato ghost foi incorporado ao contrato normal.
+     */
+    private static String removeGhostCallFromMergedCode(String content, String opSuffix) {
+        if (content == null || content.isEmpty() || opSuffix == null || opSuffix.isBlank()) {
+            return content;
+        }
+        Pattern ghostCall =
+                Pattern.compile(
+                        "/\\*@\\s*ghost\\s+"
+                                + Pattern.quote(opSuffix)
+                                + "\\s*\\([^;{}]*\\)\\s*;\\s*\\*/\\s*");
+        return ghostCall.matcher(content).replaceAll("");
     }
 
     /**
