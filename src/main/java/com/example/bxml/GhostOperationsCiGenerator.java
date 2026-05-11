@@ -429,7 +429,7 @@ public final class GhostOperationsCiGenerator {
                 "        logic DRelation<A, B> domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
         sb.append("        logic DRelation<integer, A> dummy_list_to_function<A>(\\list<A> l);\n\n");
         sb.append("        logic DRelation<integer, integer> dummy_array_to_function(int *x, integer length);\n");
-        sb.append("        logic DRelation<integer, integer> dummy_is_total_function(dummy_Function_int_int f, DSet<integer> X, DSet<integer> Y);\n");
+        sb.append("        predicate dummy_is_total_function(dummy_Function_int_int f, DSet<integer> X, DSet<integer> Y);\n");
         sb.append("    }\n*/\n");
         return sb.toString();
     }
