@@ -7,6 +7,50 @@ Projeto de exemplo estruturado com Maven para:
 - Build de executável nativo com **GraalVM Native Image**
 - Geração de instalador com **jpackage** (Linux/macOS/Windows)
 
+## Clonar o repositório
+
+O plugin depende da biblioteca ACSL em `src/main/resources/lib`, registrada como submódulo Git apontando para [ACSL2BMethodLib](https://github.com/fagnerdias/ACSL2BMethodLib).
+
+Clone o repositório principal já trazendo o submódulo:
+
+```bash
+git clone --recurse-submodules git@github.com:fagnerdias/B2ACSLPlugin.git
+cd B2ACSLPlugin
+```
+
+Se o repositório já foi clonado sem `--recurse-submodules`, inicialize o submódulo depois:
+
+```bash
+git submodule update --init --recursive
+```
+
+## Atualizar o projeto
+
+Para atualizar o repositório principal e o commit fixado do submódulo:
+
+```bash
+git pull
+git submodule update --init --recursive
+```
+
+Para buscar a versão mais recente da biblioteca no remoto do submódulo:
+
+```bash
+git submodule update --remote src/main/resources/lib
+```
+
+Revise as alterações em `src/main/resources/lib` antes de fixar um novo commit do submódulo no repositório principal.
+
+### Biblioteca ACSL no classpath
+
+O submódulo preenche `src/main/resources/lib` com o repositório completo da ACSL2BMethodLib. O plugin carrega as funções ACSL diretamente de `src/main/resources/lib/B2ACSLLib` no classpath.
+
+O mapa de dependências entre símbolos da biblioteca fica em `src/main/resources/b2acsl/symbol_dependency_map.json` e pode ser regenerado com:
+
+```bash
+python3 scripts/generate_acsl_symbol_dependency_map.py
+```
+
 ## Pré-requisitos
 
 - **JDK 21+** (inclui `jpackage`)
@@ -31,6 +75,8 @@ Se você pretende gerar o executável nativo:
 
 - `src/main/java/com/example/Main.java`: exemplo lendo `example.xml` do classpath
 - `src/main/resources/example.xml`: XML de exemplo
+- `src/main/resources/lib/`: submódulo Git com a biblioteca ACSL2BMethodLib (`B2ACSLLib/`)
+- `src/main/resources/b2acsl/symbol_dependency_map.json`: mapa de dependências entre símbolos da biblioteca
 - `pom.xml`: compiler Java 21, Shade (Uber-JAR) e GraalVM Native Image plugin
 - `Makefile`: automações `build-jar`, `build-native`, `build-installer`, `clean`
 

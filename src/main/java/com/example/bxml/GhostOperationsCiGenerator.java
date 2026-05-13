@@ -423,7 +423,7 @@ public final class GhostOperationsCiGenerator {
         sb.append("        predicate equals<A,B>(A a, B b);\n");
         sb.append("        logic A set_union<A, B>(A a, B b);\n");
         sb.append("        logic integer card<A>(A a);\n");
-        sb.append("        logic DSet<integer> singleton<A>(A a);\n");
+        sb.append("        logic DSet<integer> dummy_singleton<A>(A a);\n");
         sb.append("        predicate is_finite<A>(A a);\n");
         sb.append(
                 "        logic DRelation<A, B> domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");

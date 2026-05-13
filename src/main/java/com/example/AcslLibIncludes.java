@@ -18,31 +18,32 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Detecta símbolos da {@code ACSL_Lib} no texto ACSL gerado e produz linhas {@code include "..."}
- * para os ficheiros correspondentes em {@code src/main/resources/ACSL_Lib}. Usos de {@code NAT},
- * {@code NAT1} ou {@code BOOL} como identificadores incluem {@code set_functions/variables.acsl}.
- * O operador lógico {@code \\length} (E-ACSL) sobre {@code \\list} não confunde com
- * {@code length} da {@code sequence_functions/length.acsl} (sequência como função int → int).
+ * Detecta símbolos da {@code B2ACSLLib} no texto ACSL gerado e produz linhas {@code include "..."}
+ * para os ficheiros correspondentes. Toda a resolução de dependências é feita exclusivamente a
+ * partir de {@code src/main/resources/b2acsl/symbol_dependency_map.json} (gerado por
+ * {@code scripts/generate_acsl_symbol_dependency_map.py}) via {@link AcslLibSymbolDependencyMap}.
+ *
+ * <p>Para cada símbolo {@code s} presente no texto da especificação gerada,
+ * {@link AcslLibSymbolDependencyMap#directIncludeClosureForSymbol(String)} devolve o fecho
+ * transitivo de ficheiros da biblioteca necessários (includes explícitos + dependências implícitas
+ * detectadas pelo script Python). Símbolos sobrecarregados (ex.: {@code first}, {@code ran},
+ * {@code equals}) têm todos os seus ficheiros definidores incluídos — são sobrecargas de tipo
+ * distintas e coexistem sem conflito em ACSL.
+ *
+ * <p>Usos de {@code NAT}, {@code NAT1} ou {@code BOOL} como identificadores incluem
+ * {@code set_functions/variables.acsl}.
  *
  * <p>Propriedades opcionais (JVM / {@code META-INF/b2acsl.properties}):
  * <ul>
- *   <li>{@code b2acsl.acslLibIncludeBase} — caminho até à pasta que contém {@code set_functions/},
- *       etc.</li>
+ *   <li>{@code b2acsl.acslLibIncludeBase} — caminho até à pasta que contém {@code set_functions/}.</li>
  *   <li>{@code b2acsl.acslLibIncludeMiddle} — segmento opcional (ex. {@code import}).</li>
- *   <li>{@code b2acsl.acslLibSourceDir} — raiz no disco com o mesmo layout que {@code ACSL_Lib}
- *       (para {@code cp} e fecho transitivo sem JAR).</li>
- *   <li>{@code b2acsl.targetAcslDir} — pasta sob {@code user.dir} onde espelhar especificação e
- *       {@code import/} (default: {@code target/b2acsl-acsl}).</li>
+ *   <li>{@code b2acsl.acslLibSourceDir} — raiz no disco com o mesmo layout que {@code B2ACSLLib}.</li>
+ *   <li>{@code b2acsl.targetAcslDir} — pasta de saída (default: {@code target/b2acsl-acsl}).</li>
  * </ul>
  *
- * <p>O bloco {@code include} inserido na <strong>especificação {@code .acsl} gerada</strong> lista o
- * fecho transitivo dos ficheiros da lib (ordem estável com {@link #FILE_ORDER} quando aplicável), exceto
- * ficheiros em pastas {@code *_axioms/} — esses entram apenas via {@code include} nos ficheiros-pai na
- * cópia {@code import/}; {@link #copyReferencedLibraryFiles} continua a materializar todos os ficheiros
- * necessários.
- *
- * <p>Os ficheiros são também copiados para junto do {@code .acsl} e para {@code b2acsl.targetAcslDir}.
- * Com ficheiros no disco, usa-se {@code cp}; em fallback (só classpath/JAR), usa-se {@link Files#copy}.
+ * <p>O bloco {@code include} inserido na especificação lista o fecho transitivo dos ficheiros da lib
+ * (ordem estável com {@link #FILE_ORDER}), exceto ficheiros em pastas {@code *_axioms/} — esses
+ * entram apenas via {@code include} nos ficheiros-pai na cópia {@code import/}.
  */
 public final class AcslLibIncludes {
 
@@ -50,67 +51,29 @@ public final class AcslLibIncludes {
 
     /** Ficheiros da lib que não devem aparecer no bloco include do .acsl gerado. */
     private static final Set<String> OMIT_FROM_EMITTED_SPEC_INCLUDES =
-            Set.of(
-                    "function_functions/singleton.acsl",
-                    "sequence_functions/list_to_function.acsl",
-                    "sequence_functions/function_to_list.acsl");
+            Set.of("function_functions/singleton.acsl");
 
     private static final Pattern INCLUDE_IN_LIB =
             Pattern.compile("include\\s+\"([^\"]+)\"\\s*;", Pattern.MULTILINE);
 
-    /** Primeiro bloco {@code axiomatic Name} num ficheiro da ACSL_Lib (ex.: {@code set_belongs}, {@code range_function}). */
     private static final Pattern FIRST_AXIOMATIC_NAME_IN_LIB_FILE =
             Pattern.compile("axiomatic\\s+(\\w+)\\s*\\{");
 
-    /** Raiz da {@code ACSL_Lib}: tipos {@code Set}, {@code Tuple}, relações indexadas (sempre antes dos outros includes). */
+    /** {@code types.acsl} — tipos base {@code Set}, {@code Tuple}, {@code Relation}, {@code Function}. */
     private static final String TYPES_LIB_REL = "types.acsl";
 
-    /** Conjuntos globais {@code NAT}, {@code NAT1}, {@code BOOL} ({@code set_functions/variables.acsl}). */
+    /** Conjuntos globais {@code NAT}, {@code NAT1}, {@code BOOL}. */
     private static final String VARIABLES_LIB_REL = "set_functions/variables.acsl";
 
-    /**
-     * Referências a identificadores {@code NAT}, {@code NAT1} ou {@code BOOL} (não parte de nomes mais longos).
-     */
     private static final Pattern GLOBAL_SET_CONSTANT_ID =
             Pattern.compile("(?<![A-Za-z0-9_])(?:NAT1|NAT|BOOL)(?![A-Za-z0-9_])");
 
     /**
-     * Símbolo ACSL (nome antes de '(') → caminho relativo dentro de ACSL_Lib (usa '/').
-     */
-    private static final Map<String, String> SYMBOL_TO_FILE = Map.ofEntries(
-            Map.entry("belongs", "set_functions/belongs.acsl"),
-            Map.entry("not_belongs", "set_functions/belongs.acsl"),
-            Map.entry("inclusion", "set_functions/inclusion.acsl"),
-            Map.entry("set_union", "set_functions/union.acsl"),            
-            Map.entry("empty", "set_functions/empty.acsl"),
-            Map.entry("card", "set_functions/card.acsl"),
-            Map.entry("is_finite", "set_functions/finite.acsl"),
-            Map.entry("disjoint", "set_functions/disjoint.acsl"),
-            Map.entry("intersection", "set_functions/intersection.acsl"),
-            Map.entry("difference", "set_functions/difference.acsl"),
-            Map.entry("pair", "set_functions/pair.acsl"),
-            Map.entry("is_pow_of", "set_functions/pow.acsl"),
-            Map.entry("equals", "set_functions/equals.acsl"),
-            Map.entry("cartesian_product", "set_functions/cartesian_product.acsl"),
-            Map.entry("dom", "relation_functions/domain.acsl"),
-            Map.entry("relation_inverse", "relation_functions/inverse.acsl"),
-            Map.entry("domain_restriction", "relation_functions/domain_restriction.acsl"),
-            Map.entry("range_restriction", "relation_functions/range_restriction.acsl"),
-            Map.entry("front", "sequence_functions/front.acsl"),
-            Map.entry("iSeq", "sequence_functions/iseq.acsl"),
-            Map.entry("is_seq_of", "sequence_functions/is_seq_of.acsl"),
-            Map.entry("last", "sequence_functions/last.acsl"),
-            Map.entry("list_to_function", "sequence_functions/mapping_functions.acsl"),
-            Map.entry("function_to_list", "sequence_functions/mapping_functions.acsl"),
-            Map.entry("array_to_function", "function_functions/array_to_function.acsl"),
-            Map.entry("function_apply", "function_functions/apply.acsl"),
-            Map.entry("is_total_function", "function_functions/is_total.acsl"));
-
-    /**
-     * Ordem dos {@code include} para {@code set_functions/} (dependências lógicas da ACSL_Lib), depois
-     * relações e sequências.
+     * Ordem preferida dos {@code include} para o {@code .acsl} gerado: dependências lógicas
+     * da {@code B2ACSLLib} (tuple → set → relation → function → sequence).
      */
     private static final List<String> FILE_ORDER = List.of(
+            "types.acsl",
             "tuple_functions/tuple_couple.acsl",
             "tuple_functions/accessors.acsl",
             "tuple_functions/equals.acsl",
@@ -128,25 +91,40 @@ public final class AcslLibIncludes {
             "set_functions/finite.acsl",
             "set_functions/equals.acsl",
             "set_functions/cartesian_product.acsl",
-            "set_functions/disjoint.acsl",            
+            "set_functions/disjoint.acsl",
+            "relation_functions/singleton.acsl",
             "relation_functions/domain.acsl",
             "relation_functions/range.acsl",
+            "relation_functions/inverse.acsl",
+            "relation_functions/apply.acsl",
+            "relation_functions/domain_restriction.acsl",
+            "relation_functions/range_restriction.acsl",
             "function_functions/is_function.acsl",
+            "function_functions/is_function_of.acsl",
             "function_functions/is_partial.acsl",
             "function_functions/is_total.acsl",
             "function_functions/apply.acsl",
-            "function_functions/array_to_function.acsl",            
-            "relation_functions/inverse.acsl",
-            "relation_functions/domain_restriction.acsl",
-            "relation_functions/range_restriction.acsl",
+            "function_functions/is_injective.acsl",
+            "function_functions/is_surjective.acsl",
+            "function_functions/is_bijective.acsl",
+            "function_functions/becomes_element_of.acsl",
+            "function_functions/array_to_function.acsl",
+            "sequence_functions/first.acsl",
             "sequence_functions/front.acsl",
-            "sequence_functions/iseq.acsl",
-            "sequence_functions/is_seq_of.acsl",
+            "sequence_functions/is_sequence.acsl",
             "sequence_functions/length.acsl",
-            "sequence_functions/is_sequence.acsl",            
+            "sequence_functions/function_to_list.acsl",
+            "sequence_functions/get.acsl",
+            "sequence_functions/is_seq_of.acsl",
+            "sequence_functions/range.acsl",
+            "sequence_functions/iseq.acsl",
             "sequence_functions/last.acsl",
-            "sequence_functions/mapping_functions.acsl",            
-            "sequence_functions/range.acsl");
+            "sequence_functions/list_to_function.acsl",
+            "sequence_functions/restrict_front.acsl",
+            "sequence_functions/restrict_tail.acsl",
+            "sequence_functions/tail.acsl",
+            "sequence_axioms/utils_axioms.acsl"
+    );
 
     public static String formatIncludeBlock(String acslText) {
         return formatIncludeBlock(acslText, null);
@@ -154,8 +132,8 @@ public final class AcslLibIncludes {
 
     /**
      * Como {@link #formatIncludeBlock(String)}, mas concatena {@code extraTextForSymbolScan} só para
-     * detetar símbolos da ACSL_Lib (includes e {@link #copyReferencedLibraryFiles}); esse texto não
-     * entra no ficheiro gerado.
+     * detetar símbolos da biblioteca (includes e {@link #copyReferencedLibraryFiles}); esse texto
+     * não entra no ficheiro gerado.
      */
     public static String formatIncludeBlock(String acslText, String extraTextForSymbolScan) {
         List<String> lines = collectIncludeLines(acslText, extraTextForSymbolScan);
@@ -169,9 +147,7 @@ public final class AcslLibIncludes {
     }
 
     /**
-     * Caminhos relativos na {@code ACSL_Lib} no fecho transitivo de {@code include}, com as mesmas
-     * sementes que {@link #copyReferencedLibraryFiles} (tipos + ficheiros deduzidos do texto +
-     * {@code extraTextForSymbolScan}).
+     * Caminhos relativos na {@code B2ACSLLib} no fecho transitivo de {@code include}.
      */
     public static Set<String> transitiveLibRelativePathsForScan(String acslText, String extraTextForSymbolScan)
             throws IOException {
@@ -189,9 +165,9 @@ public final class AcslLibIncludes {
     }
 
     /**
-     * Símbolos da biblioteca mapeados em {@link #SYMBOL_TO_FILE} cujo ficheiro está no fecho
-     * {@link #transitiveLibRelativePathsForScan(String, String)}. Inclui {@code ran} quando entra
-     * {@code sequence_functions/range.acsl} ou {@code relation_functions/range.acsl}.
+     * Símbolos da biblioteca conhecidos cujo ficheiro definidor está no fecho transitivo calculado
+     * por {@link #transitiveLibRelativePathsForScan}. Usa {@link AcslLibSymbolDependencyMap} para
+     * o mapeamento file → symbols.
      */
     public static Set<String> allowedLibSymbolsForTransitiveIncludes(
             String acslText, String extraTextForSymbolScan) throws IOException {
@@ -199,22 +175,20 @@ public final class AcslLibIncludes {
         if (paths.isEmpty()) {
             return Set.of();
         }
+        AcslLibSymbolDependencyMap m = AcslLibSymbolDependencyMap.instance();
         Set<String> out = new LinkedHashSet<>();
-        for (Map.Entry<String, String> e : SYMBOL_TO_FILE.entrySet()) {
-            if (paths.contains(e.getValue())) {
-                out.add(e.getKey());
+        for (String sym : m.allKnownSymbols()) {
+            String defFile = m.definingFile(sym);
+            if (defFile != null && paths.contains(defFile)) {
+                out.add(sym);
             }
-        }
-        if (paths.contains("sequence_functions/range.acsl") || paths.contains("relation_functions/range.acsl")) {
-            out.add("ran");
         }
         return out;
     }
 
     /**
-     * Nomes dos blocos {@code axiomatic} definidos nos ficheiros de {@link #FILE_ORDER} (funções /
-     * predicados da biblioteca), na mesma ordem que os {@code include} da lib — para reordenar o merge
-     * Frama-C.
+     * Nomes dos blocos {@code axiomatic} definidos nos ficheiros de {@link #FILE_ORDER},
+     * na mesma ordem que os {@code include} da lib.
      */
     public static List<String> orderedLibFunctionAxiomaticNames() throws IOException {
         List<String> names = new ArrayList<>();
@@ -233,10 +207,8 @@ public final class AcslLibIncludes {
     }
 
     /**
-     * Copia a biblioteca referenciada (fecho transitivo de {@code include} dentro de {@code ACSL_Lib})
-     * para {@code generatedAcslFile.getParent()/…} e espelha o mesmo em {@link #resolveTargetAcslStagingRoot()}.
-     * Se o diretório de saída do {@code .acsl} não for o alvo, copia também o ficheiro de especificação
-     * para o alvo (com {@code cp} quando aplicável).
+     * Copia a biblioteca referenciada (fecho transitivo de {@code include}) para
+     * {@code generatedAcslFile.getParent()/…} e espelha em {@link #resolveTargetAcslStagingRoot()}.
      */
     public static void copyReferencedLibraryFiles(String acslText, Path generatedAcslFile)
             throws IOException {
@@ -244,8 +216,7 @@ public final class AcslLibIncludes {
     }
 
     /**
-     * @param extraTextForSymbolScan texto extra (ex. {@code ensures} omitidos do contrato) só para
-     *     descobrir ficheiros da lib a copiar
+     * @param extraTextForSymbolScan texto extra só para descobrir ficheiros da lib a copiar
      */
     public static void copyReferencedLibraryFiles(
             String acslText, Path generatedAcslFile, String extraTextForSymbolScan) throws IOException {
@@ -332,9 +303,8 @@ public final class AcslLibIncludes {
     }
 
     /**
-     * Ordena o fecho transitivo para emissão no {@code .acsl}: {@link #TYPES_LIB_REL} primeiro, depois
-     * entradas de {@link #FILE_ORDER} presentes no fecho, depois o restante na ordem do BFS em
-     * {@link #transitiveAcslLibPaths}.
+     * Ordena o fecho transitivo para emissão: {@link #TYPES_LIB_REL} primeiro, depois entradas de
+     * {@link #FILE_ORDER} presentes no fecho, depois o restante na ordem do BFS.
      */
     private static List<String> mergeTransitiveIncludesForEmit(List<String> transitiveBfsOrder) {
         LinkedHashSet<String> present = new LinkedHashSet<>(transitiveBfsOrder);
@@ -356,8 +326,8 @@ public final class AcslLibIncludes {
     }
 
     /**
-     * Para o texto da especificação gerada: não emitir {@code include "…​_axioms/…​"} — esses axiomas já
-     * são puxados pelos {@code include} relativos dentro dos ficheiros de funções/definições.
+     * Não emite {@code include "…_axioms/…"} na especificação gerada — esses axiomas são puxados
+     * pelos {@code include} relativos dentro dos ficheiros de funções/definições.
      */
     private static List<String> omitAxiomFolderIncludesFromEmittedSpec(List<String> relPaths) {
         List<String> out = new ArrayList<>(relPaths.size());
@@ -371,7 +341,7 @@ public final class AcslLibIncludes {
         return out;
     }
 
-    /** {@code true} para caminhos sob {@code *_axioms/} na ACSL_Lib (ex. {@code set_axioms/card_axioms.acsl}). */
+    /** {@code true} para caminhos sob {@code *_axioms/} na B2ACSLLib. */
     static boolean isUnderLibAxiomFolder(String relativeLibPath) {
         if (relativeLibPath == null || relativeLibPath.isBlank()) {
             return false;
@@ -379,22 +349,33 @@ public final class AcslLibIncludes {
         return relativeLibPath.replace('\\', '/').contains("_axioms/");
     }
 
+    /**
+     * Resolve os caminhos relativos de ficheiros da biblioteca necessários para o texto ACSL dado.
+     * Usa exclusivamente o {@link AcslLibSymbolDependencyMap} (gerado a partir da análise da
+     * {@code B2ACSLLib}); não contém casos especiais por símbolo.
+     */
     private static List<String> orderedLibRelativePaths(String acslText) {
+        AcslLibSymbolDependencyMap m = AcslLibSymbolDependencyMap.instance();
         LinkedHashSet<String> files = new LinkedHashSet<>();
-        for (Map.Entry<String, String> e : SYMBOL_TO_FILE.entrySet()) {
-            if (containsSymbolCall(acslText, e.getKey())) {
-                files.add(e.getValue());
+
+        if (m.isLoaded()) {
+            for (String sym : m.allKnownSymbols()) {
+                if (containsSymbolCall(acslText, sym)) {
+                    files.addAll(m.directIncludeClosureForSymbol(sym));
+                }
             }
         }
-        addRangeIncludesForRan(acslText, files);
-        addIsTotalFunctionLibIncludes(acslText, files);
-        addIsSequenceLibIncludes(acslText, files);
-        addArrayToFunctionLibIncludes(acslText, files);
-        addDependencyMapIncludes(acslText, files);
-        removeSpuriousSequenceFirstInclude(acslText, files);
+
         if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
             files.add(VARIABLES_LIB_REL);
         }
+
+        if (files.isEmpty()) return List.of();
+
+        files.add(TYPES_LIB_REL);
+
+        Path diskRoot = resolveAcslLibRootOnDisk();
+        files.removeIf(rel -> !libFileExists(diskRoot, rel));
         if (files.isEmpty()) return List.of();
 
         List<String> ordered = new ArrayList<>();
@@ -405,97 +386,6 @@ public final class AcslLibIncludes {
             if (!ordered.contains(f)) ordered.add(f);
         }
         return List.copyOf(ordered);
-    }
-
-    /**
-     * B {@code ran} traduz-se para {@code ran(...)} em ACSL: há duas libs homónimas —
-     * {@code relation_functions/range.acsl} ({@code ran(Relation_*)}) e
-     * {@code sequence_functions/range.acsl} ({@code ran(\list<...>)}).
-     */
-    /**
-     * Acrescenta ficheiros da {@code ACSL_Lib} segundo {@link AcslLibSymbolDependencyMap}: para cada
-     * símbolo da biblioteca presente no texto, inclui o fecho transitivo de dependências de símbolo e de
-     * {@code include} (ex.: {@code dom} → {@code couple} → {@code tuple_functions/tuple_couple.acsl}).
-     */
-    private static void addDependencyMapIncludes(String acslText, LinkedHashSet<String> files) {
-        AcslLibSymbolDependencyMap m = AcslLibSymbolDependencyMap.instance();
-        if (!m.isLoaded()) {
-            return;
-        }
-        for (String sym : m.allKnownSymbols()) {
-            if (containsSymbolCall(acslText, sym)) {
-                files.addAll(m.transitiveLibRelativePathsForSymbol(sym));
-            }
-        }
-    }
-
-    /**
-     * Evita incluir o {@code first} de listas quando a especificação não usa explicitamente
-     * {@code first(...)}; esse include pode surgir por sobrecarga do nome {@code first} no mapa de
-     * dependências (versão de tuplos).
-     */
-    private static void removeSpuriousSequenceFirstInclude(String acslText, LinkedHashSet<String> files) {
-        if (containsSymbolCall(acslText, "first")) {
-            return;
-        }
-        files.remove("sequence_functions/first.acsl");
-    }
-
-    /**
-     * {@code is_total_function} depende de predicados noutros ficheiros da lib sem cadeia de
-     * {@code include} explícita entre axiomatics.
-     */
-    private static void addIsTotalFunctionLibIncludes(String acslText, LinkedHashSet<String> files) {
-        if (!containsSymbolCall(acslText, "is_total_function")) {
-            return;
-        }
-        files.add("relation_functions/domain.acsl");
-        files.add("relation_functions/range.acsl");
-        files.add("set_functions/inclusion.acsl");
-        files.add("set_functions/equals.acsl");
-        files.add("tuple_functions/tuple_couple.acsl");
-        files.add("function_functions/is_function.acsl");
-        files.add("function_functions/is_partial.acsl");
-        files.add("function_functions/is_total.acsl");
-    }
-
-    /**
-     * {@code array_to_function} usa {@code function_apply} nos axiomas; garante {@code apply.acsl}
-     * na lista de includes quando o texto referencia {@code array_to_function}, alinhado ao mapa JSON.
-     */
-    private static void addArrayToFunctionLibIncludes(String acslText, LinkedHashSet<String> files) {
-        if (!containsSymbolCall(acslText, "array_to_function")) {
-            return;
-        }
-        files.add("function_functions/apply.acsl");
-    }
-
-    /**
-     * {@code is_sequence} é definido por axiomas que usam {@code is_functional}; garante o include
-     * de {@code function_functions/is_function.acsl} na geração da especificação.
-     */
-    private static void addIsSequenceLibIncludes(String acslText, LinkedHashSet<String> files) {
-        if (!containsSymbolCall(acslText, "is_sequence")) {
-            return;
-        }
-        files.add("function_functions/is_function.acsl");
-    }
-
-    private static void addRangeIncludesForRan(String acslText, LinkedHashSet<String> files) {
-        if (!containsSymbolCall(acslText, "ran")) {
-            return;
-        }
-        boolean listCase = acslText.contains("\\list<");
-        boolean relationCase = acslText.contains("Relation_");
-        if (listCase) {
-            files.add("sequence_functions/range.acsl");
-        }
-        if (relationCase) {
-            files.add("relation_functions/range.acsl");
-        }
-        if (!listCase && !relationCase) {
-            files.add("relation_functions/range.acsl");
-        }
     }
 
     private static List<String> transitiveAcslLibPaths(Path diskRoot, List<String> seeds)
@@ -555,15 +445,15 @@ public final class AcslLibIncludes {
     }
 
     private static InputStream openClasspathAcslLib(String rel) {
-        String slash = "/ACSL_Lib/" + rel;
+        String slash = B2AcslLibraryPaths.classpathResource(rel);
         InputStream in = AcslLibIncludes.class.getResourceAsStream(slash);
         if (in != null) return in;
         ClassLoader tccl = Thread.currentThread().getContextClassLoader();
         if (tccl != null) {
-            in = tccl.getResourceAsStream("ACSL_Lib/" + rel);
+            in = tccl.getResourceAsStream(B2AcslLibraryPaths.classpathResourceStreamName(rel));
             if (in != null) return in;
         }
-        return ClassLoader.getSystemResourceAsStream("ACSL_Lib/" + rel);
+        return ClassLoader.getSystemResourceAsStream(B2AcslLibraryPaths.classpathResourceStreamName(rel));
     }
 
     private static void materializeLibFile(String rel, Path dest, Path diskRoot) throws IOException {
@@ -575,7 +465,7 @@ public final class AcslLibIncludes {
         }
         try (InputStream in = openClasspathAcslLib(rel)) {
             if (in == null) {
-                System.err.println("[B2ACSL] ACSL_Lib em falta no classpath: " + rel);
+                System.err.println("[B2ACSL] B2ACSLLib em falta no classpath: " + rel);
                 return;
             }
             Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
@@ -591,7 +481,6 @@ public final class AcslLibIncludes {
         }
     }
 
-    /** Invoca {@code cp origem destino} (Linux/macOS). */
     private static void runCp(Path absoluteSrc, Path absoluteDest) throws IOException {
         ProcessBuilder pb =
                 new ProcessBuilder(
@@ -637,11 +526,7 @@ public final class AcslLibIncludes {
                 return x;
             }
         }
-        Path dev =
-                Path.of(System.getProperty("user.dir", "."))
-                        .resolve("src/main/resources/ACSL_Lib")
-                        .toAbsolutePath()
-                        .normalize();
+        Path dev = B2AcslLibraryPaths.devRoot();
         if (Files.isDirectory(dev.resolve("set_functions"))) {
             return dev;
         }
@@ -698,9 +583,8 @@ public final class AcslLibIncludes {
     }
 
     /**
-     * Identifica chamadas {@code symbol(} da ACSL_Lib no texto. Tratamento especial: {@code length}
-     * da biblioteca (sequência vista como função) não deve confundir-se com o operador E-ACSL
-     * {@code \\length(...)} sobre {@code \\list}.
+     * Identifica chamadas {@code symbol(} no texto. O operador E-ACSL {@code \\length(...)} sobre
+     * {@code \\list} não é confundido com {@code length} da biblioteca (sequência como função).
      */
     private static boolean containsSymbolCall(String text, String symbol) {
         if ("length".equals(symbol)) {
@@ -713,7 +597,7 @@ public final class AcslLibIncludes {
 
     /**
      * {@code true} se existir {@code length(} como símbolo da lib; {@code false} para apenas
-     * {@code \\length(} (comprimento de lista em lógica ACSL, sem {@code sequence_functions/length.acsl}).
+     * {@code \\length(} (comprimento de lista em lógica ACSL).
      */
     private static boolean containsLibraryLengthCall(String text) {
         if (text == null || text.isEmpty()) {
@@ -728,5 +612,19 @@ public final class AcslLibIncludes {
             return true;
         }
         return false;
+    }
+
+    /** Mapeia ficheiros de biblioteca para seus símbolos (reverse de {@code symbol_to_defining_file}). */
+    @SuppressWarnings("unused")
+    static Map<String, List<String>> buildFileToSymbolsMap() {
+        AcslLibSymbolDependencyMap m = AcslLibSymbolDependencyMap.instance();
+        java.util.LinkedHashMap<String, List<String>> out = new java.util.LinkedHashMap<>();
+        for (String sym : m.allKnownSymbols()) {
+            String f = m.definingFile(sym);
+            if (f != null) {
+                out.computeIfAbsent(f, k -> new ArrayList<>()).add(sym);
+            }
+        }
+        return out;
     }
 }

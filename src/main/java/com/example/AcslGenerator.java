@@ -32,7 +32,8 @@ import com.example.bxml.BxmlTranslateContext;
 import com.example.model.Machine;
 
 /**
- * Gera arquivos ACSL a partir de BXML e funções da biblioteca {@code ACSL_Lib} em {@code src/main/resources/ACSL_Lib}.
+ * Gera arquivos ACSL a partir de BXML e funções da biblioteca {@code B2ACSLLib} em
+ * {@code src/main/resources/lib/B2ACSLLib}.
  *
  * <p>Refinamentos e implementações com {@code <Abstraction>…</Abstraction>} <strong>não</strong> geram
  * {@code .acsl} próprio; os blocos {@code axiomatic} (compreensões) e {@code predicate} (invariantes)
@@ -187,7 +188,7 @@ public final class AcslGenerator {
         StringBuilder sb = new StringBuilder();
         sb.append("/* ACSL gerado a partir de ").append(baseName).append(".bxml (BXML 1.0) */\n");
         sb.append(
-                "/* Biblioteca ACSL_Lib: includes gerados automaticamente (AcslLibIncludes); "
+                "/* Biblioteca B2ACSLLib: includes gerados automaticamente (AcslLibIncludes); "
                         + "opções: b2acsl.acslLibIncludeBase, b2acsl.acslLibIncludeMiddle. */\n\n");
         int headerLen = sb.length();
 

@@ -42,8 +42,8 @@ public final class B2ACSLPipeline {
     /** Marca o bloco {@code axiomatic new_types} importado (ex. de {@code types.acsl}). */
     private static final String AXIOMATIC_NEW_TYPES_MARKER = "axiomatic new_types";
 
-    /** Lemas admitidos da ACSL_Lib (anexados ao fim do merge Frama-C). */
-    private static final String ACSL_LIB_LEMMAS_RESOURCE = "/ACSL_Lib/lemmas.acsl";
+    /** Lemas admitidos da B2ACSLLib (anexados ao fim do merge Frama-C). */
+    private static final String ACSL_LIB_LEMMAS_RESOURCE = B2AcslLibraryPaths.classpathResource("lemmas.acsl");
 
     private static final boolean MOCK_MODE = isMockEnabled();
 
@@ -1091,11 +1091,7 @@ public final class B2ACSLPipeline {
                 return Optional.of(new String(in.readAllBytes(), StandardCharsets.UTF_8));
             }
         }
-        Path dev =
-                Path.of(System.getProperty("user.dir", "."))
-                        .resolve("src/main/resources/ACSL_Lib/lemmas.acsl")
-                        .toAbsolutePath()
-                        .normalize();
+        Path dev = B2AcslLibraryPaths.devRoot().resolve("lemmas.acsl");
         if (Files.isRegularFile(dev)) {
             return Optional.of(Files.readString(dev, StandardCharsets.UTF_8));
         }

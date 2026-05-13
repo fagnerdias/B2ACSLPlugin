@@ -17,37 +17,45 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Mapa de dependências entre símbolos da {@code ACSL_Lib} (funções/predicados {@code logic}/{@code
- * predicate}), gerado por {@code scripts/generate_acsl_symbol_dependency_map.py} para o ficheiro
- * {@code ACSL_Lib/symbol_dependency_map.json}.
+ * Mapa de dependências entre símbolos da {@code B2ACSLLib} (funções/predicados {@code logic}/{@code
+ * predicate}), gerado por {@code scripts/generate_acsl_symbol_dependency_map.py}.
  *
- * <p><b>Semântica:</b> o símbolo {@code A} depende diretamente de {@code B} se o texto agregado do
- * ficheiro que define {@code A} mais os seus {@code include} transitivos contiver uma chamada
- * {@code B(}. Dependências são apenas entre nomes também declarados na biblioteca (lista
- * {@code symbols} no JSON).
+ * <p><b>Semântica do grafo {@code includes_from}:</b> contém tanto os {@code include "..."} explícitos
+ * dos ficheiros da biblioteca como arestas implícitas adicionadas automaticamente pelo script Python
+ * para ficheiros de axiomas que usam símbolos cujos ficheiros definidores não estão no fecho
+ * explícito (ex.: {@code relation_axioms/relation_apply.acsl} → {@code tuple_functions/accessors.acsl}
+ * porque o axioma chama {@code second(t)} sobre um {@code Tuple}).
  *
- * <p>Uso típico para includes: dado um símbolo usado na especificação, {@link
- * #transitiveLibRelativePathsForSymbol(String)} devolve os caminhos relativos (ex.
+ * <p>O campo {@code symbol_to_all_files} (mapa 1:N) regista todos os ficheiros que declaram um
+ * símbolo, suportando sobrecarga por tipo (ex.: {@code first} existe tanto em
+ * {@code sequence_functions/first.acsl} como em {@code tuple_functions/accessors.acsl}).
+ * {@link #directIncludeClosureForSymbol(String)} usa todos os ficheiros definidores para garantir
+ * que todas as sobrecargas estão disponíveis.
+ *
+ * <p>Uso típico: dado um símbolo usado na especificação, {@link
+ * #directIncludeClosureForSymbol(String)} devolve os caminhos relativos (ex.
  * {@code relation_functions/domain.acsl}, {@code tuple_functions/tuple_couple.acsl}) necessários —
- * ficheiro definidor de cada símbolo na {@linkplain #transitiveDependencySymbols(String) fecho
- * transitivo de símbolos} mais o fecho transitivo do grafo {@code includes_from} no JSON.
+ * fecho transitivo do grafo {@code includes_from} a partir de cada ficheiro definidor do símbolo.
  */
 public final class AcslLibSymbolDependencyMap {
 
-    private static final String RESOURCE = "/ACSL_Lib/symbol_dependency_map.json";
+    private static final String RESOURCE = B2AcslLibraryPaths.SYMBOL_DEPENDENCY_MAP_RESOURCE;
 
     private static volatile AcslLibSymbolDependencyMap instance;
 
     private final Map<String, List<String>> dependencies;
     private final Map<String, String> symbolToDefiningFile;
+    private final Map<String, List<String>> symbolToAllFiles;
     private final Map<String, List<String>> includesFrom;
 
     private AcslLibSymbolDependencyMap(
             Map<String, List<String>> dependencies,
             Map<String, String> symbolToDefiningFile,
+            Map<String, List<String>> symbolToAllFiles,
             Map<String, List<String>> includesFrom) {
         this.dependencies = dependencies;
         this.symbolToDefiningFile = symbolToDefiningFile;
+        this.symbolToAllFiles = symbolToAllFiles;
         this.includesFrom = includesFrom;
     }
 
@@ -100,6 +108,7 @@ public final class AcslLibSymbolDependencyMap {
         return out;
     }
 
+    /** Ficheiro canónico (primeira declaração) para o símbolo, ou {@code null} se não encontrado. */
     public String definingFile(String symbol) {
         if (symbol == null) {
             return null;
@@ -108,17 +117,67 @@ public final class AcslLibSymbolDependencyMap {
     }
 
     /**
-     * Caminhos relativos na {@code ACSL_Lib} necessários para o símbolo e todas as suas dependências
-     * transitivas de símbolo, mais todos os ficheiros alcançados por {@code include "..."} a partir
-     * desses ficheiros.
+     * Todos os ficheiros que declaram o símbolo (incluindo sobrecargas).
+     * Para símbolos não sobrecarregados, lista com um único elemento.
+     */
+    public List<String> allFilesForSymbol(String symbol) {
+        if (symbol == null) {
+            return List.of();
+        }
+        List<String> all = symbolToAllFiles.get(symbol);
+        if (all != null && !all.isEmpty()) {
+            return List.copyOf(all);
+        }
+        String canonical = symbolToDefiningFile.get(symbol);
+        return canonical != null ? List.of(canonical) : List.of();
+    }
+
+    /**
+     * Fecho transitivo do grafo {@code includes_from} a partir de todos os ficheiros que declaram
+     * o símbolo. Inclui sobrecargas: para {@code first}, retorna o fecho de
+     * {@code sequence_functions/first.acsl} e de {@code tuple_functions/accessors.acsl}.
+     */
+    public Set<String> directIncludeClosureForSymbol(String symbol) {
+        if (symbol == null || symbol.isBlank()) {
+            return Set.of();
+        }
+        List<String> defs = allFilesForSymbol(symbol);
+        if (defs.isEmpty()) {
+            return Set.of();
+        }
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String f : defs) {
+            out.addAll(transitiveIncludeClosureFromFile(f));
+        }
+        return out;
+    }
+
+    /**
+     * União de {@link #directIncludeClosureForSymbol(String)} para cada símbolo.
+     */
+    public Set<String> directIncludeClosureForSymbols(Collection<String> symbols) {
+        if (symbols == null || symbols.isEmpty()) {
+            return Set.of();
+        }
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String symbol : symbols) {
+            if (symbol != null && !symbol.isBlank()) {
+                out.addAll(directIncludeClosureForSymbol(symbol));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * União de {@link #directIncludeClosureForSymbol} para cada símbolo, expandindo também as
+     * dependências de símbolo transitivas (útil para resolução completa via grafo de símbolos).
      */
     public Set<String> transitiveLibRelativePathsForSymbol(String symbol) {
         return transitiveLibRelativePathsForSymbols(List.of(symbol));
     }
 
     /**
-     * União de {@link #transitiveLibRelativePathsForSymbol(String)} para cada símbolo (útil quando o
-     * texto ACSL usa vários símbolos da lib).
+     * União de {@link #transitiveLibRelativePathsForSymbol(String)} para cada símbolo.
      */
     public Set<String> transitiveLibRelativePathsForSymbols(Collection<String> symbols) {
         if (symbols == null || symbols.isEmpty()) {
@@ -130,21 +189,14 @@ public final class AcslLibSymbolDependencyMap {
                 symClosure.addAll(transitiveDependencySymbols(s));
             }
         }
-        LinkedHashSet<String> seedFiles = new LinkedHashSet<>();
-        for (String s : symClosure) {
-            String f = definingFile(s);
-            if (f != null && !f.isBlank()) {
-                seedFiles.add(f.replace('\\', '/'));
-            }
-        }
         LinkedHashSet<String> out = new LinkedHashSet<>();
-        for (String f : seedFiles) {
-            out.addAll(transitiveIncludeClosureFromFile(f));
+        for (String s : symClosure) {
+            out.addAll(directIncludeClosureForSymbol(s));
         }
         return out;
     }
 
-    /** Fecho transitivo do grafo direto {@code includes_from[f]} (aresta = include no ficheiro). */
+    /** Fecho transitivo do grafo {@code includes_from} a partir de um ficheiro. */
     public Set<String> transitiveIncludeClosureFromFile(String relativeLibPath) {
         String start = relativeLibPath == null ? "" : relativeLibPath.replace('\\', '/');
         if (start.isBlank()) {
@@ -184,15 +236,16 @@ public final class AcslLibSymbolDependencyMap {
             JsonNode root = om.readTree(in);
             Map<String, List<String>> deps = parseStringListMap(root.path("dependencies"));
             Map<String, String> symFile = parseStringStringMap(root.path("symbol_to_defining_file"));
+            Map<String, List<String>> allFiles = parseStringListMap(root.path("symbol_to_all_files"));
             Map<String, List<String>> inc = parseStringListMap(root.path("includes_from"));
-            return new AcslLibSymbolDependencyMap(deps, symFile, inc);
+            return new AcslLibSymbolDependencyMap(deps, symFile, allFiles, inc);
         } catch (IOException e) {
             return empty();
         }
     }
 
     private static AcslLibSymbolDependencyMap empty() {
-        return new AcslLibSymbolDependencyMap(Map.of(), Map.of(), Map.of());
+        return new AcslLibSymbolDependencyMap(Map.of(), Map.of(), Map.of(), Map.of());
     }
 
     private static Map<String, List<String>> parseStringListMap(JsonNode node) {
