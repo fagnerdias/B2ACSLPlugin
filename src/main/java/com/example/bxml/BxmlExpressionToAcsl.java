@@ -251,10 +251,27 @@ public final class BxmlExpressionToAcsl {
         return "->".equals(o) || "-&gt;".equals(o);
     }
 
+    /**
+     * Constantes nomeadas do B que não existem como símbolos ACSL — traduzem-se para literais
+     * {@code integer} compatíveis com {@code int} de 32 bits ({@code INT_MAX} / {@code INT_MIN}),
+     * coerentes com o limite superior de {@code NAT} usado na lib de exemplos
+     * ({@code 2147483647} em {@code Deck/code_commented.c}).
+     */
+    static String translateBNamedConstant(String id) {
+        if (id == null) {
+            return "";
+        }
+        return switch (id.trim()) {
+            case "MAXINT" -> "2147483647"; // INT_MAX (32-bit int)
+            case "MININT" -> "-2147483648"; // INT_MIN (32-bit int)
+            default -> id;
+        };
+    }
+
     public static String translate(Element exp, BxmlTranslateContext ctx) {
         String ln = exp.getLocalName();
         return switch (ln) {
-            case "Id" -> exp.getAttribute("value");
+            case "Id" -> translateBNamedConstant(exp.getAttribute("value"));
             case "Integer_Literal" -> exp.getAttribute("value");
             case "Boolean_Literal" -> exp.getAttribute("value");
             case "EmptySet" -> translateEmptySet(exp, ctx.types());
