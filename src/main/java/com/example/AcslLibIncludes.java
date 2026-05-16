@@ -165,6 +165,38 @@ public final class AcslLibIncludes {
     }
 
     /**
+     * Caminhos relativos na {@code B2ACSLLib} necessários para a especificação, na ordem de emissão
+     * ({@link #TYPES_LIB_REL}, {@link #FILE_ORDER}, fecho transitivo de {@code include}).
+     */
+    public static List<String> orderedLibPathsForSpecification(String acslText, String extraTextForSymbolScan)
+            throws IOException {
+        String scan = acslText == null ? "" : acslText;
+        if (extraTextForSymbolScan != null && !extraTextForSymbolScan.isBlank()) {
+            scan = scan + "\n" + extraTextForSymbolScan;
+        }
+        List<String> seeds = orderedLibRelativePaths(scan);
+        if (seeds.isEmpty()) {
+            return List.of();
+        }
+        List<String> seedsWithTypes = new ArrayList<>(seeds.size() + 1);
+        seedsWithTypes.add(TYPES_LIB_REL);
+        seedsWithTypes.addAll(seeds);
+        Path diskRoot = resolveAcslLibRootOnDisk();
+        List<String> transitive = transitiveAcslLibPaths(diskRoot, seedsWithTypes);
+        return mergeTransitiveIncludesForEmit(transitive);
+    }
+
+    /** Conteúdo de um ficheiro da {@code B2ACSLLib} (disco ou classpath). */
+    public static String readLibFileContent(String relativeLibPath) throws IOException {
+        if (relativeLibPath == null || relativeLibPath.isBlank()) {
+            return "";
+        }
+        Path diskRoot = resolveAcslLibRootOnDisk();
+        String text = readAcslLibText(diskRoot, relativeLibPath.replace('\\', '/'));
+        return text == null ? "" : text;
+    }
+
+    /**
      * Símbolos da biblioteca conhecidos cujo ficheiro definidor está no fecho transitivo calculado
      * por {@link #transitiveLibRelativePathsForScan}. Usa {@link AcslLibSymbolDependencyMap} para
      * o mapeamento file → symbols.

@@ -175,6 +175,18 @@ public final class B2ACSLPipeline {
                 break;
             }
 
+            // Step 2.1: Lista de tipos utilizados na especificação (.acsl + ghost_operations.ci + BXML)
+            List<Element> abstractMachineRoots = new ArrayList<>();
+            for (MachineFile mf : machines) {
+                Element machineRoot = AcslGenerator.parseMachineElement(mf.bxmlPath());
+                if (AcslGenerator.getAbstractionReferenceName(machineRoot).isPresent()) {
+                    continue;
+                }
+                abstractMachineRoots.add(machineRoot);
+            }
+            List<String> specificationUsedTypes =
+                    writeSpecificationTypesList(acslDir, cDir, acslFiles, abstractMachineRoots);
+
             List<Path> cFiles = findCFiles(cDir);
 
             if (cFiles.isEmpty() && !MOCK_MODE) {
@@ -187,7 +199,7 @@ public final class B2ACSLPipeline {
             if (MOCK_MODE) {
                 framaResult = runMockFramaC(acslFiles, cFiles, cDir);
             } else {
-                framaResult = runFramaC(acslFiles, cFiles, cDir);
+                framaResult = runFramaC(acslFiles, cFiles, cDir, specificationUsedTypes);
             }
 
             // Step 4: Retornar valor para Atelier B
@@ -254,6 +266,43 @@ public final class B2ACSLPipeline {
         }
     }
 
+    /**
+     * Passo 2.1: identifica tipos ACSL e tipos B ({@code TypeInfos}) usados na especificação e grava
+     * {@link SpecificationTypesCollector#OUTPUT_FILE_NAME} em {@code acslDir} e em {@code cDir}.
+     */
+    private static List<String> writeSpecificationTypesList(
+            Path acslDir,
+            Path cDir,
+            List<Path> acslFiles,
+            List<Element> abstractMachineRoots)
+            throws IOException {
+        List<String> specTexts = new ArrayList<>();
+        for (Path p : acslFiles) {
+            if (Files.isRegularFile(p)) {
+                specTexts.add(Files.readString(p, StandardCharsets.UTF_8));
+            }
+        }
+        Path ghostCi = GhostOperationsCiGenerator.targetPath(cDir);
+        if (Files.isRegularFile(ghostCi)) {
+            specTexts.add(Files.readString(ghostCi, StandardCharsets.UTF_8));
+        }
+        List<String> types =
+                SpecificationTypesCollector.collectUsedTypes(specTexts, abstractMachineRoots);
+        Path typesInAcslDir = acslDir.resolve(SpecificationTypesCollector.OUTPUT_FILE_NAME);
+        SpecificationTypesCollector.writeTypesList(typesInAcslDir, types);
+        Path typesInCDir = cDir.resolve(SpecificationTypesCollector.OUTPUT_FILE_NAME);
+        if (!typesInCDir.toAbsolutePath().normalize().equals(typesInAcslDir.toAbsolutePath().normalize())) {
+            SpecificationTypesCollector.writeTypesList(typesInCDir, types);
+        }
+        if (KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank()) {
+            System.out.println("[B2ACSL] Tipos da especificação: " + typesInAcslDir);
+            if (!typesInAcslDir.equals(typesInCDir)) {
+                System.out.println("  (cópia em " + typesInCDir + ")");
+            }
+        }
+        return types;
+    }
+
     /** Saída gerada pelo Frama-C {@code -print} no mesmo diretório — não é ficheiro-fonte. */
     private static final String MERGED_CODE_FILE_NAME = "merged_code.c";
 
@@ -276,7 +325,12 @@ public final class B2ACSLPipeline {
         return 0;
     }
 
-    private static int runFramaC(List<Path> acslFiles, List<Path> cFiles, Path cDir) throws IOException, InterruptedException {
+    private static int runFramaC(
+            List<Path> acslFiles,
+            List<Path> cFiles,
+            Path cDir,
+            List<String> specificationUsedTypes)
+            throws IOException, InterruptedException {
         if (cFiles.isEmpty()) return 0;
 
         String acslPath = acslFiles.stream()
@@ -344,6 +398,10 @@ public final class B2ACSLPipeline {
             liftPureGhostEnsuresToOperationContracts(mergedCode);
             reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
             appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
+            SpecificationAxiomaticInstantiator.monomorphizeGenericAcslBlocks(
+                    mergedCode, specificationUsedTypes);
+            SpecificationAxiomaticInstantiator.renameParameterizedTypesToConcrete(
+                    mergedCode, specificationUsedTypes);
 
             // frama-c -wp merged_code.c -wp-prover CVC5 --wp-smoke-tests -wp-rte -wp-status
             ProcessBuilder wpPb =
