@@ -42,6 +42,10 @@ public final class B2ACSLPipeline {
     /** Marca o bloco {@code axiomatic new_types} importado (ex. de {@code types.acsl}). */
     private static final String AXIOMATIC_NEW_TYPES_MARKER = "axiomatic new_types";
 
+    /** Primeira utilização da lib {@code list_to_function(} (não {@code dummy_list_to_function}). */
+    private static final Pattern LIST_TO_FUNCTION_LIB_CALL =
+            Pattern.compile("(?<![A-Za-z0-9_])list_to_function\\s*\\(");
+
     /** Lemas admitidos da B2ACSLLib (anexados ao fim do merge Frama-C). */
     private static final String ACSL_LIB_LEMMAS_RESOURCE = B2AcslLibraryPaths.classpathResource("lemmas.acsl");
 
@@ -402,6 +406,8 @@ public final class B2ACSLPipeline {
                     mergedCode, specificationUsedTypes);
             SpecificationAxiomaticInstantiator.renameParameterizedTypesToConcrete(
                     mergedCode, specificationUsedTypes);
+            SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
+            ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
 
             // frama-c -wp merged_code.c -wp-prover CVC5 --wp-smoke-tests -wp-rte -wp-status
             ProcessBuilder wpPb =
@@ -414,7 +420,7 @@ public final class B2ACSLPipeline {
                             "-wp-smoke-tests",
                             "-wp-rte",
                             "-wp-timeout",
-                            "30",
+                            "100",
                             "-wp-status");
             wpPb.directory(cDir.toFile());
             wpPb.inheritIO();
@@ -1589,6 +1595,88 @@ public final class B2ACSLPipeline {
             i = lineEnd;
         }
         return s.length();
+    }
+
+    /**
+     * Após monomorfização / renomeações, o Frama-C pode deixar
+     * {@code axiomatic sequence_list_to_function…} depois de blocos (ex.
+     * {@code sequence_utils_axioms}) que já chamam {@code list_to_function(}. Este passo move a
+     * declaração (e {@code sequence_list_to_function_axioms…}) para imediatamente antes do primeiro
+     * {@code list_to_function(} real, ou após {@code new_types} se não houver uso.
+     */
+    private static void ensureSequenceListToFunctionDeclBeforeFirstUse(Path mergedC) throws IOException {
+        if (!Files.isRegularFile(mergedC)) {
+            return;
+        }
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        String updated = ensureSequenceListToFunctionDeclBeforeFirstUseInString(content);
+        if (!updated.equals(content)) {
+            Files.writeString(mergedC, updated, StandardCharsets.UTF_8);
+        }
+    }
+
+    private static String ensureSequenceListToFunctionDeclBeforeFirstUseInString(String content) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        List<AcsCommentSpan> declOnly = new ArrayList<>();
+        List<AcsCommentSpan> axiomOnly = new ArrayList<>();
+        for (AcsCommentSpan sp : spans) {
+            if (sp.axiomaticName == null) {
+                continue;
+            }
+            String n = sp.axiomaticName;
+            if (n.startsWith("sequence_list_to_function_axioms")) {
+                axiomOnly.add(sp);
+            } else if (n.equals("sequence_list_to_function") || n.startsWith("sequence_list_to_function_")) {
+                declOnly.add(sp);
+            }
+        }
+        List<AcsCommentSpan> toMove = new ArrayList<>(declOnly.size() + axiomOnly.size());
+        declOnly.sort(Comparator.comparingInt(s -> s.start));
+        axiomOnly.sort(Comparator.comparingInt(s -> s.start));
+        toMove.addAll(declOnly);
+        toMove.addAll(axiomOnly);
+        if (toMove.isEmpty()) {
+            return content;
+        }
+
+        List<AcsCommentSpan> removeOrder = new ArrayList<>(toMove);
+        removeOrder.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String cut = content;
+        for (AcsCommentSpan sp : removeOrder) {
+            cut = cut.substring(0, sp.start) + cut.substring(sp.end);
+        }
+
+        Matcher use = LIST_TO_FUNCTION_LIB_CALL.matcher(cut);
+        int insertAt;
+        if (use.find()) {
+            int at = use.start();
+            insertAt = cut.lastIndexOf("/*@", at);
+            if (insertAt < 0) {
+                insertAt = findInsertAfterNewTypesBlockEnd(cut);
+            }
+        } else {
+            insertAt = findInsertAfterNewTypesBlockEnd(cut);
+        }
+        if (insertAt < 0) {
+            insertAt = findPreambleInsertIndex(cut);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        for (AcsCommentSpan sp : toMove) {
+            sb.append(sp.text);
+        }
+        return cut.substring(0, insertAt) + sb + cut.substring(insertAt);
+    }
+
+    /** Índice imediatamente após o span {@code axiomatic new_types} (ou primeiro {@code /*@}). */
+    private static int findInsertAfterNewTypesBlockEnd(String cut) {
+        List<AcsCommentSpan> ss = findAllAcsCommentSpans(cut);
+        for (AcsCommentSpan sp : ss) {
+            if ("new_types".equals(sp.axiomaticName)) {
+                return sp.end;
+            }
+        }
+        return findPreambleInsertIndex(cut);
     }
 
     private static void deleteRecursive(Path dir) {

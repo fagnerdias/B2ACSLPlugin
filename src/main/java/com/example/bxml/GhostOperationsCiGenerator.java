@@ -543,10 +543,22 @@ public final class GhostOperationsCiGenerator {
         return "DSet<integer>";
     }
 
+    /** Igualdade {@code <var> == <rhs>} com {@code <var>} abstrata (pós-estado: {@code dummy_<var>}, não {@code \\old}). */
+    private static final Pattern GHOST_ENSURE_SIMPLE_ABS_VAR_EQ =
+            Pattern.compile("^([A-Za-z_]\\w*)\\s*==\\s*(.+)$", Pattern.DOTALL);
+
     /** Traduz {@code equals(ss, …)} para o universo {@code dummy_*} com {@code \\old} no RHS. */
     private static String toGhostEnsure(String translatedEnsure, Set<String> abstractVars) {
         String s = translatedEnsure.trim();
         if (!s.startsWith("equals(")) {
+            Matcher simpleEq = GHOST_ENSURE_SIMPLE_ABS_VAR_EQ.matcher(s);
+            if (simpleEq.matches()) {
+                String lhs = simpleEq.group(1);
+                String rhs = simpleEq.group(2).trim();
+                if (abstractVars.contains(lhs)) {
+                    return "dummy_" + lhs + " == " + rewriteAbstractIdsWithOld(rhs, abstractVars);
+                }
+            }
             return rewriteAbstractIdsWithOld(s, abstractVars);
         }
         int open = s.indexOf('(');
@@ -717,9 +729,15 @@ public final class GhostOperationsCiGenerator {
         if (expr == null) {
             return null;
         }
-        Matcher m = Pattern.compile("^\\\\old\\(dummy_(\\w+)\\)$").matcher(expr.trim());
-        if (m.matches()) {
-            return m.group(1);
+        String t = expr.trim();
+        Matcher mOld = Pattern.compile("^\\\\old\\(dummy_(\\w+)\\)$").matcher(t);
+        if (mOld.matches()) {
+            return mOld.group(1);
+        }
+        // Pós-estado ghost: toGhostEnsure produz dummy_<seq> == list_to_function((…))
+        Matcher mDummy = Pattern.compile("^dummy_(\\w+)$").matcher(t);
+        if (mDummy.matches()) {
+            return mDummy.group(1);
         }
         return null;
     }
@@ -1742,6 +1760,7 @@ public final class GhostOperationsCiGenerator {
     private record GhostOp(
             String cName, List<Param> params, Set<String> assignsAbstract, List<String> ghostEnsures) {
 
+        /** Formato aceite pelo pré-processamento Frama-C em {@code .ci}: primeira cláusula {@code /@ assigns}. */
         String format() {
             StringBuilder sb = new StringBuilder();
             sb.append("/*@ ghost\n");
@@ -1757,9 +1776,9 @@ public final class GhostOperationsCiGenerator {
             }
             sb.append(";\n");
             for (String e : ghostEnsures) {
-                sb.append("   @ ensures ").append(e).append(";\n");
+                sb.append("  @ ensures ").append(e).append(";\n");
             }
-            sb.append("   @/\n");
+            sb.append("    @/\n");
             sb.append("  void ").append(cName).append("(").append(formatParams()).append(");\n");
             sb.append("*/\n\n");
             return sb.toString();

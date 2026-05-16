@@ -25,8 +25,11 @@ import java.util.regex.Pattern;
  *
  * <p>Para cada símbolo {@code s} presente no texto da especificação gerada,
  * {@link AcslLibSymbolDependencyMap#directIncludeClosureForSymbol(String)} devolve o fecho
- * transitivo de ficheiros da biblioteca necessários (includes explícitos + dependências implícitas
- * detectadas pelo script Python). Símbolos sobrecarregados (ex.: {@code first}, {@code ran},
+ * transitivo de ficheiros da biblioteca necessários (includes explícitos no ficheiro definidor).
+ * Em seguida, {@link AcslLibSymbolDependencyMap#transitiveLibRelativePathsForSymbols(java.util.Collection)}
+ * expande com o grafo {@code dependencies} do JSON, para símbolos usados apenas no corpo de
+ * predicados sem {@code include} correspondente (ex.: {@code is_total_function} →
+ * {@code is_partial_function}, {@code equals}). Símbolos sobrecarregados (ex.: {@code first}, {@code ran},
  * {@code equals}) têm todos os seus ficheiros definidores incluídos — são sobrecargas de tipo
  * distintas e coexistem sem conflito em ACSL.
  *
@@ -391,10 +394,18 @@ public final class AcslLibIncludes {
         LinkedHashSet<String> files = new LinkedHashSet<>();
 
         if (m.isLoaded()) {
+            LinkedHashSet<String> foundSymbols = new LinkedHashSet<>();
             for (String sym : m.allKnownSymbols()) {
                 if (containsSymbolCall(acslText, sym)) {
+                    foundSymbols.add(sym);
                     files.addAll(m.directIncludeClosureForSymbol(sym));
                 }
+            }
+            // Corpos de predicados/funções da lib referenciam outros símbolos sem include explícito
+            // no ficheiro (ex.: is_total.acsl → is_partial_function, equals(...)). O grafo
+            // "dependencies" + transitiveLibRelativePathsForSymbols cobre esses ficheiros.
+            if (!foundSymbols.isEmpty()) {
+                files.addAll(m.transitiveLibRelativePathsForSymbols(foundSymbols));
             }
         }
 

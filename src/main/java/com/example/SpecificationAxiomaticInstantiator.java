@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.MatchResult;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -506,6 +507,54 @@ public final class SpecificationAxiomaticInstantiator {
         content = replaceNewTypesBlock(content, renames, ctx);
 
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Alinha identificadores de tipo “máquina” legados ({@code Function_int_int},
+     * {@code Relation_int_tuple_…}) ao padrão pós-instanciação ({@code Function_integer_integer}),
+     * onde cada segmento {@code int} (tipo B/C {@code int} mapeado para ACSL {@code integer})
+     * passa a {@code integer}.
+     *
+     * <p>Isto corrige texto que ainda referencia nomes gerados pelo {@link GhostOperationsCiGenerator}
+     * ou por camadas antigas, depois de {@link #renameParameterizedTypesToConcrete(Path, List)}.
+     */
+    public static void normalizeLegacyMachineTypeIdentifiers(Path mergedC) throws IOException {
+        if (!Files.isRegularFile(mergedC)) {
+            return;
+        }
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        String updated =
+                LEGACY_MACHINE_TYPE_ID
+                        .matcher(content)
+                        .replaceAll(SpecificationAxiomaticInstantiator::replaceLegacyMachineTypeId);
+        if (!updated.equals(content)) {
+            Files.writeString(mergedC, updated, StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
+     * Identificadores compostos por underscore cujo primeiro construtor é um dos tipos lógicos
+     * usados na B2ACSLLib instanciada (opcionalmente prefixados por {@code dummy_}).
+     */
+    private static final Pattern LEGACY_MACHINE_TYPE_ID =
+            Pattern.compile("(?<![A-Za-z0-9_])((?:dummy_)?(?:Function|Relation|Tuple|Set)(?:_[A-Za-z0-9]+)+)(?![A-Za-z0-9_])");
+
+    private static String replaceLegacyMachineTypeId(MatchResult m) {
+        return normalizeSegmentsIntToInteger(m.group(1));
+    }
+
+    /** Substitui cada segmento exatamente {@code int} por {@code integer} (preserva {@code integer}, {@code interface}, etc.). */
+    static String normalizeSegmentsIntToInteger(String identifier) {
+        if (identifier == null || identifier.isEmpty()) {
+            return "";
+        }
+        String[] parts = identifier.split("_", -1);
+        for (int i = 0; i < parts.length; i++) {
+            if ("int".equals(parts[i])) {
+                parts[i] = "integer";
+            }
+        }
+        return String.join("_", parts);
     }
 
     /**
