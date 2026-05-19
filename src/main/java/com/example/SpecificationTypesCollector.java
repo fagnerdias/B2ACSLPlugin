@@ -198,7 +198,6 @@ public final class SpecificationTypesCollector {
     private static void collectFromMachine(
             Element machineEl, Set<String> acslTypes, Set<String> bxmlEntries) {
         BxmlTypeRegistry registry = BxmlTypeRegistry.fromMachine(machineEl);
-        collectBxmlTypeInfosFromMachine(machineEl, registry, acslTypes, bxmlEntries);
 
         BxmlTranslateContext ctx = BxmlTranslateContext.forMachine(machineEl);
         for (String acsl : BxmlMachineVariables.inferVariableLogicTypes(machineEl, ctx).values()) {
@@ -212,38 +211,6 @@ public final class SpecificationTypesCollector {
         collectTyprefsFromIds(machineEl, "Abstract_Variables", registry, acslTypes, bxmlEntries);
         collectTyprefsFromIds(machineEl, "Concrete_Variables", registry, acslTypes, bxmlEntries);
         collectTyprefsFromIds(machineEl, "Concrete_Constants", registry, acslTypes, bxmlEntries);
-    }
-
-    private static void collectBxmlTypeInfosFromMachine(
-            Element machineEl,
-            BxmlTypeRegistry registry,
-            Set<String> acslTypes,
-            Set<String> bxmlEntries) {
-        NodeList typeInfos = machineEl.getElementsByTagNameNS("*", "TypeInfos");
-        if (typeInfos.getLength() == 0) {
-            return;
-        }
-        Element ti = (Element) typeInfos.item(0);
-        NodeList types = ti.getElementsByTagNameNS("*", "Type");
-        for (int i = 0; i < types.getLength(); i++) {
-            Element t = (Element) types.item(i);
-            String idStr = t.getAttribute("id");
-            if (idStr == null || idStr.isBlank()) {
-                continue;
-            }
-            try {
-                int typref = Integer.parseInt(idStr.trim());
-                String raw = registry.getRawType(typref);
-                if ("UNKNOWN".equals(raw)) {
-                    continue;
-                }
-                String acsl = registry.acslVariableLogicTypeFromTypref(typref);
-                addNormalizedType(acslTypes, acsl);
-                bxmlEntries.add(raw.trim() + "  →  " + acsl.trim());
-            } catch (NumberFormatException ignored) {
-                // skip
-            }
-        }
     }
 
     private static void collectTyprefsFromIds(

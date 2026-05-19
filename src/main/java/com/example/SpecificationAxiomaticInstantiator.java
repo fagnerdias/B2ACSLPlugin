@@ -68,7 +68,7 @@ public final class SpecificationAxiomaticInstantiator {
 
             for (String raw : specTypes) {
                 if (raw == null) continue;
-                String t = raw.trim();
+                String t = normalizeTypeWhitespace(raw.trim());
                 if (t.isBlank() || t.contains("→") || t.startsWith("#")) continue;
 
                 if (t.startsWith("Set<") && t.endsWith(">")) {
@@ -98,8 +98,10 @@ public final class SpecificationAxiomaticInstantiator {
                 }
             }
 
-            // Para cada par (A, B), adiciona Tuple<A, B> como tipo elemento de Set
-            // (Relation<A,B> = Set<Tuple<A,B>>, e os axiomas usam belongs(Tuple<A,B>, ...))
+            // Para cada par (A, B), adiciona Tuple<A, B> como tipo elemento de Set.
+            // Necessário para instanciar axiomas de conjunto puro (belongs, dom, ran, etc.)
+            // com Tuple<A,B> como tipo concreto de A (e.g. belongs_Tuple_integer_integer).
+            // NÃO é usado em axiomas com \list<A> (ver buildSubstitutions).
             Set<String> tupleElems = new LinkedHashSet<>();
             for (List<String> pair : pairs) {
                 if (pair.size() == 2
@@ -158,7 +160,7 @@ public final class SpecificationAxiomaticInstantiator {
                 "(?:Set|\\\\list|Tuple|Relation|Function)<([^<>]+(?:<[^<>]*>)?[^<>]*)>")
                 .matcher(text);
         while (m.find()) {
-            String whole = m.group(0).trim(); // e.g. "Set<integer>" or "Set<Tuple<integer, integer>>"
+            String whole = normalizeTypeWhitespace(m.group(0).trim());
             // Ignora entradas que ainda contêm variáveis de tipo (A, B, C)
             if (containsTypeVariables(whole)) continue;
             extra.add(whole);
@@ -231,39 +233,44 @@ public final class SpecificationAxiomaticInstantiator {
         // Corpo do axiomatic (sem header/footer)
         String body = axiomaticName != null ? stripAxiomaticWrapper(inner, axiomaticName) : inner;
 
-        // Agrupa declarações por aridade de parâmetros de tipo
-        Map<Integer, List<String>> byArity = groupLinesByArity(body);
+        // Processa cada declaração individualmente para que os candidatos de substituição
+        // sejam derivados apenas do conteúdo dessa declaração (e não do grupo inteiro).
+        // Isto evita que list_to_function_nil<A> (com \list<A>) seja instanciado para
+        // Tuple<...> apenas porque outro lema no mesmo axiomatic usa Set<A>.
+        List<List<String>> logicalDecls = splitIntoLogicalDeclarations(body);
 
-        if (byArity.isEmpty() || (byArity.size() == 1 && byArity.containsKey(0))) {
-            return block;
-        }
+        boolean hasAnyGeneric = logicalDecls.stream()
+                .anyMatch(lines -> detectArityFromFullDecl(String.join("\n", lines)) > 0);
 
-        StringBuilder output = new StringBuilder();
+        if (!hasAnyGeneric) return block;
 
-        for (var entry : byArity.entrySet()) {
-            int arity = entry.getKey();
-            if (arity == 0) continue; // declarações não genéricas ignoradas por enquanto
+        StringBuilder combinedBody = new StringBuilder();
 
-            String groupContent = String.join("\n", entry.getValue());
-            List<String> formalParams = detectFormalParams(groupContent, arity);
-            List<List<String>> substitutions = buildSubstitutions(arity, groupContent, ctx);
+        for (List<String> declLines : logicalDecls) {
+            String declContent = String.join("\n", declLines);
+            int arity = detectArityFromFullDecl(declContent);
 
-            if (substitutions.isEmpty()) {
-                // Sem tipos concretos para este arity → omite este grupo de declarações
+            if (arity == 0) {
+                combinedBody.append(declContent).append("\n");
                 continue;
             }
+
+            List<String> formalParams = detectFormalParams(declContent, arity);
+            List<List<String>> substitutions = buildSubstitutions(arity, declContent, ctx);
+
+            if (substitutions.isEmpty()) continue;
 
             boolean multipleSubst = substitutions.size() > 1;
 
             for (List<String> concrete : substitutions) {
                 Map<String, String> subst = buildSubstMap(formalParams, concrete);
                 String suffix = multipleSubst ? buildSuffix(concrete) : "";
-                String instantiated = applySubstitution(groupContent, subst, formalParams, suffix);
-                output.append(wrapAxiomatic(axiomaticName, instantiated, suffix));
+                String instantiated = applySubstitution(declContent, subst, formalParams, suffix);
+                combinedBody.append(instantiated).append("\n");
             }
         }
 
-        return output.isEmpty() ? block : output.toString();
+        return combinedBody.isEmpty() ? block : wrapAxiomatic(axiomaticName, combinedBody.toString(), "");
     }
 
     // ── Agrupamento de declarações por aridade ────────────────────────────────
@@ -276,9 +283,9 @@ public final class SpecificationAxiomaticInstantiator {
             "\\b\\w+(<\\s*[A-Z](?:\\s*,\\s*[A-Z])*\\s*>)\\s*(?=[:(])",
             Pattern.DOTALL);
 
-    /** Padrão de início de nova declaração lógica (predicate / logic / axiom). */
+    /** Padrão de início de nova declaração lógica (predicate / logic / axiom / lemma). */
     private static final Pattern DECL_START = Pattern.compile(
-            "^\\s*(predicate|logic|axiom)\\s+");
+            "^\\s*(?:admit\\s+)?(?:predicate|logic|axiom|lemma)\\s+");
 
     /**
      * Divide o corpo do axiomatic em grupos de linhas, cada grupo pertencendo a uma aridade
@@ -354,9 +361,30 @@ public final class SpecificationAxiomaticInstantiator {
             int arity, String content, MonoContext ctx) {
         if (arity == 1) {
             Set<String> candidates = new LinkedHashSet<>();
-            if (content.contains("Set<A")) candidates.addAll(ctx.setElemTypes());
-            if (content.contains("\\list<A")) candidates.addAll(ctx.listElemTypes());
-            if (candidates.isEmpty()) candidates.addAll(ctx.singleTypes());
+            boolean hasList = content.contains("\\list<A");
+            boolean hasSet  = content.contains("Set<A");
+
+            if (hasList) {
+                // Axiomas/lemas de sequência (têm \list<A>): o parâmetro A é um tipo
+                // de elemento de lista. Usa apenas listElemTypes para não gerar instâncias
+                // para Tuple<...> ou boolean que causam erros de tipo no Frama-C.
+                candidates.addAll(ctx.listElemTypes());
+            } else if (hasSet) {
+                // Axiomas de conjunto puros (Set<A>, sem \list<A>): A pode ser qualquer
+                // elemento de conjunto, incluindo Tuple<...> (e.g. belongs_Tuple_integer_integer
+                // é necessário para os axiomas de relação dom/ran).
+                candidates.addAll(ctx.setElemTypes());
+            } else {
+                // Fallback: axiomas sem Set<A>/\list<A> (e.g. is_sequence_def_B<A>).
+                // Usa listElemTypes para evitar instâncias problemáticas com Tuple/boolean.
+                if (!ctx.listElemTypes().isEmpty()) {
+                    candidates.addAll(ctx.listElemTypes());
+                } else {
+                    ctx.singleTypes().stream()
+                            .filter(t -> !t.startsWith("Tuple<"))
+                            .forEach(candidates::add);
+                }
+            }
             return candidates.stream().map(List::of).toList();
         }
         if (arity == 2) {
@@ -459,6 +487,19 @@ public final class SpecificationAxiomaticInstantiator {
     }
 
     // ── Utilitários ───────────────────────────────────────────────────────────
+
+    /**
+     * Normaliza espaçamento numa expressão de tipo genérico para garantir forma canónica:
+     * sem espaços após {@code <} e antes de {@code >}, vírgula seguida de um espaço.
+     * Exemplo: {@code Tuple<integer,integer>} → {@code Tuple<integer, integer>}.
+     */
+    static String normalizeTypeWhitespace(String type) {
+        if (type == null || type.isBlank()) return type == null ? "" : type;
+        return type
+                .replaceAll("\\s*<\\s*", "<")
+                .replaceAll("\\s*>", ">")
+                .replaceAll("\\s*,\\s*", ", ");
+    }
 
     /** Codifica um conjunto de tipos concretos como sufixo de identificador. */
     private static String buildSuffix(List<String> types) {
@@ -573,18 +614,6 @@ public final class SpecificationAxiomaticInstantiator {
             String a = pair.get(0), b = pair.get(1);
             types.add("Relation<" + a + ", " + b + ">");
             types.add("Function<" + a + ", " + b + ">");
-        }
-
-        // Produto cartesiano dos elementos base (sem Tuple<...>) para cobrir instâncias
-        // geradas pela monomorphização (ex.: Relation<Set<integer>, Set<integer>>).
-        List<String> baseElems = ctx.setElemTypes().stream()
-                .filter(t -> !t.startsWith("Tuple<") && !containsTypeVariables(t))
-                .toList();
-        for (String a : baseElems) {
-            for (String b : baseElems) {
-                types.add("Relation<" + a + ", " + b + ">");
-                types.add("Function<" + a + ", " + b + ">");
-            }
         }
 
         // Ordena do mais longo para o mais curto para evitar substituições parciais
