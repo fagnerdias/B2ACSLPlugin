@@ -2,6 +2,8 @@ package com.example;
 
 import java.io.InputStream;
 import java.io.IOException;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,6 +23,10 @@ import java.util.regex.Pattern;
 import com.example.bxml.BxmlGluingNormalizer;
 import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.model.Machine;
+import com.example.ui.FormalVerificationReportDialog;
+import com.example.ui.VerificationReportData;
+import com.example.ui.WpOptionsDialog;
+import com.example.ui.WpOptionsDialog.WpOptions;
 
 import org.w3c.dom.Element;
 
@@ -200,10 +206,24 @@ public final class B2ACSLPipeline {
 
             // Step 3: Executar Frama-C (acsl-importer + WP)
             int framaResult;
+            String projectName = inferProjectNameFromBdp(bdp);
             if (MOCK_MODE) {
                 framaResult = runMockFramaC(acslFiles, cFiles, cDir);
             } else {
-                framaResult = runFramaC(acslFiles, cFiles, cDir, specificationUsedTypes);
+                WpOptions wpOptions = WpOptionsDialog.promptWpOptions(projectName);
+                if (wpOptions == null) {
+                    System.err.println("[B2ACSL] Execution cancelled by user.");
+                    return 7;
+                }
+                String selectedProjectName = wpOptions.projectName();
+                framaResult =
+                        runFramaC(
+                                acslFiles,
+                                cFiles,
+                                cDir,
+                                specificationUsedTypes,
+                                wpOptions,
+                                selectedProjectName);
             }
 
             // Step 4: Retornar valor para Atelier B
@@ -333,9 +353,13 @@ public final class B2ACSLPipeline {
             List<Path> acslFiles,
             List<Path> cFiles,
             Path cDir,
-            List<String> specificationUsedTypes)
+            List<String> specificationUsedTypes,
+            WpOptions wpOptions,
+            String projectName)
             throws IOException, InterruptedException {
         if (cFiles.isEmpty()) return 0;
+        VerificationReportData reportData = new VerificationReportData();
+        long wpStartNanos = System.nanoTime();
 
         String acslPath = acslFiles.stream()
                 .map(Path::toString)
@@ -416,26 +440,97 @@ public final class B2ACSLPipeline {
                             "-wp",
                             mergedCode.getFileName().toString(),
                             "-wp-prover",
-                            "CVC5",
+                            wpOptions.prover(),
                             "-wp-smoke-tests",
                             "-wp-rte",
                             "-wp-timeout",
-                            "100",
-                            "-wp-status");
+                            Integer.toString(wpOptions.timeoutSeconds()),
+                            wpOptions.outputFlag());
             wpPb.directory(cDir.toFile());
-            wpPb.inheritIO();
+            wpPb.redirectErrorStream(true);
 
-            Process pWp = wpPb.start();
-            boolean wpOk = pWp.waitFor(600, TimeUnit.SECONDS);
-            if (!wpOk) {
-                pWp.destroyForcibly();
+            ProcessResult wpResult = runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS);
+            reportData.absorbOutput(
+                    wpResult.output(), mergedCode.getFileName().toString() + " (" + cFile.getFileName() + ")");
+            if (!wpResult.completed()) {
+                reportData.addTimeout(
+                        "Timeout while executing WP for "
+                                + cFile.getFileName()
+                                + " (600s limit).");
+                showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
                 return 6;
             }
-            if (pWp.exitValue() != 0) {
-                return pWp.exitValue();
+            if (wpResult.exitCode() != 0) {
+                reportData.addFailure(
+                        "WP returned exit code "
+                                + wpResult.exitCode()
+                                + " for "
+                                + cFile.getFileName()
+                                + ".");
+                showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+                return wpResult.exitCode();
             }
         }
+        showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
         return 0;
+    }
+
+    private record ProcessResult(boolean completed, int exitCode, String output) {}
+
+    private static ProcessResult runProcessWithCapturedOutput(
+            ProcessBuilder processBuilder, long timeout, TimeUnit timeoutUnit)
+            throws IOException, InterruptedException {
+        Process process = processBuilder.start();
+        StringBuilder output = new StringBuilder();
+
+        Thread reader =
+                new Thread(
+                        () -> {
+                            try (BufferedReader br =
+                                    new BufferedReader(
+                                            new InputStreamReader(
+                                                    process.getInputStream(), StandardCharsets.UTF_8))) {
+                                String line;
+                                while ((line = br.readLine()) != null) {
+                                    output.append(line).append('\n');
+                                    System.out.println(line);
+                                }
+                            } catch (IOException e) {
+                                output.append("[B2ACSL] Falha ao ler saida do processo: ")
+                                        .append(e.getMessage())
+                                        .append('\n');
+                            }
+                        },
+                        "b2acsl-process-output-reader");
+        reader.setDaemon(true);
+        reader.start();
+
+        boolean completed = process.waitFor(timeout, timeoutUnit);
+        if (!completed) {
+            process.destroyForcibly();
+        }
+
+        reader.join(2000);
+        int exitCode = completed ? process.exitValue() : -1;
+        return new ProcessResult(completed, exitCode, output.toString());
+    }
+
+    private static void showVerificationReport(
+            String projectName, String analyzedFileName, long startNanos, VerificationReportData reportData) {
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        FormalVerificationReportDialog.show(projectName, analyzedFileName, elapsedMs, reportData);
+    }
+
+    private static String inferProjectNameFromBdp(Path bdp) {
+        Path normalized = bdp.toAbsolutePath().normalize();
+        Path name = normalized.getFileName();
+        if (name != null
+                && "bdp".equalsIgnoreCase(name.toString())
+                && normalized.getParent() != null
+                && normalized.getParent().getFileName() != null) {
+            return normalized.getParent().getFileName().toString();
+        }
+        return name != null ? name.toString() : "Project";
     }
 
     /**
