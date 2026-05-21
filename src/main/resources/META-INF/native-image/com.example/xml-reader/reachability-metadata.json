@@ -1,7 +1,10 @@
 {
   "resources": [
     {
-      "glob": "ACSL_Lib/**"
+      "glob": "lib/B2ACSLLib/**"
+    },
+    {
+      "glob": "b2acsl/symbol_dependency_map.json"
     },
     {
       "glob": "META-INF/b2acsl.properties"

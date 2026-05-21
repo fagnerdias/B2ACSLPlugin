@@ -2,7 +2,10 @@
   "resources": {
     "includes": [
       {
-        "pattern": "\\QACSL_Lib/\\E.*"
+        "pattern": "\\Qlib/B2ACSLLib/\\E.*"
+      },
+      {
+        "pattern": "\\Qb2acsl/symbol_dependency_map.json\\E"
       },
       {
         "pattern": "\\QMETA-INF/b2acsl.properties\\E"

@@ -240,7 +240,11 @@ public final class GhostOperationsCiGenerator {
         Set<String> initAssigned = new LinkedHashSet<>();
         collectAssignedAbstractVarsInInit(abstractMachineEl, abstractSet, initAssigned);
         if (!initAssigned.isEmpty() && !initEnsures.isEmpty()) {
-            ops.add(new GhostOp("initialisation", List.of(), initAssigned, initEnsures));
+            List<String> prefixedInitEnsures = new ArrayList<>();
+            for (String e : initEnsures) {
+                prefixedInitEnsures.add(prefixAcslLibFunctionsForGhost(e));
+            }
+            ops.add(new GhostOp("initialisation", List.of(), initAssigned, prefixedInitEnsures));
         }
 
         Element operationsEl = firstChildElement(abstractMachineEl, "Operations");
@@ -263,11 +267,12 @@ public final class GhostOperationsCiGenerator {
                 if (anySub != null) {
                     String forall = BxmlInitialisationTranslator.translateAnySubAsForall(anySub, ctx);
                     if (forall == null || forall.isBlank()) continue;
+                    List<Param> params =
+                            appendOutputParametersAsPointers(listInputParameters(op), op);
                     forall =
                             rewriteAnySubEnsureForGhost(
                                     forall, abstractSet, concreteConstants, op, anySub, ctx);
-                    List<Param> params =
-                            appendOutputParametersAsPointers(listInputParameters(op), op);
+                    forall = castScalarIntGhostParamsInEnsure(forall, params);
                     ops.add(
                             new GhostOp(
                                     sanitizeGhostFunctionName(opName),
@@ -287,6 +292,8 @@ public final class GhostOperationsCiGenerator {
                     String ge = toGhostEnsure(e, abstractSet);
                     ge = rewriteGhostEnsureForListDomainRestriction(
                             ge, op, varTypes, params, ctx, concreteConstants);
+                    ge = prefixAcslLibFunctionsForGhost(ge);
+                    ge = castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
                 if (ghostEnsures.isEmpty()) continue;
@@ -418,15 +425,15 @@ public final class GhostOperationsCiGenerator {
             }
         }
         sb.append("        logic DSet<integer> dummy_NAT;\n\n");
-        sb.append("        logic A empty<A>(A a);\n");
-        sb.append("        predicate belongs<A, B>(A a, B b);\n");
-        sb.append("        predicate equals<A,B>(A a, B b);\n");
-        sb.append("        logic A set_union<A, B>(A a, B b);\n");
-        sb.append("        logic integer card<A>(A a);\n");
-        sb.append("        logic DSet<integer> singleton<A>(A a);\n");
-        sb.append("        predicate is_finite<A>(A a);\n");
+        sb.append("        logic A dummy_empty<A>(A a);\n");
+        sb.append("        predicate dummy_belongs<A, B>(A a, B b);\n");
+        sb.append("        predicate dummy_equals<A,B>(A a, B b);\n");
+        sb.append("        logic A dummy_set_union<A, B>(A a, B b);\n");
+        sb.append("        logic integer dummy_card<A>(A a);\n");
+        sb.append("        logic DSet<integer> dummy_singleton<A>(A a);\n");
+        sb.append("        predicate dummy_is_finite<A>(A a);\n");
         sb.append(
-                "        logic DRelation<A, B> domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
+                "        logic DRelation<A, B> dummy_domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
         sb.append("        logic DRelation<integer, A> dummy_list_to_function<A>(\\list<A> l);\n\n");
         sb.append("        logic DRelation<integer, integer> dummy_array_to_function(int *x, integer length);\n");
         sb.append("        predicate dummy_is_total_function(dummy_Function_int_int f, DSet<integer> X, DSet<integer> Y);\n");
@@ -536,10 +543,22 @@ public final class GhostOperationsCiGenerator {
         return "DSet<integer>";
     }
 
+    /** Igualdade {@code <var> == <rhs>} com {@code <var>} abstrata (pós-estado: {@code dummy_<var>}, não {@code \\old}). */
+    private static final Pattern GHOST_ENSURE_SIMPLE_ABS_VAR_EQ =
+            Pattern.compile("^([A-Za-z_]\\w*)\\s*==\\s*(.+)$", Pattern.DOTALL);
+
     /** Traduz {@code equals(ss, …)} para o universo {@code dummy_*} com {@code \\old} no RHS. */
     private static String toGhostEnsure(String translatedEnsure, Set<String> abstractVars) {
         String s = translatedEnsure.trim();
         if (!s.startsWith("equals(")) {
+            Matcher simpleEq = GHOST_ENSURE_SIMPLE_ABS_VAR_EQ.matcher(s);
+            if (simpleEq.matches()) {
+                String lhs = simpleEq.group(1);
+                String rhs = simpleEq.group(2).trim();
+                if (abstractVars.contains(lhs)) {
+                    return "dummy_" + lhs + " == " + rewriteAbstractIdsWithOld(rhs, abstractVars);
+                }
+            }
             return rewriteAbstractIdsWithOld(s, abstractVars);
         }
         int open = s.indexOf('(');
@@ -710,9 +729,15 @@ public final class GhostOperationsCiGenerator {
         if (expr == null) {
             return null;
         }
-        Matcher m = Pattern.compile("^\\\\old\\(dummy_(\\w+)\\)$").matcher(expr.trim());
-        if (m.matches()) {
-            return m.group(1);
+        String t = expr.trim();
+        Matcher mOld = Pattern.compile("^\\\\old\\(dummy_(\\w+)\\)$").matcher(t);
+        if (mOld.matches()) {
+            return mOld.group(1);
+        }
+        // Pós-estado ghost: toGhostEnsure produz dummy_<seq> == list_to_function((…))
+        Matcher mDummy = Pattern.compile("^dummy_(\\w+)$").matcher(t);
+        if (mDummy.matches()) {
+            return mDummy.group(1);
         }
         return null;
     }
@@ -1096,7 +1121,7 @@ public final class GhostOperationsCiGenerator {
         s = wrapOutputArraysInEquals(s, operation, anySub, ctx, concreteConstantNames);
         s = wrapEqualsForRelationEqualities(s);
         s = dereferenceScalarOutputParams(s, operation);
-        return s;
+        return prefixAcslLibFunctionsForGhost(s);
     }
 
     /**
@@ -1106,6 +1131,7 @@ public final class GhostOperationsCiGenerator {
      */
     private static final Set<String> RELATION_TYPED_FUNCTIONS_GHOST = Set.of(
             "domain_restriction",
+            "dummy_domain_restriction",
             "dummy_list_to_function",
             "dummy_array_to_function",
             "list_to_function",
@@ -1221,7 +1247,18 @@ public final class GhostOperationsCiGenerator {
      * em {@link #formatDummyAxiomatic}); o token é prefixado com {@code dummy_} se ainda não estiver.
      */
     private static final List<String> ACSL_LIB_FUNCTIONS_WITH_DUMMY_PREFIX =
-            List.of("is_total_function", "list_to_function", "array_to_function");
+            List.of(
+                    "empty",
+                    "belongs",
+                    "equals",
+                    "set_union",
+                    "card",
+                    "singleton",
+                    "is_finite",
+                    "domain_restriction",
+                    "is_total_function",
+                    "list_to_function",
+                    "array_to_function");
 
     private static String prefixAcslLibFunctionsForGhost(String text) {
         if (text == null || text.isEmpty()) {
@@ -1423,8 +1460,9 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Tipo C do parâmetro ghost a partir do {@code Precondition} (ex. {@code ee : NAT} → {@code int};
-     * {@code xx : S --> T} → {@code int *}; conjunto de relações {@code POW(A*B)} → {@code int *}).
+     * Tipo C do parâmetro ghost a partir do {@code Precondition} (ex. {@code ee : NAT} →
+     * {@code int}; {@code xx : S --> T} → {@code int *}; relação {@code POW(A*B)} → {@code int *}).
+     * Nos {@code ensures}, escalares {@code int} são convertidos para {@code integer} via cast.
      */
     private static String ghostParamTypeFromPrecondition(Element operation, String paramName) {
         Element pre = firstChildElement(operation, "Precondition");
@@ -1540,8 +1578,8 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Lado direito de {@code v : RHS} no precondition → tipo C do parâmetro (sem tipos lógicos ACSL
-     * como {@code Relation_*}).
+     * Lado direito de {@code v : RHS} no precondition → tipo ACSL do parâmetro em
+     * {@code ghost_operations.ci} (sem tipos lógicos como {@code Relation_*}).
      */
     private static String cGhostParamTypeFromMembershipRhs(Element rhs) {
         if (rhs == null) {
@@ -1588,7 +1626,7 @@ public final class GhostOperationsCiGenerator {
         return null;
     }
 
-    /** Fallback a partir de {@code typref} + {@code TypeInfos}: relações → {@code int *}. */
+    /** Fallback a partir de {@code typref} + {@code TypeInfos}: relações → {@code integer *}. */
     private static String cGhostParamTypeFromTypref(Element operation, Element paramId) {
         Element machine = findAncestorMachine(operation);
         if (machine == null) {
@@ -1626,8 +1664,39 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Declaração de parâmetro C: {@code int *xx} (sem espaço entre {@code *} e o identificador);
-     * escalares mantêm espaço ({@code int ee}).
+     * Em cláusulas {@code ensures} ghost, parâmetros C {@code int} usam-se como {@code (integer)x}
+     * ao serem passados a funções do universo {@code dummy_ghost} (tipos matemáticos ACSL).
+     */
+    private static String castScalarIntGhostParamsInEnsure(String ensure, List<Param> params) {
+        if (ensure == null || ensure.isBlank() || params == null || params.isEmpty()) {
+            return ensure;
+        }
+        List<Param> scalarInts = new ArrayList<>();
+        for (Param p : params) {
+            if (p.type() != null && "int".equals(p.type().trim())) {
+                scalarInts.add(p);
+            }
+        }
+        if (scalarInts.isEmpty()) {
+            return ensure;
+        }
+        scalarInts.sort((a, b) -> Integer.compare(b.name().length(), a.name().length()));
+        String out = ensure;
+        for (Param p : scalarInts) {
+            String name = p.name();
+            out =
+                    out.replaceAll(
+                            "(?<!\\(integer\\)\\s*)(?<![A-Za-z0-9_])"
+                                    + Pattern.quote(name)
+                                    + "\\b",
+                            Matcher.quoteReplacement("(integer)" + name));
+        }
+        return out;
+    }
+
+    /**
+     * Declaração de parâmetro C em {@code ghost_operations.ci}: {@code int *xx} (sem espaço entre
+     * {@code *} e o identificador); escalares mantêm espaço ({@code int ee}).
      */
     private static String formatCParameterDecl(String type, String name) {
         if (type == null || type.isBlank()) {
@@ -1691,6 +1760,7 @@ public final class GhostOperationsCiGenerator {
     private record GhostOp(
             String cName, List<Param> params, Set<String> assignsAbstract, List<String> ghostEnsures) {
 
+        /** Formato aceite pelo pré-processamento Frama-C em {@code .ci}: primeira cláusula {@code /@ assigns}. */
         String format() {
             StringBuilder sb = new StringBuilder();
             sb.append("/*@ ghost\n");
@@ -1706,9 +1776,9 @@ public final class GhostOperationsCiGenerator {
             }
             sb.append(";\n");
             for (String e : ghostEnsures) {
-                sb.append("   @ ensures ").append(e).append(";\n");
+                sb.append("  @ ensures ").append(e).append(";\n");
             }
-            sb.append("   @/\n");
+            sb.append("    @/\n");
             sb.append("  void ").append(cName).append("(").append(formatParams()).append(");\n");
             sb.append("*/\n\n");
             return sb.toString();

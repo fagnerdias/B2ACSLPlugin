@@ -3,7 +3,7 @@
 APP_NAME ?= B2ACSLExec
 MAIN_CLASS ?= com.example.Main
 # Mock: true=simula Frama-C, false=executa Frama-C real (ex.: make build-jar MOCK=false)
-MOCK ?= true
+MOCK ?= false
 
 MVN ?= mvn
 TARGET_DIR := target

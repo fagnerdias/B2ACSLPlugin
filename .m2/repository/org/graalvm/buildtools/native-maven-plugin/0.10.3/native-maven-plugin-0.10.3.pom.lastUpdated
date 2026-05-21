@@ -1,0 +1,4 @@
+#NOTE: This is a Maven Resolver internal implementation file, its format can be changed without prior notice.
+#Mon May 11 11:56:49 CEST 2026
+@default-central-https\://repo.maven.apache.org/maven2/.lastUpdated=1778493409772
+https\://repo.maven.apache.org/maven2/.error=Could not transfer artifact org.graalvm.buildtools\:native-maven-plugin\:pom\:0.10.3 from/to central (https\://repo.maven.apache.org/maven2)\: repo.maven.apache.org\: \u00C9chec temporaire dans la r\u00E9solution du nom
