@@ -91,10 +91,16 @@ public final class SpecificationAxiomaticInstantiator {
                 }
             }
 
-            // Se não existem pares explícitos, deriva de setElemTypes × setElemTypes
+            // Se não existem pares explícitos, deriva de setElemTypes × setElemTypes.
+            // Usa apenas tipos "folha" (sem parâmetros de tipo, i.e. sem '<') para evitar
+            // pares como ["Tuple<integer,integer>","Tuple<integer,integer>"] que emergem quando
+            // o Frama-C já expõe Set<Tuple<A,B>> no output e que não correspondem a nenhuma
+            // relação concreta da especificação.
             if (pairs.isEmpty()) {
                 for (String e : setElem) {
-                    pairs.add(List.of(e, e));
+                    if (!e.contains("<")) {
+                        pairs.add(List.of(e, e));
+                    }
                 }
             }
 
