@@ -19,6 +19,8 @@
     <graalvm.native.plugin.version>0.10.3</graalvm.native.plugin.version>
     <maven.shade.plugin.version>3.6.0</maven.shade.plugin.version>
     <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
+    <maven.antrun.plugin.version>3.1.0</maven.antrun.plugin.version>
+    <graalvm.home>${env.GRAALVM_HOME}</graalvm.home>
   </properties>
 
   <dependencies>
@@ -116,6 +118,106 @@
                 <goals>
                   <goal>compile-no-fork</goal>
                 </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    <profile>
+      <id>native-gui</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.graalvm.buildtools</groupId>
+            <artifactId>native-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>build-native-gui</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>compile-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <imageName>${project.artifactId}</imageName>
+              <mainClass>com.example.Main</mainClass>
+              <buildArgs>
+                <buildArg>-Djava.awt.headless=false</buildArg>
+                <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+              </buildArgs>
+            </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <version>${maven.antrun.plugin.version}</version>
+            <executions>
+              <execution>
+                <id>package-native-gui-dist</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+                <configuration>
+                  <target>
+                    <condition property="resolved.graalvm.home" value="${graalvm.home}" else="${java.home}">
+                      <and>
+                        <isset property="graalvm.home"/>
+                        <not>
+                          <equals arg1="${graalvm.home}" arg2=""/>
+                        </not>
+                      </and>
+                    </condition>
+
+                    <fail message="Could not resolve GraalVM home. Use -Dgraalvm.home=/path/to/graalvm or set GRAALVM_HOME.">
+                      <condition>
+                        <equals arg1="${resolved.graalvm.home}" arg2=""/>
+                      </condition>
+                    </fail>
+
+                    <mkdir dir="${project.build.directory}/dist"/>
+                    <mkdir dir="${project.build.directory}/dist/runtime/lib"/>
+                    <mkdir dir="${project.build.directory}/dist/runtime/lib/server"/>
+
+                    <copy file="${project.build.directory}/${project.artifactId}"
+                          tofile="${project.build.directory}/dist/${project.artifactId}"/>
+
+                    <copy file="${resolved.graalvm.home}/lib/libawt.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/libawt.so"/>
+                    <copy file="${resolved.graalvm.home}/lib/libawt_xawt.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/libawt_xawt.so"/>
+                    <copy file="${resolved.graalvm.home}/lib/libawt_headless.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/libawt_headless.so"/>
+                    <copy file="${resolved.graalvm.home}/lib/libjawt.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/libjawt.so"/>
+                    <copy file="${resolved.graalvm.home}/lib/server/libjvm.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/server/libjvm.so"/>
+
+                    <echo file="${project.build.directory}/dist/run-gui.sh"><![CDATA[#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+export LD_LIBRARY_PATH="$DIR/runtime/lib/server:$DIR/runtime/lib:${LD_LIBRARY_PATH:-}"
+export JAVA_AWT_HEADLESS=false
+
+if [ -n "${DISPLAY:-}" ]; then
+  exec "$DIR/${project.artifactId}" "$@"
+fi
+
+if command -v xvfb-run >/dev/null 2>&1; then
+  exec xvfb-run "$DIR/${project.artifactId}" "$@"
+fi
+
+echo "No graphical DISPLAY and xvfb-run not found."
+echo "Install xvfb or run in a graphical session."
+exit 1
+]]></echo>
+                    <chmod file="${project.build.directory}/dist/run-gui.sh" perm="755"/>
+                    <chmod file="${project.build.directory}/dist/${project.artifactId}" perm="755"/>
+                  </target>
+                </configuration>
               </execution>
             </executions>
           </plugin>
