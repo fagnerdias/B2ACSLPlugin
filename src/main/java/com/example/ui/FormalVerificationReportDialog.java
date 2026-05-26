@@ -24,48 +24,67 @@ public final class FormalVerificationReportDialog {
 
     public static void show(
             String projectName, String analyzedFileName, long elapsedMs, VerificationReportData reportData) {
-        if (GraphicsEnvironment.isHeadless()) {
-            System.out.println("[B2ACSL] Verified project: " + projectName);
-            System.out.println("[B2ACSL] Analyzed file: " + analyzedFileName);
-            System.out.println("[B2ACSL] Execution time: " + formatElapsedSeconds(elapsedMs));
-            System.out.println(
-                    "[B2ACSL] Summary -> total="
-                            + reportData.totalGoals()
-                            + ", proved="
-                            + reportData.provedGoals()
-                            + ", failures="
-                            + reportData.failures()
-                            + ", timeouts="
-                            + reportData.timeouts());
-            System.out.println(reportData.detailsAsText());
-            System.out.println(reportData.fullOutputAsText());
+        if (!isUiAvailable()) {
+            printHeadlessReport(projectName, analyzedFileName, elapsedMs, reportData);
             return;
         }
 
-        JPanel root = new JPanel(new BorderLayout(12, 12));
-        root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        try {
+            JPanel root = new JPanel(new BorderLayout(12, 12));
+            root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 
-        root.add(buildHeader(projectName, analyzedFileName, elapsedMs), BorderLayout.NORTH);
-        root.add(buildSummary(reportData), BorderLayout.CENTER);
-        root.add(buildDetails(reportData), BorderLayout.SOUTH);
+            root.add(buildHeader(projectName, analyzedFileName, elapsedMs), BorderLayout.NORTH);
+            root.add(buildSummary(reportData), BorderLayout.CENTER);
+            root.add(buildDetails(reportData), BorderLayout.SOUTH);
 
-        Object[] options = {"Close", "Save Full Output (.txt)"};
-        while (true) {
-            int choice =
-                    JOptionPane.showOptionDialog(
-                            null,
-                            root,
-                            "Verification Report",
-                            JOptionPane.DEFAULT_OPTION,
-                            JOptionPane.INFORMATION_MESSAGE,
-                            null,
-                            options,
-                            options[0]);
-            if (choice != 1) {
-                break;
+            Object[] options = {"Close", "Save Full Output (.txt)"};
+            while (true) {
+                int choice =
+                        JOptionPane.showOptionDialog(
+                                null,
+                                root,
+                                "Verification Report",
+                                JOptionPane.DEFAULT_OPTION,
+                                JOptionPane.INFORMATION_MESSAGE,
+                                null,
+                                options,
+                                options[0]);
+                if (choice != 1) {
+                    break;
+                }
+                saveFullOutput(projectName, reportData.fullOutputAsText());
             }
-            saveFullOutput(projectName, reportData.fullOutputAsText());
+        } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
+            System.err.println(
+                    "[B2ACSL] GUI is unavailable in this native runtime; printing verification report in console.");
+            printHeadlessReport(projectName, analyzedFileName, elapsedMs, reportData);
         }
+    }
+
+    private static boolean isUiAvailable() {
+        try {
+            return !GraphicsEnvironment.isHeadless();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static void printHeadlessReport(
+            String projectName, String analyzedFileName, long elapsedMs, VerificationReportData reportData) {
+        System.out.println("[B2ACSL] Verified project: " + projectName);
+        System.out.println("[B2ACSL] Analyzed file: " + analyzedFileName);
+        System.out.println("[B2ACSL] Execution time: " + formatElapsedSeconds(elapsedMs));
+        System.out.println(
+                "[B2ACSL] Summary -> total="
+                        + reportData.totalGoals()
+                        + ", proved="
+                        + reportData.provedGoals()
+                        + ", failures="
+                        + reportData.failures()
+                        + ", timeouts="
+                        + reportData.timeouts());
+        System.out.println(reportData.detailsAsText());
+        System.out.println(reportData.fullOutputAsText());
     }
 
     private static JPanel buildHeader(String projectName, String analyzedFileName, long elapsedMs) {
