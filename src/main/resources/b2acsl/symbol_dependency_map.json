@@ -427,6 +427,7 @@
     "inclusion": [
       "belongs",
       "empty",
+      "is_finite",
       "not_belongs"
     ],
     "is_bijective": [
