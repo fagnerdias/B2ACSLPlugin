@@ -949,11 +949,14 @@ public final class B2ACSLPipeline {
      */
     private static void liftPureGhostEnsuresToOperationContracts(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        // Group 1 uses (?:[^*]|\*(?!/))* instead of [\s\S]*? to prevent the lazy quantifier from
+        // backtracking past the closing */ of the ghost annotation. Without this, a short ghost
+        // call like /*@ ghost add(ee); */ inside a function body could extend (via backtracking)
+        // all the way to the next /*@…*/ block, consuming the C body of the preceding function.
         Pattern ghostThenNormalBeforeDefinition =
                 Pattern.compile(
-                        "(?s)"
-                                + "(/\\*@\\s*ghost\\b[\\s\\S]*?\\*/\\s*)"
-                                + "(/\\*@(?!\\s*(?:ghost|axiomatic)\\b)[\\s\\S]*?\\*/\\s*)"
+                        "(/\\*@\\s*ghost\\b(?:[^*]|\\*(?!/))*\\*/\\s*)"
+                                + "(?s)(/\\*@(?!\\s*(?:ghost|axiomatic)\\b)[\\s\\S]*?\\*/\\s*)"
                                 + "(void\\s+[A-Za-z_]\\w*__([A-Za-z_]\\w*)\\s*\\([^;{}]*\\)\\s*\\{)");
         Pattern pureGhostAssignsNothing =
                 Pattern.compile("(?m)^\\s*/?@\\s*assigns\\s+\\\\nothing\\s*;");
