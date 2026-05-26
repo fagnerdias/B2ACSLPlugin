@@ -442,6 +442,7 @@ public final class B2ACSLPipeline {
                             "-wp-prover",
                             wpOptions.prover(),
                             "-wp-smoke-tests",
+                            "-wp-split",
                             "-wp-rte",
                             "-wp-timeout",
                             Integer.toString(wpOptions.timeoutSeconds()),
@@ -1185,10 +1186,10 @@ public final class B2ACSLPipeline {
         if (filtered.isBlank()) {
             return;
         }
-        String wrapped = "/*@\n" + filtered.stripTrailing() + "\n */\n";
+        // filtered already contains individually wrapped /*@ axiomatic X { ... } */ blocks
         String existing = Files.readString(mergedC, StandardCharsets.UTF_8);
         String sep = existing.endsWith("\n") ? "" : "\n";
-        Files.writeString(mergedC, existing + sep + wrapped, StandardCharsets.UTF_8);
+        Files.writeString(mergedC, existing + sep + filtered, StandardCharsets.UTF_8);
     }
 
     /**
@@ -1198,37 +1199,58 @@ public final class B2ACSLPipeline {
     private static final Pattern LEMMA_LIB_STYLE_CALL =
             Pattern.compile("(?<![A-Za-z0-9_\\\\])([a-z][a-z0-9_]*)\\s*\\(");
 
+    private static final Pattern LEMMA_AXIOMATIC_HEADER =
+            Pattern.compile("(?m)^\\s*axiomatic\\s+(\\w+)\\s*\\{");
+
     /**
      * Mantém apenas lemas cujo corpo não contém chamadas a símbolos de lib fora de {@code allowed}.
+     *
+     * <p>Processa cada bloco {@code axiomatic} do ficheiro de lemas individualmente, emitindo
+     * cada um como um bloco {@code /*@ axiomatic X \{ … \} *\/} separado. Isso evita que o
+     * conteúdo estrutural (fechamentos {@code \}} e cabeçalhos {@code axiomatic Name \{}) dos
+     * blocos intermédios seja copiado repetidamente durante a monomorphização genérica.
      */
     private static String filterLemmasByAllowedLibSymbols(String lemmasFileText, Set<String> allowed) {
-        int open = lemmasFileText.indexOf('{');
-        int close = lemmasFileText.lastIndexOf('}');
-        if (open < 0 || close <= open) {
-            return lemmasFileText.stripTrailing();
-        }
-        String head = lemmasFileText.substring(0, open + 1);
-        String inner = lemmasFileText.substring(open + 1, close);
-        String tail = lemmasFileText.substring(close);
-        String[] chunks = inner.split("(?m)(?=^\\s*admit\\s+lemma\\s+)");
-        List<String> kept = new ArrayList<>();
-        for (String chunk : chunks) {
-            String t = chunk.trim();
-            if (t.isEmpty()) {
-                continue;
+        Matcher headerMatcher = LEMMA_AXIOMATIC_HEADER.matcher(lemmasFileText);
+        StringBuilder result = new StringBuilder();
+
+        while (headerMatcher.find()) {
+            String blockName = headerMatcher.group(1);
+            int bodyStart = headerMatcher.end(); // posição após '{'
+
+            // Encontra o '}' correspondente (profundidade de chaves)
+            int depth = 1;
+            int pos = bodyStart;
+            while (pos < lemmasFileText.length() && depth > 0) {
+                char c = lemmasFileText.charAt(pos);
+                if (c == '{') depth++;
+                else if (c == '}') depth--;
+                pos++;
             }
-            if (!t.startsWith("admit")) {
-                continue;
+            if (depth != 0) continue; // chave sem par — ignora
+
+            String blockBody = lemmasFileText.substring(bodyStart, pos - 1);
+
+            // Filtra os lemas deste bloco individualmente
+            String[] chunks = blockBody.split("(?m)(?=^\\s*admit\\s+lemma\\s+)");
+            List<String> kept = new ArrayList<>();
+            for (String chunk : chunks) {
+                String t = chunk.trim();
+                if (t.isEmpty() || !t.startsWith("admit")) continue;
+                if (!lemmaBodyUsesDisallowedLibCall(t, allowed)) {
+                    kept.add(t);
+                }
             }
-            if (lemmaBodyUsesDisallowedLibCall(t, allowed)) {
-                continue;
-            }
-            kept.add(t);
+            if (kept.isEmpty()) continue;
+
+            // Cada bloco axiomatic é emitido como um /*@ ... */ independente
+            result.append("/*@\n")
+                    .append("axiomatic ").append(blockName).append(" {\n\n    ")
+                    .append(String.join("\n\n    ", kept))
+                    .append("\n\n}\n */\n");
         }
-        if (kept.isEmpty()) {
-            return "";
-        }
-        return head + "\n\n    " + String.join("\n\n    ", kept) + "\n\n" + tail.stripLeading();
+
+        return result.toString();
     }
 
     private static boolean lemmaBodyUsesDisallowedLibCall(String admitLemmaChunk, Set<String> allowed) {
