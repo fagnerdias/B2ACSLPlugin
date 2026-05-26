@@ -222,6 +222,32 @@ public final class BxmlExpressionToAcsl {
         return "-->".equals(o) || "--&gt;".equals(o);
     }
 
+    /** B maplet {@code cc |-> bb} → {@code couple(cc, bb)} (ACSL_Lib/tuple_functions/tuple_couple.acsl). */
+    private static boolean isMapletOp(String op) {
+        if (op == null) return false;
+        String o = op.trim();
+        return "|->".equals(o) || "|-&gt;".equals(o);
+    }
+
+    /** B diferença de conjuntos {@code s -s t} → {@code difference(s, t)} (ACSL_Lib/set_functions/difference.acsl). */
+    private static boolean isSetDifferenceOp(String op) {
+        if (op == null) return false;
+        return "-s".equals(op.trim());
+    }
+
+    /** B aplicação funcional {@code f(x)} em BXML como {@code Binary_Exp op="("} → {@code function_apply(f, x)}. */
+    private static boolean isFunctionApplicationOp(String op) {
+        if (op == null) return false;
+        return "(".equals(op.trim());
+    }
+
+    /** B restrição de alcance {@code r |> S} → {@code range_restriction(r, S)} (ACSL_Lib/relation_functions/range_restriction.acsl). */
+    public static boolean isRangeRestrictionOp(String op) {
+        if (op == null) return false;
+        String o = op.trim();
+        return "|>".equals(o) || "|&gt;".equals(o);
+    }
+
     private static boolean isDomainRestrictionOp(String op) {
         if (op == null) {
             return false;
@@ -354,8 +380,27 @@ public final class BxmlExpressionToAcsl {
             String rel = translate(pair[1], ctx);
             return "domain_restriction(" + rel + ", " + setRef + ")";
         }
+        if (isRangeRestrictionOp(op)) {
+            String rel = translate(pair[0], ctx);
+            String setRef = intervalOrSetComprehensionRef(pair[1], ctx);
+            return "range_restriction(" + rel + ", " + setRef + ")";
+        }
+        if (isMapletOp(op)) {
+            String left = translate(pair[0], ctx);
+            String right = translate(pair[1], ctx);
+            return "couple(" + left + ", " + right + ")";
+        }
+        if (isFunctionApplicationOp(op)) {
+            // f(x) em B → function_apply(f, x) em ACSL
+            String left = translate(pair[0], ctx);
+            String right = translate(pair[1], ctx);
+            return "function_apply(" + left + ", " + right + ")";
+        }
         String left = translate(pair[0], ctx);
         String right = translate(pair[1], ctx);
+        if (isSetDifferenceOp(op)) {
+            return "difference(" + left + ", " + right + ")";
+        }
         if (isSetUnion(op)) {
             // B: \/ — união → set_union (ACSL_Lib/set_functions/union.acsl)
             return "set_union(" + left + ", " + right + ")";

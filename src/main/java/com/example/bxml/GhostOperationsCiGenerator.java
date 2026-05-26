@@ -437,6 +437,9 @@ public final class GhostOperationsCiGenerator {
         sb.append("        logic DRelation<integer, A> dummy_list_to_function<A>(\\list<A> l);\n\n");
         sb.append("        logic DRelation<integer, integer> dummy_array_to_function(int *x, integer length);\n");
         sb.append("        predicate dummy_is_total_function(dummy_Function_int_int f, DSet<integer> X, DSet<integer> Y);\n");
+        sb.append("        logic DSet<A> dummy_difference<A>(DSet<A> a, DSet<A> b);\n");
+        sb.append("        logic B dummy_function_apply<A, B>(DRelation<A, B> r, A x);\n");
+        sb.append("        logic DRelation<A, B> dummy_range_restriction<A, B>(DRelation<A, B> r, DSet<B> S);\n");
         sb.append("    }\n*/\n");
         return sb.toString();
     }
@@ -535,12 +538,30 @@ public final class GhostOperationsCiGenerator {
             return t;
         }
         if (t.startsWith("Set<") && t.endsWith(">")) {
-            return "DSet" + t.substring(3);
+            // Tipos abstratos B (ex.: book, copy) não têm representação C/ACSL;
+            // todo conjunto no universo dummy é modelado como DSet<integer>.
+            return "DSet<integer>";
         }
-        if (t.startsWith("Relation_")) {
-            return t;
+        if (t.startsWith("Relation_") || t.startsWith("Function_")) {
+            // Converte Relation_int_int / Function_int_int → DRelation<integer, integer>
+            String suffix = t.startsWith("Relation_") ? t.substring("Relation_".length())
+                                                       : t.substring("Function_".length());
+            String[] parts = suffix.split("_", 2);
+            if (parts.length == 2) {
+                return "DRelation<" + acslTypeParamName(parts[0]) + ", " + acslTypeParamName(parts[1]) + ">";
+            }
+            return "DRelation<integer, integer>";
         }
         return "DSet<integer>";
+    }
+
+    /** Converte token de tipo B/ACSL_Lib (ex.: {@code int}, {@code bool}) para nome ACSL genérico. */
+    private static String acslTypeParamName(String token) {
+        return switch (token.toLowerCase()) {
+            case "int", "integer" -> "integer";
+            case "bool", "boolean" -> "boolean";
+            default -> "integer";
+        };
     }
 
     /** Igualdade {@code <var> == <rhs>} com {@code <var>} abstrata (pós-estado: {@code dummy_<var>}, não {@code \\old}). */
@@ -550,6 +571,18 @@ public final class GhostOperationsCiGenerator {
     /** Traduz {@code equals(ss, …)} para o universo {@code dummy_*} com {@code \\old} no RHS. */
     private static String toGhostEnsure(String translatedEnsure, Set<String> abstractVars) {
         String s = translatedEnsure.trim();
+
+        // Conditional ensures: "(cond) ==> (inner_assigns)"
+        // cond: all vars are pre-state (\old); inner: assignment ensures (dummy_lhs == \old(rhs))
+        int implIdx = topLevelImplicationIndex(s);
+        if (implIdx >= 0) {
+            String condPart = s.substring(0, implIdx).trim();
+            String innerPart = stripOuterParens(s.substring(implIdx + "==>".length()).trim());
+            String condGhost = rewriteAbstractIdsWithOld(condPart, abstractVars);
+            String innerGhost = toGhostEnsure(innerPart, abstractVars);
+            return condGhost + " ==> (" + innerGhost + ")";
+        }
+
         if (!s.startsWith("equals(")) {
             Matcher simpleEq = GHOST_ENSURE_SIMPLE_ABS_VAR_EQ.matcher(s);
             if (simpleEq.matches()) {
@@ -611,6 +644,36 @@ public final class GhostOperationsCiGenerator {
             out = sb.toString();
         }
         return out;
+    }
+
+    /**
+     * Encontra o índice do {@code ==>} de nível superior (fora de parênteses) em {@code s}.
+     * Retorna {@code -1} se não houver.
+     */
+    private static int topLevelImplicationIndex(String s) {
+        int depth = 0;
+        for (int i = 0; i < s.length() - 2; i++) {
+            char c = s.charAt(i);
+            if (c == '(') { depth++; }
+            else if (c == ')') { depth--; }
+            else if (depth == 0 && c == '=' && i + 2 < s.length()
+                    && s.charAt(i + 1) == '=' && s.charAt(i + 2) == '>') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Remove uma camada de parênteses externas, se a string inteira estiver envolvida por {@code (...)}. */
+    private static String stripOuterParens(String s) {
+        if (s == null || s.length() < 2) return s;
+        if (s.charAt(0) != '(' || s.charAt(s.length() - 1) != ')') return s;
+        int depth = 0;
+        for (int i = 0; i < s.length() - 1; i++) {
+            if (s.charAt(i) == '(') depth++;
+            else if (s.charAt(i) == ')') { depth--; if (depth == 0) return s; }
+        }
+        return s.substring(1, s.length() - 1).trim();
     }
 
     /**
@@ -1004,7 +1067,9 @@ public final class GhostOperationsCiGenerator {
                 }
             }
             case "Nary_Sub" -> {
-                if (";".equals(sub.getAttribute("op"))) {
+                String op = sub.getAttribute("op");
+                if (";".equals(op) || "||".equals(op)) {
+                    // sequencial (;) e paralelo (||): percorrer todos os filhos
                     NodeList children = sub.getChildNodes();
                     for (int i = 0; i < children.getLength(); i++) {
                         Node n = children.item(i);
@@ -1018,6 +1083,17 @@ public final class GhostOperationsCiGenerator {
                 }
             }
             case "Bloc_Sub" -> collectAssignedInSubstitution(firstSubChild(sub), abstractSet, out);
+            case "If_Sub" -> {
+                // Coleta assigns do ramo THEN (e ELSE, se existir)
+                Element thenEl = firstChildElement(sub, "Then");
+                if (thenEl != null) {
+                    collectAssignedInSubstitution(firstSubChild(thenEl), abstractSet, out);
+                }
+                Element elseEl = firstChildElement(sub, "Else");
+                if (elseEl != null) {
+                    collectAssignedInSubstitution(firstSubChild(elseEl), abstractSet, out);
+                }
+            }
             case "ANY_Sub" -> {
                 Element thenEl = firstChildElement(sub, "Then");
                 if (thenEl != null) {
@@ -1258,7 +1334,10 @@ public final class GhostOperationsCiGenerator {
                     "domain_restriction",
                     "is_total_function",
                     "list_to_function",
-                    "array_to_function");
+                    "array_to_function",
+                    "difference",
+                    "function_apply",
+                    "range_restriction");
 
     private static String prefixAcslLibFunctionsForGhost(String text) {
         if (text == null || text.isEmpty()) {
