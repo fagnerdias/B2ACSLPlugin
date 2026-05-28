@@ -245,6 +245,32 @@ public final class AcslGenerator {
             if (!varsAbstract.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
+        // Constantes e propriedades das máquinas fundidas — antes das compreensões, para que
+        // constantes como MAX_COPY estejam declaradas quando as compreensões as referenciam.
+        for (Element mel : mergedMachineElements) {
+            BxmlTranslateContext mctx =
+                    BxmlTranslateContext.forMachineWithSharedComprehensions(
+                            mel, ctx.comprehensions(), gluing, machineEl);
+            String constsMerged = BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx);
+            if (!constsMerged.isBlank()) {
+                sb.append(constsMerged);
+                if (!constsMerged.endsWith("\n")) sb.append("\n");
+                sb.append("\n");
+            }
+            String propsMerged = BxmlConstantsAndProperties.formatPropertiesBlock(mel, mctx);
+            if (!propsMerged.isBlank()) {
+                sb.append(propsMerged);
+                if (!propsMerged.endsWith("\n")) sb.append("\n");
+                sb.append("\n");
+            }
+        }
+
+        // Compreensões antes das máquinas fundidas: set_comprehension_k deve estar declarado
+        // antes de Biblioteca_i_values (que o referencia em axiomas).
+        if (!ctx.comprehensions().isEmpty()) {
+            sb.append(ctx.comprehensions().formatAxiomaticBlock(baseName, ctx));
+            sb.append("\n");
+        }
         Element refinementChainParent = machineEl;
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx =
@@ -263,10 +289,6 @@ public final class AcslGenerator {
             if (varsMerged.isBlank()) continue;
             sb.append(varsMerged);
             if (!varsMerged.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
-        }
-        if (!ctx.comprehensions().isEmpty()) {
-            sb.append(ctx.comprehensions().formatAxiomaticBlock(baseName, ctx));
             sb.append("\n");
         }
 
