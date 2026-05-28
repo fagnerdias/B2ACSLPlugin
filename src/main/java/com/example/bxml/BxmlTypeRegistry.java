@@ -123,7 +123,7 @@ public final class BxmlTypeRegistry {
         return switch (bName) {
             case "INTEGER", "INT", "NAT" -> "integer";
             case "BOOL" -> "boolean";
-            default -> bName.toLowerCase();
+            default -> "integer"; // conjuntos deferidos B (ex.: BOOK, COPY) → integer
         };
     }
 

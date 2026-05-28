@@ -53,6 +53,17 @@ public final class SpecificationAxiomaticInstantiator {
         return t != null && t.trim().matches("[A-Z]");
     }
 
+    /** Rejeita strings que contêm caracteres típicos de predicados ACSL, não de nomes de tipos. */
+    private static boolean containsStatementChars(String t) {
+        return t != null && (t.contains(";") || t.contains("=") || t.contains("(") || t.contains(")"));
+    }
+
+    /** Rejeita tipos legados do ghost_operations.ci (prefixo D: DTuple, DRelation, DSet, dummy_*). */
+    private static boolean isLegacyDType(String t) {
+        return t != null && (t.startsWith("DTuple") || t.startsWith("DRelation")
+                || t.startsWith("DSet") || t.startsWith("dummy_"));
+    }
+
     // ── Contexto de instanciação ──────────────────────────────────────────────
 
     /** Tipos concretos extraídos de {@code specification_types.txt}. */
@@ -73,18 +84,20 @@ public final class SpecificationAxiomaticInstantiator {
 
                 if (t.startsWith("Set<") && t.endsWith(">")) {
                     String inner = t.substring(4, t.length() - 1).trim();
-                    // Ignora variáveis de tipo (letras maiúsculas isoladas, ex.: "A")
-                    if (!isTypeVariable(inner)) setElem.add(inner);
+                    // Ignora variáveis de tipo (letras maiúsculas isoladas, ex.: "A") e tipos legados D*
+                    if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) setElem.add(inner);
                 } else if (t.startsWith("\\list<") && t.endsWith(">")) {
                     String inner = t.substring(6, t.length() - 1).trim();
-                    if (!isTypeVariable(inner)) listElem.add(inner);
+                    if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) listElem.add(inner);
                 } else if ((t.startsWith("Tuple<") || t.startsWith("Relation<")
                         || t.startsWith("Function<")) && t.endsWith(">")) {
                     int open = t.indexOf('<');
                     List<String> parts = splitTopComma(t.substring(open + 1, t.length() - 1));
                     if (parts.size() == 2) {
                         List<String> p = parts.stream().map(String::trim).toList();
-                        if (p.stream().noneMatch(SpecificationAxiomaticInstantiator::isTypeVariable)) {
+                        if (p.stream().noneMatch(SpecificationAxiomaticInstantiator::isTypeVariable)
+                                && p.stream().noneMatch(SpecificationAxiomaticInstantiator::containsStatementChars)
+                                && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
                             pairs.add(p);
                         }
                     }
@@ -163,7 +176,7 @@ public final class SpecificationAxiomaticInstantiator {
         Set<String> extra = new LinkedHashSet<>();
         // Captura Set<...>, \list<...>, Tuple<...> com argumento concreto (um nível de nesting)
         Matcher m = Pattern.compile(
-                "(?:Set|\\\\list|Tuple|Relation|Function)<([^<>]+(?:<[^<>]*>)?[^<>]*)>")
+                "(?<![A-Za-z_])(?:Set|\\\\list|Tuple|Relation|Function)<([^<>;()=]+(?:<[^<>;()=]*>)?[^<>;()=]*)>")
                 .matcher(text);
         while (m.find()) {
             String whole = normalizeTypeWhitespace(m.group(0).trim());
@@ -701,20 +714,7 @@ public final class SpecificationAxiomaticInstantiator {
     private static String buildConcreteNewTypesBlock(
             Map<String, String> renames, MonoContext ctx) {
 
-        // ── comentários para Set<A> e Tuple<A,B> ─────────────────────────────
-        List<String> setInstances = ctx.setElemTypes().stream()
-                .filter(e -> !containsTypeVariables(e))
-                .map(e -> "Set<" + e + ">")
-                .distinct()
-                .sorted()
-                .toList();
-
-        // Instâncias de Tuple vindas explicitamente dos pairTypes
-        List<String> tupleInstances = ctx.pairTypes().stream()
-                .filter(p -> p.stream().noneMatch(SpecificationAxiomaticInstantiator::isTypeVariable))
-                .map(p -> "Tuple<" + p.get(0) + ", " + p.get(1) + ">")
-                .distinct()
-                .toList();
+        // (comentários de instâncias removidos: // ... dentro de /*@ */ confundia o parser do Frama-C)
 
         // ── linhas de Relation e Function ────────────────────────────────────
         // Agrupados por par (inner), para intercalar Relation + Function
@@ -744,15 +744,8 @@ public final class SpecificationAxiomaticInstantiator {
         sb.append("/*@\n");
         sb.append("axiomatic new_types {\n");
 
-        // Set<A> com comentário de linha (// evita conflito com o delimitador /*@ ... */)
-        String setComment = setInstances.isEmpty() ? ""
-                : "  // " + String.join(", ", setInstances);
-        sb.append("  type Set<A>;").append(setComment).append("\n");
-
-        // Tuple<A, B> com comentário de linha
-        String tupleComment = tupleInstances.isEmpty() ? ""
-                : "  // " + String.join(", ", tupleInstances);
-        sb.append("  type Tuple<A, B>;").append(tupleComment).append("\n");
+        sb.append("  type Set<A>;\n");
+        sb.append("  type Tuple<A, B>;\n");
 
         if (!byInner.isEmpty()) {
             sb.append("\n");
@@ -761,20 +754,15 @@ public final class SpecificationAxiomaticInstantiator {
                 RelFun rf = entry.getValue();
 
                 if (rf.relName() != null) {
-                    // Garante que '>>' nunca apareça: adiciona espaço entre >
                     String rhs = fixDoubleAngle("Set<Tuple<" + inner + "> >");
                     sb.append("  type ").append(rf.relName())
-                            .append(" = ").append(rhs).append(" ;")
-                            .append("  // ").append(rf.relOrig())
-                            .append("\n");
+                            .append(" = ").append(rhs).append(" ;\n");
                 }
                 if (rf.funName() != null) {
                     String rhs = rf.relName() != null ? rf.relName()
                             : fixDoubleAngle("Set<Tuple<" + inner + "> >");
                     sb.append("  type ").append(rf.funName())
-                            .append(" = ").append(rhs).append(" ;")
-                            .append("  // ").append(rf.funOrig())
-                            .append("\n");
+                            .append(" = ").append(rhs).append(" ;\n");
                 }
             }
         }

@@ -78,6 +78,16 @@ public final class BxmlInitialisationTranslator {
             case "ANY_Sub" -> {
                 /* Tratado como contrato ghost por GhostOperationsCiGenerator; nada a emitir aqui. */
             }
+            case "Becomes_Such_That" -> {
+                // pos:(P(pos)) → ensures P(pos); o * de saída é aplicado depois por applyStarPrefixToEnsures
+                Element predEl = firstChildElement(sub, "Pred");
+                if (predEl != null) {
+                    String p = BxmlPredicateToAcsl.translateInvariantContent(predEl, ctx);
+                    if (p != null && !p.isBlank()) {
+                        ensures.add(p.trim());
+                    }
+                }
+            }
             default -> { /* outras substituições: extensão futura */ }
         }
     }
@@ -146,7 +156,34 @@ public final class BxmlInitialisationTranslator {
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Element ch = (Element) n;
             if ("Attr".equals(ch.getLocalName())) continue;
-            if ("Assignement_Sub".equals(ch.getLocalName())) parseAssignementSub(ch, ensures, ctx);
+            if ("Assignement_Sub".equals(ch.getLocalName())) {
+                parseAssignementSub(ch, ensures, ctx);
+            } else if ("If_Sub".equals(ch.getLocalName())) {
+                parseIfSubAsConditionalEnsures(ch, ensures, ctx);
+            }
+        }
+    }
+
+    /**
+     * {@code IF cond THEN body END} em corpo paralelo → uma cláusula {@code ensures} condicional
+     * por efeito: {@code (cond) ==> (ensures_do_then)}.
+     *
+     * <p>Apenas o ramo {@code Then} é usado; o ramo {@code Else} (se existir) pode ser adicionado
+     * simetricamente com {@code !(cond) ==> (ensures_do_else)}.
+     */
+    private static void parseIfSubAsConditionalEnsures(
+            Element ifSub, List<String> ensures, BxmlTranslateContext ctx) {
+        Element condEl = firstChildElement(ifSub, "Condition");
+        Element thenEl = firstChildElement(ifSub, "Then");
+        if (condEl == null || thenEl == null) return;
+
+        String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
+        if (cond == null || cond.isBlank()) return;
+
+        List<String> thenEnsures = new ArrayList<>();
+        walkSubstitution(firstSubChild(thenEl), thenEnsures, ctx);
+        for (String e : thenEnsures) {
+            ensures.add("(" + cond + ") ==> (" + e + ")");
         }
     }
 
@@ -220,15 +257,19 @@ public final class BxmlInitialisationTranslator {
         public String toContractText() {
             StringBuilder sb = new StringBuilder();
             sb.append("function ").append(functionName).append(":\n");
-            sb.append("contract:    \n");
+            sb.append("contract:\n");
             for (String e : ensures) {
                 sb.append("    ensures  ").append(e).append(";\n");
             }
             for (String v : dummyGhostEnsureVarNames) {
                 sb.append("    ensures  dummy_ghost_").append(v).append(";\n");
             }
-            for (String a : assignsTargets) {
-                sb.append("    assigns ").append(a).append(";\n");
+            if (assignsTargets.isEmpty()) {
+                sb.append("    assigns \\nothing;\n");
+            } else {
+                for (String a : assignsTargets) {
+                    sb.append("    assigns ").append(a).append(";\n");
+                }
             }
             if (includeGhostBehaviorAssert) {
                 sb.append("    at 1: assert ghost__initialisation;\n");
