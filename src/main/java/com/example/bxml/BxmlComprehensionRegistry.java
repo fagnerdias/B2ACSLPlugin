@@ -67,7 +67,14 @@ public final class BxmlComprehensionRegistry {
         return new BxmlComprehensionRegistry();
     }
 
+    /** Tags BXML que delimitam corpos de operações — compreensões dentro delas não devem ser globais. */
+    private static final java.util.Set<String> OPERATION_SCOPE_TAGS = java.util.Set.of(
+            "Operations", "Initialisation", "Local_Operations");
+
     private static void walk(Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
+        if (OPERATION_SCOPE_TAGS.contains(e.getLocalName())) {
+            return;
+        }
         if ("Quantified_Set".equals(e.getLocalName())) {
             r.ordered.add(e);
             r.elementTypes.put(e, types);
