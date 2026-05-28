@@ -222,6 +222,17 @@ public final class BxmlExpressionToAcsl {
         return "-->".equals(o) || "--&gt;".equals(o);
     }
 
+    /** Tipo conjunto de funções surjetivas totais B {@code S -->> T} em {@code Binary_Exp}. */
+    public static boolean isTotalSurjectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return "-->>".equals(o) || "--&gt;&gt;".equals(o);
+    }
+
     /** B maplet {@code cc |-> bb} → {@code couple(cc, bb)} (ACSL_Lib/tuple_functions/tuple_couple.acsl). */
     private static boolean isMapletOp(String op) {
         if (op == null) return false;

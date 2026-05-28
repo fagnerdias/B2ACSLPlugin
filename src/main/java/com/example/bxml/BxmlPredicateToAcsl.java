@@ -269,6 +269,16 @@ public final class BxmlPredicateToAcsl {
                 String rangeSet = functionArrowRangeSet(domRng[1], ctx);
                 return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")";
             }
+            // f : (S -->> T) — função total surjetiva (ACSL_Lib function_functions/is_total.acsl + is_surjective.acsl)
+            if (BxmlExpressionToAcsl.isTotalSurjectionArrowType(rightEl)) {
+                Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+                if (domRng[0] == null || domRng[1] == null) return "";
+                String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+                String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+                return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")"
+                        + " && is_surjective(" + fun + ", " + rangeSet + ")";
+            }
             String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
             String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
             // x : T — pertença (ex.: nn : NAT → belongs(nn, NAT)) — ACSL_Lib/set_functions/belongs.acsl
