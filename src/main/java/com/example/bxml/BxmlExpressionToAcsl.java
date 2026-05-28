@@ -378,6 +378,7 @@ public final class BxmlExpressionToAcsl {
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : "card(" + a + ")";
             case "size" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
+            case "~" -> "relation_inverse(" + a + ")";
             default -> opTrim + "(" + a + ")";
         };
     }
@@ -406,6 +407,12 @@ public final class BxmlExpressionToAcsl {
             String left = translate(pair[0], ctx);
             String right = translate(pair[1], ctx);
             return "function_apply(" + left + ", " + right + ")";
+        }
+        // r[{x}] → apply(r, x)  (ACSL_Lib/relation_functions/apply.acsl)
+        if ("[".equals(op == null ? "" : op.trim())) {
+            String rel = translate(pair[0], ctx);
+            String arg = unwrapSingletonOrTranslate(pair[1], ctx);
+            return "apply(" + rel + ", " + arg + ")";
         }
         String left = translate(pair[0], ctx);
         String right = translate(pair[1], ctx);
@@ -500,5 +507,27 @@ public final class BxmlExpressionToAcsl {
             if (k == 2) break;
         }
         return out;
+    }
+
+    /**
+     * Para a imagem relacional {@code r[{x}]}: se {@code e} for um {@code Nary_Exp op='{'} com
+     * exactamente um elemento, retorna a tradução desse elemento (descarta a envolvente singleton);
+     * caso contrário traduz normalmente.
+     */
+    private static String unwrapSingletonOrTranslate(Element e, BxmlTranslateContext ctx) {
+        if (e != null
+                && "Nary_Exp".equals(e.getLocalName())
+                && "{".equals(e.getAttribute("op"))) {
+            java.util.List<Element> elems = new java.util.ArrayList<>();
+            NodeList nl = e.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if (!"Attr".equals(ch.getLocalName())) elems.add(ch);
+            }
+            if (elems.size() == 1) return translate(elems.get(0), ctx);
+        }
+        return translate(e, ctx);
     }
 }
