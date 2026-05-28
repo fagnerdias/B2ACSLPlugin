@@ -28,6 +28,7 @@ import com.example.bxml.BxmlInvariantTranslator;
 import com.example.bxml.BxmlMachineVariables;
 import com.example.bxml.BxmlOperationsTranslator;
 import com.example.bxml.BxmlOperationsTranslator.OperationAcsl;
+import com.example.bxml.BxmlSetsTranslator;
 import com.example.bxml.BxmlTranslateContext;
 import com.example.bxml.LambdaFunctionRegistry;
 import com.example.model.Machine;
@@ -193,6 +194,13 @@ public final class AcslGenerator {
                 "/* Biblioteca B2ACSLLib: includes gerados automaticamente (AcslLibIncludes); "
                         + "opções: b2acsl.acslLibIncludeBase, b2acsl.acslLibIncludeMiddle. */\n\n");
         int headerLen = sb.length();
+
+        // 0) Conjuntos deferred (Sets) — posicionados logo após os includes
+        String setsBlock = BxmlSetsTranslator.formatSetsBlock(machineEl);
+        if (!setsBlock.isBlank()) {
+            sb.append(setsBlock);
+            sb.append("\n");
+        }
 
         // 1) Constantes e propriedades (só máquina abstrata raiz deste ficheiro)
         String concreteConstants = BxmlConstantsAndProperties.formatConcreteConstantsBlock(machineEl, ctx);
