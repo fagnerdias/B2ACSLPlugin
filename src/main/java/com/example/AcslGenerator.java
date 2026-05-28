@@ -238,7 +238,10 @@ public final class AcslGenerator {
             sb.append("\n");
         }
 
-        // 1b) Variáveis: um bloco axiomatic por máquina (abstrata, depois cada fundida) + compreensões
+        // 1b) Variáveis em sequência: abstrata → refinamentos → implementação.
+        // Cada bloco _r_variables / _i_variables pode referenciar variáveis dos blocos anteriores
+        // (e.g. numbers_s usa numbers), por isso todos os blocos de variáveis devem vir ANTES das
+        // compreensões e das constantes/propriedades das máquinas fundidas.
         String varsAbstract =
                 BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
                         machineEl, ctx, abstractVariableNamesForGhost);
@@ -247,8 +250,25 @@ public final class AcslGenerator {
             if (!varsAbstract.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
-        // Constantes e propriedades das máquinas fundidas — antes das compreensões, para que
-        // constantes como MAX_COPY estejam declaradas quando as compreensões as referenciam.
+        // Variáveis das máquinas fundidas (r, i) — em ordem de cadeia, antes das compreensões.
+        Element refinementChainParent = machineEl;
+        for (Element mel : mergedMachineElements) {
+            BxmlTranslateContext mctx =
+                    BxmlTranslateContext.forMachineWithSharedComprehensions(
+                            mel, ctx.comprehensions(), gluing, machineEl);
+            String varsMerged =
+                    BxmlMachineVariables.formatAxiomaticBlock(
+                            mel, mctx, baseName, refinementChainParent, gluing);
+            refinementChainParent = mel;
+            if (!varsMerged.isBlank()) {
+                sb.append(varsMerged);
+                if (!varsMerged.endsWith("\n")) sb.append("\n");
+                sb.append("\n");
+            }
+        }
+
+        // Constantes e propriedades das máquinas fundidas — depois das variáveis, antes das
+        // compreensões, para que constantes como MAX_COPY estejam declaradas quando necessário.
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
@@ -267,13 +287,13 @@ public final class AcslGenerator {
             }
         }
 
-        // Compreensões antes das máquinas fundidas: set_comprehension_k deve estar declarado
-        // antes de Biblioteca_i_values (que o referencia em axiomas).
+        // Compreensões: todas as variáveis e constantes já estão declaradas.
+        // set_comprehension_k deve estar declarado antes de _i_values (que o referencia).
         if (!ctx.comprehensions().isEmpty()) {
             sb.append(ctx.comprehensions().formatAxiomaticBlock(baseName, ctx));
             sb.append("\n");
         }
-        Element refinementChainParent = machineEl;
+        // Values das máquinas fundidas (podem referenciar compreensões).
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
@@ -284,14 +304,6 @@ public final class AcslGenerator {
                 if (!valuesMerged.endsWith("\n")) sb.append("\n");
                 sb.append("\n");
             }
-            String varsMerged =
-                    BxmlMachineVariables.formatAxiomaticBlock(
-                            mel, mctx, baseName, refinementChainParent, gluing);
-            refinementChainParent = mel;
-            if (varsMerged.isBlank()) continue;
-            sb.append(varsMerged);
-            if (!varsMerged.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
         }
 
         // 2) Todos os predicate (invariantes)

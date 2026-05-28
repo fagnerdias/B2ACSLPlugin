@@ -37,7 +37,7 @@ public final class BxmlComprehensionRegistry {
     public static BxmlComprehensionRegistry fromMachine(Element machineEl) {
         BxmlComprehensionRegistry r = new BxmlComprehensionRegistry();
         BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machineEl);
-        walk(machineEl, r, types);
+        walk(machineEl, r, types, isImplementationMachine(machineEl));
         return r;
     }
 
@@ -56,7 +56,7 @@ public final class BxmlComprehensionRegistry {
                     continue;
                 }
                 BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(root);
-                walk(root, r, types);
+                walk(root, r, types, isImplementationMachine(root));
             }
         }
         return r;
@@ -67,12 +67,21 @@ public final class BxmlComprehensionRegistry {
         return new BxmlComprehensionRegistry();
     }
 
-    /** Tags BXML que delimitam corpos de operações — compreensões dentro delas não devem ser globais. */
-    private static final java.util.Set<String> OPERATION_SCOPE_TAGS = java.util.Set.of(
+    /**
+     * Tags BXML que delimitam corpos de operações de máquinas de implementação —
+     * compreensões dentro delas não devem ser globais (geração específica da implementação).
+     */
+    private static final java.util.Set<String> IMPL_OPERATION_SCOPE_TAGS = java.util.Set.of(
             "Operations", "Initialisation", "Local_Operations");
 
-    private static void walk(Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
-        if (OPERATION_SCOPE_TAGS.contains(e.getLocalName())) {
+    /** Retorna {@code true} se a raiz da máquina for uma implementação B ({@code type='implementation'}). */
+    private static boolean isImplementationMachine(Element machineRoot) {
+        return "implementation".equals(machineRoot.getAttribute("type"));
+    }
+
+    private static void walk(Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types,
+                             boolean skipOperations) {
+        if (skipOperations && IMPL_OPERATION_SCOPE_TAGS.contains(e.getLocalName())) {
             return;
         }
         if ("Quantified_Set".equals(e.getLocalName())) {
@@ -86,7 +95,7 @@ public final class BxmlComprehensionRegistry {
         for (int i = 0; i < ch.getLength(); i++) {
             Node n = ch.item(i);
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            walk((Element) n, r, types);
+            walk((Element) n, r, types, skipOperations);
         }
     }
 
@@ -103,7 +112,10 @@ public final class BxmlComprehensionRegistry {
             if (types == null) {
                 continue;
             }
-            String fp = axiomFingerprint(qs, types, gluingSubstitutions);
+            // Sem gluing: deduplicação apenas por identidade sintática do predicado.
+            // Expressões como `numbers` e `ran(numbers_s)` (equivalentes via gluing) ficam
+            // em conjuntos separados, preservando a origem de cada compreensão.
+            String fp = axiomFingerprint(qs, types, Map.of());
             int idx = fpToIndex.computeIfAbsent(fp, k -> next[0]++);
             elementToIndex.put(qs, idx);
         }
