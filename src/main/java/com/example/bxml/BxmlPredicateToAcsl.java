@@ -219,7 +219,7 @@ public final class BxmlPredicateToAcsl {
             case "Nary_Pred" -> translateNaryPred(p, ctx);
             case "Unary_Pred" -> translateUnaryPred(p, ctx);
             case "Binary_Pred" -> translateBinaryPred(p, ctx);
-            case "Quantified_Pred" -> "/* quantified pred */";
+            case "Quantified_Pred" -> translateQuantifiedPred(p, ctx);
             default -> "";
         };
     }
@@ -410,6 +410,50 @@ public final class BxmlPredicateToAcsl {
             };
         }
         return "NAT";
+    }
+
+    /**
+     * B {@code !x.(P => Q)} / {@code #x.(P)} → ACSL {@code (\forall integer x; body)} /
+     * {@code (\exists integer x; body)}.
+     *
+     * <p>Suporta múltiplas variáveis ({@code !x,y.(…)}).
+     */
+    private static String translateQuantifiedPred(Element qp, BxmlTranslateContext ctx) {
+        String type = qp.getAttribute("type");
+        String quant = "!".equals(type) ? "\\forall" : "\\exists";
+
+        Element varsEl = childByName(qp, "Variables");
+        List<String> varDecls = new ArrayList<>();
+        if (varsEl != null) {
+            NodeList nl = varsEl.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element e = (Element) n;
+                if ("Attr".equals(e.getLocalName()) || !"Id".equals(e.getLocalName())) continue;
+                varDecls.add("integer " + e.getAttribute("value"));
+            }
+        }
+        if (varDecls.isEmpty()) return "/* quantified pred */";
+
+        Element bodyEl = childByName(qp, "Body");
+        if (bodyEl == null) return "/* quantified pred */";
+        Element bodyPred = firstPredChild(bodyEl);
+        if (bodyPred == null) return "/* quantified pred */";
+        String body = translatePred(bodyPred, ctx);
+
+        return "(" + quant + " " + String.join(", ", varDecls) + "; " + body + ")";
+    }
+
+    private static Element childByName(Element parent, String localName) {
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if (localName.equals(e.getLocalName())) return e;
+        }
+        return null;
     }
 
     /** Predicado completo de um {@code <Body>} de operação (ex.: dentro de {@code Quantified_Set}). */
