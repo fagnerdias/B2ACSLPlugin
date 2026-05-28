@@ -28,7 +28,9 @@ import com.example.bxml.BxmlInvariantTranslator;
 import com.example.bxml.BxmlMachineVariables;
 import com.example.bxml.BxmlOperationsTranslator;
 import com.example.bxml.BxmlOperationsTranslator.OperationAcsl;
+import com.example.bxml.BxmlSetsTranslator;
 import com.example.bxml.BxmlTranslateContext;
+import com.example.bxml.LambdaFunctionRegistry;
 import com.example.model.Machine;
 
 /**
@@ -135,7 +137,10 @@ public final class AcslGenerator {
 
         BxmlTranslateContext ctx =
                 BxmlTranslateContext.forMachineWithSharedComprehensions(
-                        machineEl, sharedComprehensions, gluing);
+                        machineEl, sharedComprehensions, gluing)
+                        .withLambdaRegistry(new LambdaFunctionRegistry())
+                        .withEnumRenames(BxmlSetsTranslator.buildEnumRenames(machineEl))
+                        .withEnumeratedSetNames(BxmlSetsTranslator.buildEnumeratedSetNames(machineEl));
 
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
@@ -192,6 +197,13 @@ public final class AcslGenerator {
                         + "opções: b2acsl.acslLibIncludeBase, b2acsl.acslLibIncludeMiddle. */\n\n");
         int headerLen = sb.length();
 
+        // 0) Conjuntos deferred (Sets) — posicionados logo após os includes
+        String setsBlock = BxmlSetsTranslator.formatSetsBlock(machineEl);
+        if (!setsBlock.isBlank()) {
+            sb.append(setsBlock);
+            sb.append("\n");
+        }
+
         // 1) Constantes e propriedades (só máquina abstrata raiz deste ficheiro)
         String concreteConstants = BxmlConstantsAndProperties.formatConcreteConstantsBlock(machineEl, ctx);
         if (!concreteConstants.isBlank()) {
@@ -226,7 +238,10 @@ public final class AcslGenerator {
             sb.append("\n");
         }
 
-        // 1b) Variáveis: um bloco axiomatic por máquina (abstrata, depois cada fundida) + compreensões
+        // 1b) Variáveis em sequência: abstrata → refinamentos → implementação.
+        // Cada bloco _r_variables / _i_variables pode referenciar variáveis dos blocos anteriores
+        // (e.g. numbers_s usa numbers), por isso todos os blocos de variáveis devem vir ANTES das
+        // compreensões e das constantes/propriedades das máquinas fundidas.
         String varsAbstract =
                 BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
                         machineEl, ctx, abstractVariableNamesForGhost);
@@ -235,7 +250,50 @@ public final class AcslGenerator {
             if (!varsAbstract.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
+        // Variáveis das máquinas fundidas (r, i) — em ordem de cadeia, antes das compreensões.
         Element refinementChainParent = machineEl;
+        for (Element mel : mergedMachineElements) {
+            BxmlTranslateContext mctx =
+                    BxmlTranslateContext.forMachineWithSharedComprehensions(
+                            mel, ctx.comprehensions(), gluing, machineEl);
+            String varsMerged =
+                    BxmlMachineVariables.formatAxiomaticBlock(
+                            mel, mctx, baseName, refinementChainParent, gluing);
+            refinementChainParent = mel;
+            if (!varsMerged.isBlank()) {
+                sb.append(varsMerged);
+                if (!varsMerged.endsWith("\n")) sb.append("\n");
+                sb.append("\n");
+            }
+        }
+
+        // Constantes e propriedades das máquinas fundidas — depois das variáveis, antes das
+        // compreensões, para que constantes como MAX_COPY estejam declaradas quando necessário.
+        for (Element mel : mergedMachineElements) {
+            BxmlTranslateContext mctx =
+                    BxmlTranslateContext.forMachineWithSharedComprehensions(
+                            mel, ctx.comprehensions(), gluing, machineEl);
+            String constsMerged = BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx);
+            if (!constsMerged.isBlank()) {
+                sb.append(constsMerged);
+                if (!constsMerged.endsWith("\n")) sb.append("\n");
+                sb.append("\n");
+            }
+            String propsMerged = BxmlConstantsAndProperties.formatPropertiesBlock(mel, mctx);
+            if (!propsMerged.isBlank()) {
+                sb.append(propsMerged);
+                if (!propsMerged.endsWith("\n")) sb.append("\n");
+                sb.append("\n");
+            }
+        }
+
+        // Compreensões: todas as variáveis e constantes já estão declaradas.
+        // set_comprehension_k deve estar declarado antes de _i_values (que o referencia).
+        if (!ctx.comprehensions().isEmpty()) {
+            sb.append(ctx.comprehensions().formatAxiomaticBlock(baseName, ctx));
+            sb.append("\n");
+        }
+        // Values das máquinas fundidas (podem referenciar compreensões).
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
@@ -246,18 +304,6 @@ public final class AcslGenerator {
                 if (!valuesMerged.endsWith("\n")) sb.append("\n");
                 sb.append("\n");
             }
-            String varsMerged =
-                    BxmlMachineVariables.formatAxiomaticBlock(
-                            mel, mctx, baseName, refinementChainParent, gluing);
-            refinementChainParent = mel;
-            if (varsMerged.isBlank()) continue;
-            sb.append(varsMerged);
-            if (!varsMerged.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
-        }
-        if (!ctx.comprehensions().isEmpty()) {
-            sb.append(ctx.comprehensions().formatAxiomaticBlock(baseName, ctx));
-            sb.append("\n");
         }
 
         // 2) Todos os predicate (invariantes)
@@ -270,6 +316,14 @@ public final class AcslGenerator {
         }
         appendMergedInvariantPredicatesOnly(
                 sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl);
+
+        // 2b) Bloco axiomatic das funções lambda extraídas durante a tradução
+        LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
+        if (lambdaRegistry != null && !lambdaRegistry.isEmpty()) {
+            sb.append("\n");
+            sb.append(lambdaRegistry.formatAxiomaticBlock());
+            sb.append("\n");
+        }
 
         // 3) Funções: inicialização e operações
         if (isAbstraction && init != null) {

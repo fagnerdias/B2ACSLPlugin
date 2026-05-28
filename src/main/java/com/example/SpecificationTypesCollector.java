@@ -31,7 +31,7 @@ public final class SpecificationTypesCollector {
             Pattern.compile("\\blogic\\s+([^;={]+?)\\s+[A-Za-z_]\\w*");
 
     private static final Pattern SET_INSTANTIATION =
-            Pattern.compile("Set<([^>]+)>");
+            Pattern.compile("(?<![A-Za-z_])Set<([^>]+)>");
 
     private static final Pattern LIST_INSTANTIATION =
             Pattern.compile("\\\\list<([^>]+)>");
@@ -48,7 +48,7 @@ public final class SpecificationTypesCollector {
             Pattern.compile("\\\\forall\\s+(integer|boolean|real)\\s+");
 
     private static final Pattern TUPLE_INSTANTIATION =
-            Pattern.compile("Tuple<([^>]+)>");
+            Pattern.compile("(?<![A-Za-z_])Tuple<([^>]+)>");
 
     private SpecificationTypesCollector() {}
 
@@ -263,6 +263,15 @@ public final class SpecificationTypesCollector {
             return;
         }
         if (t.contains("<") && !t.contains(">")) {
+            return;
+        }
+        // Rejeita capturas que incluem conteúdo de predicado (e.g. "integer x; is_finite(s) ==>")
+        if (t.contains(";") || t.contains("==>") || t.contains("(")) {
+            return;
+        }
+        // Rejeita tipos legados do ghost_operations.ci (DTuple, DRelation, DSet, dummy_*)
+        if (t.startsWith("DTuple") || t.startsWith("DRelation") || t.startsWith("DSet")
+                || t.startsWith("dummy_")) {
             return;
         }
         if (t.length() == 1 && Character.isUpperCase(t.charAt(0))) {

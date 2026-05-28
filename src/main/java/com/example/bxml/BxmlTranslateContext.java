@@ -2,6 +2,7 @@ package com.example.bxml;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 import org.w3c.dom.Element;
 
@@ -12,10 +13,42 @@ import org.w3c.dom.Element;
 public record BxmlTranslateContext(
         BxmlTypeRegistry types,
         BxmlComprehensionRegistry comprehensions,
-        Map<String, String> variableLogicTypes) {
+        Map<String, String> variableLogicTypes,
+        LambdaFunctionRegistry lambdaRegistry,
+        Map<String, String> enumValueRenames,
+        Set<String> enumeratedSetNames) {
+
+    /** Sem registo de lambdas nem renomeação de enumerados. */
+    public BxmlTranslateContext(
+            BxmlTypeRegistry types,
+            BxmlComprehensionRegistry comprehensions,
+            Map<String, String> variableLogicTypes) {
+        this(types, comprehensions, variableLogicTypes, null, Map.of(), Set.of());
+    }
 
     public BxmlTranslateContext(BxmlTypeRegistry types, BxmlComprehensionRegistry comprehensions) {
-        this(types, comprehensions, Map.of());
+        this(types, comprehensions, Map.of(), null, Map.of(), Set.of());
+    }
+
+    /** Retorna uma cópia deste contexto com o registo de lambdas substituído. */
+    public BxmlTranslateContext withLambdaRegistry(LambdaFunctionRegistry registry) {
+        return new BxmlTranslateContext(types, comprehensions, variableLogicTypes, registry, enumValueRenames, enumeratedSetNames);
+    }
+
+    /** Retorna uma cópia deste contexto com o mapa de renomeação de valores enumerados substituído. */
+    public BxmlTranslateContext withEnumRenames(Map<String, String> renames) {
+        return new BxmlTranslateContext(
+                types, comprehensions, variableLogicTypes, lambdaRegistry,
+                renames == null ? Map.of() : renames,
+                enumeratedSetNames);
+    }
+
+    /** Retorna uma cópia deste contexto com os nomes de conjuntos enumerados substituídos. */
+    public BxmlTranslateContext withEnumeratedSetNames(Set<String> setNames) {
+        return new BxmlTranslateContext(
+                types, comprehensions, variableLogicTypes, lambdaRegistry,
+                enumValueRenames,
+                setNames == null ? Set.of() : setNames);
     }
 
     public static BxmlTranslateContext forMachine(Element machineEl) {
@@ -35,7 +68,7 @@ public record BxmlTranslateContext(
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
-        return new BxmlTranslateContext(types, reg, merged);
+        return new BxmlTranslateContext(types, reg, merged, null, Map.of(), Set.of());
     }
 
     /**
@@ -79,6 +112,6 @@ public record BxmlTranslateContext(
                             abstractMachineElForSharedVariableTypes, tmpAbs));
         }
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
-        return new BxmlTranslateContext(types, sharedComprehensions, merged);
+        return new BxmlTranslateContext(types, sharedComprehensions, merged, null, Map.of(), Set.of());
     }
 }
