@@ -222,6 +222,43 @@ public final class BxmlExpressionToAcsl {
         return "-->".equals(o) || "--&gt;".equals(o);
     }
 
+    /** Tipo conjunto de funções surjetivas totais B {@code S -->> T} em {@code Binary_Exp}. */
+    public static boolean isTotalSurjectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return "-->>".equals(o) || "--&gt;&gt;".equals(o);
+    }
+
+    /** B maplet {@code cc |-> bb} → {@code couple(cc, bb)} (ACSL_Lib/tuple_functions/tuple_couple.acsl). */
+    private static boolean isMapletOp(String op) {
+        if (op == null) return false;
+        String o = op.trim();
+        return "|->".equals(o) || "|-&gt;".equals(o);
+    }
+
+    /** B diferença de conjuntos {@code s -s t} → {@code difference(s, t)} (ACSL_Lib/set_functions/difference.acsl). */
+    private static boolean isSetDifferenceOp(String op) {
+        if (op == null) return false;
+        return "-s".equals(op.trim());
+    }
+
+    /** B aplicação funcional {@code f(x)} em BXML como {@code Binary_Exp op="("} → {@code function_apply(f, x)}. */
+    private static boolean isFunctionApplicationOp(String op) {
+        if (op == null) return false;
+        return "(".equals(op.trim());
+    }
+
+    /** B restrição de alcance {@code r |> S} → {@code range_restriction(r, S)} (ACSL_Lib/relation_functions/range_restriction.acsl). */
+    public static boolean isRangeRestrictionOp(String op) {
+        if (op == null) return false;
+        String o = op.trim();
+        return "|>".equals(o) || "|&gt;".equals(o);
+    }
+
     private static boolean isDomainRestrictionOp(String op) {
         if (op == null) {
             return false;
@@ -280,6 +317,8 @@ public final class BxmlExpressionToAcsl {
             case "Binary_Exp" -> translateBinary(exp, ctx);
             case "Nary_Exp" -> translateNary(exp, ctx);
             case "Quantified_Set" -> translateQuantifiedSet(exp, ctx);
+            case "Boolean_Exp" -> translateBooleanExp(exp, ctx);
+            case "Quantified_Exp" -> translateQuantifiedExp(exp, ctx);
             default -> "/* TODO: " + ln + " */";
         };
     }
@@ -341,6 +380,7 @@ public final class BxmlExpressionToAcsl {
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : "card(" + a + ")";
             case "size" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
+            case "~" -> "relation_inverse(" + a + ")";
             default -> opTrim + "(" + a + ")";
         };
     }
@@ -354,8 +394,33 @@ public final class BxmlExpressionToAcsl {
             String rel = translate(pair[1], ctx);
             return "domain_restriction(" + rel + ", " + setRef + ")";
         }
+        if (isRangeRestrictionOp(op)) {
+            String rel = translate(pair[0], ctx);
+            String setRef = intervalOrSetComprehensionRef(pair[1], ctx);
+            return "range_restriction(" + rel + ", " + setRef + ")";
+        }
+        if (isMapletOp(op)) {
+            String left = translate(pair[0], ctx);
+            String right = translate(pair[1], ctx);
+            return "couple(" + left + ", " + right + ")";
+        }
+        if (isFunctionApplicationOp(op)) {
+            // f(x) em B → function_apply(f, x) em ACSL
+            String left = translate(pair[0], ctx);
+            String right = translate(pair[1], ctx);
+            return "function_apply(" + left + ", " + right + ")";
+        }
+        // r[{x}] → apply(r, x)  (ACSL_Lib/relation_functions/apply.acsl)
+        if ("[".equals(op == null ? "" : op.trim())) {
+            String rel = translate(pair[0], ctx);
+            String arg = unwrapSingletonOrTranslate(pair[1], ctx);
+            return "apply(" + rel + ", " + arg + ")";
+        }
         String left = translate(pair[0], ctx);
         String right = translate(pair[1], ctx);
+        if (isSetDifferenceOp(op)) {
+            return "difference(" + left + ", " + right + ")";
+        }
         if (isSetUnion(op)) {
             // B: \/ — união → set_union (ACSL_Lib/set_functions/union.acsl)
             return "set_union(" + left + ", " + right + ")";
@@ -444,5 +509,154 @@ public final class BxmlExpressionToAcsl {
             if (k == 2) break;
         }
         return out;
+    }
+
+    /**
+     * B {@code bool(P)} → {@code (pred ? TRUE : FALSE)}.
+     *
+     * <p>O {@code Boolean_Exp} BXML encapsula um predicado; o resultado é um valor {@code BOOL}
+     * (constante da ACSL_Lib).
+     */
+    private static String translateBooleanExp(Element e, BxmlTranslateContext ctx) {
+        NodeList nl = e.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element child = (Element) n;
+            if ("Attr".equals(child.getLocalName())) continue;
+            String pred = BxmlPredicateToAcsl.translatePropertyPred(child, ctx);
+            return "(" + pred + " ? TRUE : FALSE)";
+        }
+        return "/* bool_exp */";
+    }
+
+    /**
+     * Nomes B que nunca são variáveis livres de uma lambda (conjuntos primitivos, literais, etc.).
+     * Filtrados durante a detecção de variáveis livres em {@link #translateQuantifiedExp}.
+     */
+    private static final java.util.Set<String> B_NON_PARAM_IDS = java.util.Set.of(
+            "NAT", "NAT1", "INTEGER", "INT", "BOOL", "REAL", "STRING",
+            "TRUE", "FALSE", "MAXINT", "MININT");
+
+    /**
+     * B lambda {@code % x.(P | E)} → predicado nomeado registado em {@link LambdaFunctionRegistry}.
+     *
+     * <p>Se o corpo for um {@code Boolean_Exp}, o predicado interno é usado directamente como corpo
+     * do predicado ACSL. Caso contrário usa {@code \lambda} inline como fallback.
+     *
+     * <p>As variáveis livres são detectadas varrendo os nós {@code Id} do corpo e subtraindo as
+     * variáveis ligadas e os identificadores de estado abstracto/concreto em
+     * {@link BxmlTranslateContext#variableLogicTypes()}.
+     */
+    private static String translateQuantifiedExp(Element qe, BxmlTranslateContext ctx) {
+        String type = qe.getAttribute("type");
+        if (!"%".equals(type)) {
+            return "/* TODO: Quantified_Exp type=" + type + " */";
+        }
+
+        // 1. Variáveis ligadas pelo %
+        Element varsEl = childByLocalName(qe, "Variables");
+        java.util.List<String> boundVarNames = new java.util.ArrayList<>();
+        if (varsEl != null) {
+            NodeList nl = varsEl.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element idEl = (Element) n;
+                if ("Attr".equals(idEl.getLocalName()) || !"Id".equals(idEl.getLocalName())) continue;
+                boundVarNames.add(idEl.getAttribute("value"));
+            }
+        }
+        if (boundVarNames.isEmpty()) return "/* TODO: lambda vars */";
+
+        // 2. Corpo da lambda
+        Element bodyEl = childByLocalName(qe, "Body");
+        if (bodyEl == null) return "/* TODO: lambda body */";
+        Element bodyExp = firstExpChild(bodyEl);
+        if (bodyExp == null) return "/* TODO: lambda body */";
+
+        // 3. Determina se o corpo é Boolean_Exp → predicado directo
+        boolean isBooleanBody = "Boolean_Exp".equals(bodyExp.getLocalName());
+        String bodyStr;
+        Element scanRoot; // elemento cuja sub-árvore será varrida para IDs livres
+        if (isBooleanBody) {
+            Element innerPred = firstExpChild(bodyExp);
+            if (innerPred == null) return "/* TODO: lambda body */";
+            bodyStr = BxmlPredicateToAcsl.translatePropertyPred(innerPred, ctx);
+            scanRoot = innerPred;
+        } else {
+            bodyStr = translate(bodyExp, ctx);
+            scanRoot = bodyExp;
+        }
+
+        // 4. Variáveis livres: IDs no corpo que não são ligadas nem estado abstracto/concreto
+        java.util.Set<String> boundSet = new java.util.LinkedHashSet<>(boundVarNames);
+        java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
+        collectIdValues(scanRoot, allIds);
+        allIds.removeAll(boundSet);
+        allIds.removeAll(ctx.variableLogicTypes().keySet());
+        allIds.removeAll(B_NON_PARAM_IDS);
+        java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
+
+        // 5. Regista no LambdaFunctionRegistry ou cai no inline \lambda
+        LambdaFunctionRegistry registry = ctx.lambdaRegistry();
+        if (registry != null && isBooleanBody) {
+            String name = registry.register(freeVarNames, boundVarNames, bodyStr);
+            java.util.List<String> args = new java.util.ArrayList<>(freeVarNames);
+            args.addAll(boundVarNames);
+            return name + "(" + String.join(", ", args) + ")";
+        }
+        // Fallback inline
+        java.util.List<String> decls = new java.util.ArrayList<>();
+        for (String v : boundVarNames) decls.add("integer " + v);
+        return "\\lambda " + String.join(", ", decls) + "; " + bodyStr;
+    }
+
+    /** Recolhe recursivamente todos os valores {@code value} de nós {@code Id}. */
+    private static void collectIdValues(Element e, java.util.Set<String> out) {
+        if ("Id".equals(e.getLocalName())) {
+            String v = e.getAttribute("value");
+            if (v != null && !v.isBlank()) out.add(v.trim());
+        }
+        NodeList nl = e.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            collectIdValues((Element) n, out);
+        }
+    }
+
+    /** Primeiro filho elemento cujo {@code localName} corresponda a {@code name}. */
+    private static Element childByLocalName(Element parent, String name) {
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if (name.equals(e.getLocalName())) return e;
+        }
+        return null;
+    }
+
+    /**
+     * Para a imagem relacional {@code r[{x}]}: se {@code e} for um {@code Nary_Exp op='{'} com
+     * exactamente um elemento, retorna a tradução desse elemento (descarta a envolvente singleton);
+     * caso contrário traduz normalmente.
+     */
+    private static String unwrapSingletonOrTranslate(Element e, BxmlTranslateContext ctx) {
+        if (e != null
+                && "Nary_Exp".equals(e.getLocalName())
+                && "{".equals(e.getAttribute("op"))) {
+            java.util.List<Element> elems = new java.util.ArrayList<>();
+            NodeList nl = e.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if (!"Attr".equals(ch.getLocalName())) elems.add(ch);
+            }
+            if (elems.size() == 1) return translate(elems.get(0), ctx);
+        }
+        return translate(e, ctx);
     }
 }

@@ -146,7 +146,34 @@ public final class BxmlInitialisationTranslator {
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Element ch = (Element) n;
             if ("Attr".equals(ch.getLocalName())) continue;
-            if ("Assignement_Sub".equals(ch.getLocalName())) parseAssignementSub(ch, ensures, ctx);
+            if ("Assignement_Sub".equals(ch.getLocalName())) {
+                parseAssignementSub(ch, ensures, ctx);
+            } else if ("If_Sub".equals(ch.getLocalName())) {
+                parseIfSubAsConditionalEnsures(ch, ensures, ctx);
+            }
+        }
+    }
+
+    /**
+     * {@code IF cond THEN body END} em corpo paralelo → uma cláusula {@code ensures} condicional
+     * por efeito: {@code (cond) ==> (ensures_do_then)}.
+     *
+     * <p>Apenas o ramo {@code Then} é usado; o ramo {@code Else} (se existir) pode ser adicionado
+     * simetricamente com {@code !(cond) ==> (ensures_do_else)}.
+     */
+    private static void parseIfSubAsConditionalEnsures(
+            Element ifSub, List<String> ensures, BxmlTranslateContext ctx) {
+        Element condEl = firstChildElement(ifSub, "Condition");
+        Element thenEl = firstChildElement(ifSub, "Then");
+        if (condEl == null || thenEl == null) return;
+
+        String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
+        if (cond == null || cond.isBlank()) return;
+
+        List<String> thenEnsures = new ArrayList<>();
+        walkSubstitution(firstSubChild(thenEl), thenEnsures, ctx);
+        for (String e : thenEnsures) {
+            ensures.add("(" + cond + ") ==> (" + e + ")");
         }
     }
 
