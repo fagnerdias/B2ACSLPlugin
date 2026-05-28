@@ -308,7 +308,23 @@ public final class BxmlExpressionToAcsl {
     public static String translate(Element exp, BxmlTranslateContext ctx) {
         String ln = exp.getLocalName();
         return switch (ln) {
-            case "Id" -> translateBNamedConstant(exp.getAttribute("value"));
+            case "Id" -> {
+                String idVal = exp.getAttribute("value");
+                // Valores enumerados: usar o nome prefixado (ex. switch__normal)
+                String renamed = ctx.enumValueRenames().get(idVal);
+                if (renamed != null) yield renamed;
+                // Parâmetros/variáveis de tipo enum C: cast (integer) para compatibilidade com Set<integer>
+                if (!ctx.enumeratedSetNames().isEmpty()) {
+                    String tr = exp.getAttribute("typref");
+                    if (!tr.isBlank()) {
+                        String bTypeName = ctx.types().getRawType(Integer.parseInt(tr.trim()));
+                        if (ctx.enumeratedSetNames().contains(bTypeName)) {
+                            yield "(integer)" + translateBNamedConstant(idVal);
+                        }
+                    }
+                }
+                yield translateBNamedConstant(idVal);
+            }
             case "Integer_Literal" -> exp.getAttribute("value");
             case "Boolean_Literal" -> exp.getAttribute("value");
             case "EmptySet" -> translateEmptySet(exp, ctx.types());
@@ -471,7 +487,12 @@ public final class BxmlExpressionToAcsl {
                 parts.add(translate(e, ctx));
             }
             if (parts.size() == 1) return "singleton(" + parts.get(0) + ")";
-            return "set_enum(" + String.join(", ", parts) + ")";
+            // { e1, e2, ..., eN } → set_union(set_union(singleton(e1), singleton(e2)), singleton(eN))
+            String acc = "singleton(" + parts.get(0) + ")";
+            for (int k = 1; k < parts.size(); k++) {
+                acc = "set_union(" + acc + ", singleton(" + parts.get(k) + "))";
+            }
+            return acc;
         }
         return "/* nary " + op + " */";
     }
