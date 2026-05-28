@@ -411,7 +411,8 @@ public final class GhostOperationsCiGenerator {
         sb.append("/*@\n");
         sb.append("    axiomatic dummy_ghost {\n\n");
         sb.append("        type DSet<A>;\n\n");
-        sb.append("        type DRelation<A, B>;\n\n");
+        sb.append("        type DTuple<A, B>;\n\n");
+        sb.append("        type DRelation<A, B> = DSet<DTuple<integer, integer> >;\n\n");
         sb.append("        type dummy_Function_int_int = DRelation<integer, integer>;\n\n");
         for (String v : abstractVarNames) {
             String t = varTypes.getOrDefault(v, "Set<integer>");
@@ -430,7 +431,7 @@ public final class GhostOperationsCiGenerator {
         sb.append("        predicate dummy_equals<A,B>(A a, B b);\n");
         sb.append("        logic A dummy_set_union<A, B>(A a, B b);\n");
         sb.append("        logic integer dummy_card<A>(A a);\n");
-        sb.append("        logic DSet<integer> dummy_singleton<A>(A a);\n");
+        sb.append("        logic DSet<A> dummy_singleton<A>(A a);\n");
         sb.append("        predicate dummy_is_finite<A>(A a);\n");
         sb.append(
                 "        logic DRelation<A, B> dummy_domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
@@ -440,6 +441,7 @@ public final class GhostOperationsCiGenerator {
         sb.append("        logic DSet<A> dummy_difference<A>(DSet<A> a, DSet<A> b);\n");
         sb.append("        logic B dummy_function_apply<A, B>(DRelation<A, B> r, A x);\n");
         sb.append("        logic DRelation<A, B> dummy_range_restriction<A, B>(DRelation<A, B> r, DSet<B> S);\n");
+        sb.append("        logic DTuple<A, B> dummy_couple<A, B>(A a, B b);\n");
         sb.append("    }\n*/\n");
         return sb.toString();
     }
@@ -1337,7 +1339,8 @@ public final class GhostOperationsCiGenerator {
                     "array_to_function",
                     "difference",
                     "function_apply",
-                    "range_restriction");
+                    "range_restriction",
+                    "couple");
 
     private static String prefixAcslLibFunctionsForGhost(String text) {
         if (text == null || text.isEmpty()) {
