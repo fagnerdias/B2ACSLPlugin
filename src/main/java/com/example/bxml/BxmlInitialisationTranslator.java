@@ -78,6 +78,16 @@ public final class BxmlInitialisationTranslator {
             case "ANY_Sub" -> {
                 /* Tratado como contrato ghost por GhostOperationsCiGenerator; nada a emitir aqui. */
             }
+            case "Becomes_Such_That" -> {
+                // pos:(P(pos)) → ensures P(pos); o * de saída é aplicado depois por applyStarPrefixToEnsures
+                Element predEl = firstChildElement(sub, "Pred");
+                if (predEl != null) {
+                    String p = BxmlPredicateToAcsl.translateInvariantContent(predEl, ctx);
+                    if (p != null && !p.isBlank()) {
+                        ensures.add(p.trim());
+                    }
+                }
+            }
             default -> { /* outras substituições: extensão futura */ }
         }
     }
@@ -247,15 +257,19 @@ public final class BxmlInitialisationTranslator {
         public String toContractText() {
             StringBuilder sb = new StringBuilder();
             sb.append("function ").append(functionName).append(":\n");
-            sb.append("contract:    \n");
+            sb.append("contract:\n");
             for (String e : ensures) {
                 sb.append("    ensures  ").append(e).append(";\n");
             }
             for (String v : dummyGhostEnsureVarNames) {
                 sb.append("    ensures  dummy_ghost_").append(v).append(";\n");
             }
-            for (String a : assignsTargets) {
-                sb.append("    assigns ").append(a).append(";\n");
+            if (assignsTargets.isEmpty()) {
+                sb.append("    assigns \\nothing;\n");
+            } else {
+                for (String a : assignsTargets) {
+                    sb.append("    assigns ").append(a).append(";\n");
+                }
             }
             if (includeGhostBehaviorAssert) {
                 sb.append("    at 1: assert ghost__initialisation;\n");
