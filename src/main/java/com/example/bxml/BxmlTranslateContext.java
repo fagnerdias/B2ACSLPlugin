@@ -12,10 +12,24 @@ import org.w3c.dom.Element;
 public record BxmlTranslateContext(
         BxmlTypeRegistry types,
         BxmlComprehensionRegistry comprehensions,
-        Map<String, String> variableLogicTypes) {
+        Map<String, String> variableLogicTypes,
+        LambdaFunctionRegistry lambdaRegistry) {
+
+    /** Sem registo de lambdas (compatibilidade com código existente). */
+    public BxmlTranslateContext(
+            BxmlTypeRegistry types,
+            BxmlComprehensionRegistry comprehensions,
+            Map<String, String> variableLogicTypes) {
+        this(types, comprehensions, variableLogicTypes, null);
+    }
 
     public BxmlTranslateContext(BxmlTypeRegistry types, BxmlComprehensionRegistry comprehensions) {
-        this(types, comprehensions, Map.of());
+        this(types, comprehensions, Map.of(), null);
+    }
+
+    /** Retorna uma cópia deste contexto com o registo de lambdas substituído. */
+    public BxmlTranslateContext withLambdaRegistry(LambdaFunctionRegistry registry) {
+        return new BxmlTranslateContext(types, comprehensions, variableLogicTypes, registry);
     }
 
     public static BxmlTranslateContext forMachine(Element machineEl) {

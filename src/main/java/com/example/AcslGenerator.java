@@ -29,6 +29,7 @@ import com.example.bxml.BxmlMachineVariables;
 import com.example.bxml.BxmlOperationsTranslator;
 import com.example.bxml.BxmlOperationsTranslator.OperationAcsl;
 import com.example.bxml.BxmlTranslateContext;
+import com.example.bxml.LambdaFunctionRegistry;
 import com.example.model.Machine;
 
 /**
@@ -135,7 +136,8 @@ public final class AcslGenerator {
 
         BxmlTranslateContext ctx =
                 BxmlTranslateContext.forMachineWithSharedComprehensions(
-                        machineEl, sharedComprehensions, gluing);
+                        machineEl, sharedComprehensions, gluing)
+                        .withLambdaRegistry(new LambdaFunctionRegistry());
 
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
@@ -270,6 +272,14 @@ public final class AcslGenerator {
         }
         appendMergedInvariantPredicatesOnly(
                 sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl);
+
+        // 2b) Bloco axiomatic das funções lambda extraídas durante a tradução
+        LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
+        if (lambdaRegistry != null && !lambdaRegistry.isEmpty()) {
+            sb.append("\n");
+            sb.append(lambdaRegistry.formatAxiomaticBlock());
+            sb.append("\n");
+        }
 
         // 3) Funções: inicialização e operações
         if (isAbstraction && init != null) {
