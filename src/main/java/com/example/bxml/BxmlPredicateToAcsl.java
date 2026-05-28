@@ -323,6 +323,7 @@ public final class BxmlPredicateToAcsl {
             case "&lt;i", "<i" -> "<";
             case "&gt;=i", ">=i" -> ">=";
             case "&gt;i", ">i" -> ">";
+            case "/=" -> "!=";
             default -> o;
         };
     }
