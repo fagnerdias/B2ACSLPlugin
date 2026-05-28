@@ -138,7 +138,9 @@ public final class AcslGenerator {
         BxmlTranslateContext ctx =
                 BxmlTranslateContext.forMachineWithSharedComprehensions(
                         machineEl, sharedComprehensions, gluing)
-                        .withLambdaRegistry(new LambdaFunctionRegistry());
+                        .withLambdaRegistry(new LambdaFunctionRegistry())
+                        .withEnumRenames(BxmlSetsTranslator.buildEnumRenames(machineEl))
+                        .withEnumeratedSetNames(BxmlSetsTranslator.buildEnumeratedSetNames(machineEl));
 
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);

@@ -250,10 +250,23 @@ public final class BxmlOperationsTranslator {
         for (int i = 0; i < ensures.size(); i++) {
             String s = ensures.get(i);
             int eq = s.indexOf(" == ");
-            if (eq < 0) continue;
-            String lhs = s.substring(0, eq).trim();
-            if (out.contains(lhs) && !lhs.startsWith("*")) {
-                ensures.set(i, "*" + lhs + " == " + s.substring(eq + 4));
+            // Forma simples v == E (Assignement_Sub): a LHS é exatamente um parâmetro de saída
+            boolean handled = false;
+            if (eq >= 0) {
+                String lhs = s.substring(0, eq).trim();
+                if (out.contains(lhs) && !lhs.startsWith("*")) {
+                    ensures.set(i, "*" + lhs + " == " + s.substring(eq + 4));
+                    handled = true;
+                }
+            }
+            if (!handled) {
+                // Predicado geral (Becomes_Such_That): substitui toda ocorrência word-boundary do parâmetro
+                for (String param : out) {
+                    s = s.replaceAll(
+                            "(?<![\\w*])" + java.util.regex.Pattern.quote(param) + "(?!\\w)",
+                            "*" + param);
+                }
+                ensures.set(i, s);
             }
         }
     }
