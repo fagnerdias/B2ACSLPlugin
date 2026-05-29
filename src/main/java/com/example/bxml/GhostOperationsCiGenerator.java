@@ -1096,6 +1096,7 @@ public final class GhostOperationsCiGenerator {
                     collectAssignedInSubstitution(firstSubChild(elseEl), abstractSet, out);
                 }
             }
+            case "Select" -> collectAssignedInSelect(sub, abstractSet, out);
             case "ANY_Sub" -> {
                 Element thenEl = firstChildElement(sub, "Then");
                 if (thenEl != null) {
@@ -1103,6 +1104,28 @@ public final class GhostOperationsCiGenerator {
                 }
             }
             default -> { }
+        }
+    }
+
+    private static void collectAssignedInSelect(
+            Element select, Set<String> abstractSet, Set<String> out) {
+        Element whenClauses = firstChildElement(select, "When_Clauses");
+        if (whenClauses != null) {
+            NodeList children = whenClauses.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                Node n = children.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element when = (Element) n;
+                if (!"When".equals(when.getLocalName())) continue;
+                Element thenEl = firstChildElement(when, "Then");
+                if (thenEl != null) {
+                    collectAssignedInSubstitution(firstSubChild(thenEl), abstractSet, out);
+                }
+            }
+        }
+        Element elseEl = firstChildElement(select, "Else");
+        if (elseEl != null) {
+            collectAssignedInSubstitution(firstSubChild(elseEl), abstractSet, out);
         }
     }
 
