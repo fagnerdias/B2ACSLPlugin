@@ -305,6 +305,18 @@ public final class BxmlExpressionToAcsl {
         };
     }
 
+    /** Literais booleanos B ({@code TRUE}/{@code FALSE}) → ACSL {@code \\true}/{@code \\false}. */
+    static String translateBooleanLiteral(String value) {
+        if (value == null) {
+            return "";
+        }
+        return switch (value.trim().toUpperCase()) {
+            case "TRUE" -> "\\true";
+            case "FALSE" -> "\\false";
+            default -> value.trim();
+        };
+    }
+
     public static String translate(Element exp, BxmlTranslateContext ctx) {
         String ln = exp.getLocalName();
         return switch (ln) {
@@ -326,7 +338,7 @@ public final class BxmlExpressionToAcsl {
                 yield translateBNamedConstant(idVal);
             }
             case "Integer_Literal" -> exp.getAttribute("value");
-            case "Boolean_Literal" -> exp.getAttribute("value");
+            case "Boolean_Literal" -> translateBooleanLiteral(exp.getAttribute("value"));
             case "EmptySet" -> translateEmptySet(exp, ctx.types());
             case "EmptySeq" -> "\\Nil"; // lista ACSL vazia (E-ACSL / lógica de sequências)
             case "Unary_Exp" -> translateUnary(exp, ctx);
@@ -533,7 +545,7 @@ public final class BxmlExpressionToAcsl {
     }
 
     /**
-     * B {@code bool(P)} → {@code (pred ? TRUE : FALSE)}.
+     * B {@code bool(P)} → {@code (pred ? \\true : \\false)}.
      *
      * <p>O {@code Boolean_Exp} BXML encapsula um predicado; o resultado é um valor {@code BOOL}
      * (constante da ACSL_Lib).
@@ -546,7 +558,7 @@ public final class BxmlExpressionToAcsl {
             Element child = (Element) n;
             if ("Attr".equals(child.getLocalName())) continue;
             String pred = BxmlPredicateToAcsl.translatePropertyPred(child, ctx);
-            return "(" + pred + " ? TRUE : FALSE)";
+            return "(" + pred + " ? \\true : \\false)";
         }
         return "/* bool_exp */";
     }
