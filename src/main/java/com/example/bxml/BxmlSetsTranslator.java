@@ -12,6 +12,8 @@ import java.util.Set;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 
+import com.example.AcslLibIncludes;
+
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -269,6 +271,92 @@ public final class BxmlSetsTranslator {
             return "";
         }
         sb.append("\n");
+        return sb.toString();
+    }
+
+    /**
+     * Texto das máquinas em {@code SEES} para deteção de includes da {@code B2ACSLLib} na máquina que
+     * vê (corpo dos {@code .acsl} já gerados, sem repetir o preâmbulo de {@code include}).
+     */
+    public static String collectSeesMachinesTextForIncludeScan(
+            Element viewerMachineEl, Path bxmlDirectory, Path acslDirectory) {
+        StringBuilder sb = new StringBuilder();
+        for (String seen : listReferencedMachineNames(viewerMachineEl)) {
+            if (acslDirectory != null) {
+                Path acsl = acslDirectory.resolve(seen + ".acsl");
+                if (Files.isRegularFile(acsl)) {
+                    try {
+                        sb.append(
+                                AcslLibIncludes.acslBodyAfterPreambleIncludes(
+                                        Files.readString(acsl)));
+                        sb.append('\n');
+                    } catch (Exception ignored) {
+                        // ignora
+                    }
+                    continue;
+                }
+            }
+            if (bxmlDirectory != null) {
+                Path bxml = bxmlDirectory.resolve(seen + ".bxml");
+                if (Files.isRegularFile(bxml)) {
+                    try {
+                        sb.append(
+                                collectBxmlTextForIncludeScan(parseMachineElement(bxml)));
+                        sb.append('\n');
+                    } catch (Exception ignored) {
+                        // ignora
+                    }
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Includes da {@code B2ACSLLib} já emitidos nos preâmbulos dos {@code .acsl} das máquinas vistas
+     * (caminhos relativos, para fusão sem duplicar na máquina que vê).
+     */
+    public static List<String> collectLibIncludePathsFromSeenMachines(
+            Element viewerMachineEl, Path bxmlDirectory, Path acslDirectory) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        for (String seen : listReferencedMachineNames(viewerMachineEl)) {
+            if (acslDirectory != null) {
+                Path acsl = acslDirectory.resolve(seen + ".acsl");
+                if (Files.isRegularFile(acsl)) {
+                    try {
+                        merged.addAll(
+                                AcslLibIncludes.parseLibIncludeRelativePathsFromPreamble(
+                                        Files.readString(acsl)));
+                    } catch (Exception ignored) {
+                        // ignora
+                    }
+                }
+            }
+        }
+        return List.copyOf(merged);
+    }
+
+    /** Fragmento BXML traduzido só para varredura de símbolos da lib (conjuntos + invariantes). */
+    private static String collectBxmlTextForIncludeScan(Element machineEl) throws Exception {
+        String machineName = machineEl.getAttribute("name");
+        if (machineName == null || machineName.isBlank()) {
+            return "";
+        }
+        com.example.bxml.BxmlTranslateContext ctx =
+                com.example.bxml.BxmlTranslateContext.forMachine(machineEl);
+        StringBuilder sb = new StringBuilder();
+        String sets = formatSetsBlock(machineEl);
+        if (!sets.isBlank()) {
+            sb.append(sets).append('\n');
+        }
+        for (org.w3c.dom.Element inv :
+                com.example.bxml.BxmlInvariantTranslator.listDirectInvariants(machineEl)) {
+            String body =
+                    com.example.bxml.BxmlPredicateToAcsl.translateInvariantContent(inv, ctx);
+            if (body != null && !body.isBlank()) {
+                sb.append(body).append('\n');
+            }
+        }
         return sb.toString();
     }
 

@@ -1,5 +1,6 @@
 package com.example;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -104,6 +105,28 @@ public final class AcslGenerator {
             List<Path> mergeBxmlPathsFromDescendants,
             Map<String, String> gluingSubstitutionsFromInvariants)
             throws Exception {
+        return generateAcsl(
+                machine,
+                bxmlPath,
+                outputDir,
+                mergeBxmlPathsFromDescendants,
+                gluingSubstitutionsFromInvariants,
+                Set.of());
+    }
+
+    /**
+     * @param seenOnlyMachineNames máquinas só referenciadas em {@code SEES} de outra (ex.
+     *     {@code Airlock_pressure_bs}); o {@code .acsl} gerado não repete includes da
+     *     {@code B2ACSLLib} — ficam na máquina que vê.
+     */
+    public static Optional<Path> generateAcsl(
+            Machine machine,
+            Path bxmlPath,
+            Path outputDir,
+            List<Path> mergeBxmlPathsFromDescendants,
+            Map<String, String> gluingSubstitutionsFromInvariants,
+            Set<String> seenOnlyMachineNames)
+            throws Exception {
         Document doc = parseXml(bxmlPath);
         Element machineEl = doc.getDocumentElement();
         if (referencesAbstractMachineViaAbstractionTag(machineEl)) {
@@ -113,6 +136,8 @@ public final class AcslGenerator {
         Files.createDirectories(outputDir);
         String baseName = machine.getMachineName();
         Path acslFile = outputDir.resolve(baseName + ".acsl");
+        boolean omitLibIncludesFromPreamble =
+                seenOnlyMachineNames != null && seenOnlyMachineNames.contains(baseName);
 
         List<Path> mergePaths =
                 mergeBxmlPathsFromDescendants == null ? List.of() : mergeBxmlPathsFromDescendants;
@@ -343,11 +368,21 @@ public final class AcslGenerator {
 
         String extraLibSymbolScan =
                 libScanRemovedBodies.length() == 0 ? null : libScanRemovedBodies.toString();
+        String bodyForLibScan = sb.substring(headerLen);
+        String seesMachinesScan =
+                BxmlSetsTranslator.collectSeesMachinesTextForIncludeScan(
+                        machineEl, bxmlDirectory, outputDir);
+        String combinedExtraScan =
+                joinNonBlank(extraLibSymbolScan, seesMachinesScan);
+        List<String> seenLibIncludePaths =
+                BxmlSetsTranslator.collectLibIncludePathsFromSeenMachines(
+                        machineEl, bxmlDirectory, outputDir);
         String libIncludes =
-                AcslLibIncludes.formatIncludeBlock(sb.substring(headerLen), extraLibSymbolScan);
+                AcslLibIncludes.formatIncludeBlock(
+                        bodyForLibScan, combinedExtraScan, seenLibIncludePaths);
         String seesIncludes = BxmlSetsTranslator.formatSeesIncludeBlock(machineEl, bxmlDirectory);
         StringBuilder preambleIncludes = new StringBuilder();
-        if (!libIncludes.isEmpty()) {
+        if (!omitLibIncludesFromPreamble && !libIncludes.isEmpty()) {
             preambleIncludes.append(libIncludes);
         }
         if (!seesIncludes.isEmpty()) {
@@ -363,9 +398,43 @@ public final class AcslGenerator {
             sb.insert(headerLen, preambleIncludes);
         }
         String fullAcsl = sb.toString();
+        if (omitLibIncludesFromPreamble) {
+            fullAcsl = AcslLibIncludes.removeLibIncludesFromPreamble(fullAcsl);
+        }
         Files.writeString(acslFile, fullAcsl);
-        AcslLibIncludes.copyReferencedLibraryFiles(fullAcsl, acslFile, extraLibSymbolScan);
+        if (!omitLibIncludesFromPreamble) {
+            AcslLibIncludes.copyReferencedLibraryFiles(fullAcsl, acslFile, extraLibSymbolScan);
+        }
         return Optional.of(acslFile);
+    }
+
+    /**
+     * Ficheiro auxiliar só com {@code include "import/…"} para verificação Frama-C isolada de uma
+     * máquina vista em {@code SEES} (o {@code .acsl} principal não traz esses includes).
+     */
+    public static Optional<Path> writeLibIncludesSidecarForSeenMachine(
+            String machineName, Path acslDirectory) throws IOException {
+        if (machineName == null || machineName.isBlank() || acslDirectory == null) {
+            return Optional.empty();
+        }
+        Path mainAcsl = acslDirectory.resolve(machineName + ".acsl");
+        if (!Files.isRegularFile(mainAcsl)) {
+            return Optional.empty();
+        }
+        String body = AcslLibIncludes.acslBodyAfterPreambleIncludes(Files.readString(mainAcsl));
+        String includes = AcslLibIncludes.formatIncludeBlock(body, null);
+        if (includes.isBlank()) {
+            return Optional.empty();
+        }
+        Path sidecar = acslDirectory.resolve("_" + machineName + "_lib_includes.acsl");
+        String sidecarText =
+                "/* B2ACSL: includes da biblioteca para verificação isolada de "
+                        + machineName
+                        + " */\n\n"
+                        + includes;
+        Files.writeString(sidecar, sidecarText);
+        AcslLibIncludes.copyReferencedLibraryFiles(sidecarText + "\n" + body, sidecar, null);
+        return Optional.of(sidecar);
     }
 
     /**
@@ -452,6 +521,21 @@ public final class AcslGenerator {
                 init.assignsTargets(),
                 init.includeGhostBehaviorAssert(),
                 init.dummyGhostEnsureVarNames());
+    }
+
+    private static String joinNonBlank(String a, String b) {
+        boolean aBlank = a == null || a.isBlank();
+        boolean bBlank = b == null || b.isBlank();
+        if (aBlank && bBlank) {
+            return "";
+        }
+        if (aBlank) {
+            return b;
+        }
+        if (bBlank) {
+            return a;
+        }
+        return a + "\n" + b;
     }
 
     private static Document parseXml(Path path) throws Exception {
