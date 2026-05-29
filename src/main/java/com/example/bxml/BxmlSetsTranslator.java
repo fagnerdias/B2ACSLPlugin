@@ -1,5 +1,7 @@
 package com.example.bxml;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -7,6 +9,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+
+import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
@@ -127,6 +133,99 @@ public final class BxmlSetsTranslator {
      *
      * @return mapa (ordem de inserção preservada), vazio se não houver conjuntos enumerados
      */
+    /** Nomes em {@code <Sees>/<Referenced_Machine>/<Name>} (máquinas vistas). */
+    public static List<String> listReferencedMachineNames(Element machineEl) {
+        Element sees = firstChildElement(machineEl, "Sees");
+        if (sees == null) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        NodeList ch = sees.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+            Element e = (Element) n;
+            if (!"Referenced_Machine".equals(e.getLocalName())) {
+                continue;
+            }
+            Element nameEl = firstChildElement(e, "Name");
+            if (nameEl == null) {
+                continue;
+            }
+            String name = nameEl.getTextContent();
+            if (name != null && !name.isBlank()) {
+                names.add(name.trim());
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Conjuntos enumerados da máquina e das máquinas em {@code SEES} (mesma pasta de {@code .bxml}).
+     */
+    public static List<EnumeratedSetInfo> listEnumeratedSetsWithSees(
+            Element machineEl, Path bxmlDirectory) {
+        List<EnumeratedSetInfo> merged = new ArrayList<>(listEnumeratedSets(machineEl));
+        if (bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return merged;
+        }
+        for (String seen : listReferencedMachineNames(machineEl)) {
+            Path p = bxmlDirectory.resolve(seen + ".bxml");
+            if (!Files.isRegularFile(p)) {
+                continue;
+            }
+            try {
+                merged.addAll(listEnumeratedSets(parseMachineElement(p)));
+            } catch (Exception ignored) {
+                // ignora SEES inacessível
+            }
+        }
+        return merged;
+    }
+
+    /**
+     * Renomeação de valores enumerados da máquina e das máquinas em {@code SEES} (ficheiros
+     * {@code Nome.bxml} no mesmo diretório que a abstrata).
+     */
+    public static Map<String, String> buildEnumRenamesWithSees(
+            Element machineEl, Path bxmlDirectory) {
+        LinkedHashMap<String, String> merged =
+                new LinkedHashMap<>(buildEnumRenames(machineEl));
+        if (bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return merged;
+        }
+        for (String seen : listReferencedMachineNames(machineEl)) {
+            Path p = bxmlDirectory.resolve(seen + ".bxml");
+            if (!Files.isRegularFile(p)) {
+                continue;
+            }
+            try {
+                merged.putAll(buildEnumRenames(parseMachineElement(p)));
+            } catch (Exception ignored) {
+                // ignora SEES inacessível
+            }
+        }
+        return merged;
+    }
+
+    /** Raiz {@code <Machine>} com parser namespace-aware (BXML 1.0 com {@code xmlns}). */
+    static Element parseMachineElement(Path bxmlPath) throws Exception {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        try {
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        } catch (Exception ignored) {
+            // opcional
+        }
+        DocumentBuilder builder = factory.newDocumentBuilder();
+        Document doc = builder.parse(bxmlPath.toFile());
+        Element root = doc.getDocumentElement();
+        root.normalize();
+        return root;
+    }
+
     public static Map<String, String> buildEnumRenames(Element machineEl) {
         Element setsEl = firstChildElement(machineEl, "Sets");
         if (setsEl == null) return Map.of();
