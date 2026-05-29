@@ -52,7 +52,8 @@ import com.example.model.Machine;
  * {@code axiomatic Nome_properties}; {@code Values} (implementações) → {@code axiomatic Nome_values}
  * ({@link BxmlConstantsAndProperties}); em seguida
  * {@code include "connection.acsl"} se existir refinamento fundido na abstração ({@link BxmlConnectionAcsl},
- * só elo abstração→refinamento).
+ * só elo abstração→refinamento); {@code include "MaquinaVista.acsl"} para cada máquina em {@code <Sees>}
+ * ({@link BxmlSetsTranslator#formatSeesIncludeBlock}).
  *
  * <p>Variáveis: um bloco {@code axiomatic NomeMaquina_variables} por máquina (abstrata e cada
  * refinamento/implementação fundido), tipos inferidos quando possível ({@link BxmlMachineVariables});
@@ -135,12 +136,15 @@ public final class AcslGenerator {
                 BxmlComprehensionRegistry.fromMachineChain(comprehensionChain, gluing);
         sharedComprehensions.assignDedupIndices();
 
+        Path bxmlDirectory = bxmlPath.getParent();
         BxmlTranslateContext ctx =
                 BxmlTranslateContext.forMachineWithSharedComprehensions(
                         machineEl, sharedComprehensions, gluing)
                         .withLambdaRegistry(new LambdaFunctionRegistry())
-                        .withEnumRenames(BxmlSetsTranslator.buildEnumRenames(machineEl))
-                        .withEnumeratedSetNames(BxmlSetsTranslator.buildEnumeratedSetNames(machineEl));
+                        .withEnumRenames(
+                                BxmlSetsTranslator.buildEnumRenamesWithSees(machineEl, bxmlDirectory))
+                        .withEnumeratedSetNames(
+                                BxmlSetsTranslator.buildEnumeratedSetNames(machineEl));
 
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
@@ -339,10 +343,24 @@ public final class AcslGenerator {
 
         String extraLibSymbolScan =
                 libScanRemovedBodies.length() == 0 ? null : libScanRemovedBodies.toString();
-        String includes =
+        String libIncludes =
                 AcslLibIncludes.formatIncludeBlock(sb.substring(headerLen), extraLibSymbolScan);
-        if (!includes.isEmpty()) {
-            sb.insert(headerLen, includes);
+        String seesIncludes = BxmlSetsTranslator.formatSeesIncludeBlock(machineEl, bxmlDirectory);
+        StringBuilder preambleIncludes = new StringBuilder();
+        if (!libIncludes.isEmpty()) {
+            preambleIncludes.append(libIncludes);
+        }
+        if (!seesIncludes.isEmpty()) {
+            if (!preambleIncludes.isEmpty() && !preambleIncludes.toString().endsWith("\n\n")) {
+                if (!preambleIncludes.toString().endsWith("\n")) {
+                    preambleIncludes.append("\n");
+                }
+                preambleIncludes.append("\n");
+            }
+            preambleIncludes.append(seesIncludes);
+        }
+        if (!preambleIncludes.isEmpty()) {
+            sb.insert(headerLen, preambleIncludes);
         }
         String fullAcsl = sb.toString();
         Files.writeString(acslFile, fullAcsl);

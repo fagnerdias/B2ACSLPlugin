@@ -210,6 +210,52 @@ public final class BxmlSetsTranslator {
         return merged;
     }
 
+    /**
+     * Linhas {@code include "MaquinaVista.acsl";} para cada máquina em {@code <Sees>} que gera
+     * ficheiro próprio (abstração / componente sem {@code <Abstraction>}).
+     */
+    public static String formatSeesIncludeBlock(Element machineEl, Path bxmlDirectory) {
+        List<String> seenNames = listReferencedMachineNames(machineEl);
+        if (seenNames.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String seen : seenNames) {
+            if (bxmlDirectory == null) {
+                sb.append("include \"").append(seen).append(".acsl\";\n");
+                continue;
+            }
+            Path bxml = bxmlDirectory.resolve(seen + ".bxml");
+            if (!Files.isRegularFile(bxml)) {
+                continue;
+            }
+            try {
+                Element seenEl = parseMachineElement(bxml);
+                if (!machineGeneratesOwnAcslFile(seenEl)) {
+                    continue;
+                }
+            } catch (Exception ignored) {
+                continue;
+            }
+            sb.append("include \"").append(seen).append(".acsl\";\n");
+        }
+        if (sb.isEmpty()) {
+            return "";
+        }
+        sb.append("\n");
+        return sb.toString();
+    }
+
+    /** {@code false} para refinamento/implementação com {@code <Abstraction>} preenchido. */
+    private static boolean machineGeneratesOwnAcslFile(Element machineEl) {
+        Element abs = firstChildElement(machineEl, "Abstraction");
+        if (abs == null) {
+            return true;
+        }
+        String t = abs.getTextContent();
+        return t == null || t.isBlank();
+    }
+
     /** Raiz {@code <Machine>} com parser namespace-aware (BXML 1.0 com {@code xmlns}). */
     static Element parseMachineElement(Path bxmlPath) throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
