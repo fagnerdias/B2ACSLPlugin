@@ -49,8 +49,29 @@ public final class BxmlSetsTranslator {
      * Usado para detectar parâmetros/variáveis C cujo tipo é um enum e que precisam de cast {@code (integer)}
      * nas anotações ACSL.
      */
-    /** Conjunto B com valores enumerados (ex. {@code PHASE = {ACQ, CTRL}}). */
-    public record EnumeratedSetInfo(String setName, List<String> valueNames) {}
+    /**
+     * Conjunto B com valores enumerados (ex. {@code PHASE = {ACQ, CTRL}} na máquina {@code Airlock}).
+     */
+    public record EnumeratedSetInfo(String machineName, String setName, List<String> valueNames) {
+
+        /** {@code dummy_<machineName>__<setName>} (universo {@code dummy_ghost}). */
+        public String dummySetLogicName() {
+            return dummyEnumeratedSetName(machineName, setName);
+        }
+
+        /** {@code dummy_<machineName>__<valueName>}. */
+        public String dummyValueLogicName(String valueName) {
+            return dummyEnumeratedValueName(machineName, valueName);
+        }
+    }
+
+    public static String dummyEnumeratedSetName(String machineName, String setName) {
+        return "dummy_" + machineName + "__" + setName;
+    }
+
+    public static String dummyEnumeratedValueName(String machineName, String valueName) {
+        return "dummy_" + machineName + "__" + valueName;
+    }
 
     /**
      * Lista conjuntos com {@code <Enumerated_Values>} na ordem do BXML.
@@ -58,6 +79,11 @@ public final class BxmlSetsTranslator {
     public static List<EnumeratedSetInfo> listEnumeratedSets(Element machineEl) {
         Element setsEl = firstChildElement(machineEl, "Sets");
         if (setsEl == null) return List.of();
+        String machineName = machineEl.getAttribute("name");
+        if (machineName == null || machineName.isBlank()) {
+            return List.of();
+        }
+        machineName = machineName.trim();
         List<EnumeratedSetInfo> out = new ArrayList<>();
         NodeList ch = setsEl.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -94,7 +120,7 @@ public final class BxmlSetsTranslator {
                 }
             }
             if (!values.isEmpty()) {
-                out.add(new EnumeratedSetInfo(setName, values));
+                out.add(new EnumeratedSetInfo(machineName, setName, values));
             }
         }
         return out;

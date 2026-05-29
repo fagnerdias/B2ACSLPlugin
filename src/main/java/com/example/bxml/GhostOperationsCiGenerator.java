@@ -228,8 +228,16 @@ public final class GhostOperationsCiGenerator {
         }
         sb.append("\n");
 
+        List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
+                BxmlSetsTranslator.listEnumeratedSetsWithSees(abstractMachineEl, bxmlDirectory);
         List<GhostOp> ghostOps =
-                buildGhostOperations(abstractMachineEl, abstractSet, ctx, varTypes, concreteConstants);
+                buildGhostOperations(
+                        abstractMachineEl,
+                        abstractSet,
+                        ctx,
+                        varTypes,
+                        concreteConstants,
+                        enumeratedSetsForGhost);
         List<String> allGhostEnsureLines = new ArrayList<>();
         for (GhostOp go : ghostOps) {
             allGhostEnsureLines.addAll(go.ghostEnsures());
@@ -263,7 +271,8 @@ public final class GhostOperationsCiGenerator {
             Set<String> abstractSet,
             BxmlTranslateContext ctx,
             Map<String, String> varTypes,
-            Set<String> concreteConstants) {
+            Set<String> concreteConstants,
+            List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost) {
         List<GhostOp> ops = new ArrayList<>();
         List<String> initEnsures = collectGhostEnsuresFromInit(abstractMachineEl, abstractSet, ctx);
         Set<String> initAssigned = new LinkedHashSet<>();
@@ -273,7 +282,9 @@ public final class GhostOperationsCiGenerator {
             for (String e : initEnsures) {
                 String ge = prefixAcslLibFunctionsForGhost(e);
                 ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
+                ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
                 ge = stripBTypingCommentsForGhost(ge);
+                ge = normalizeBooleanLiteralsForGhost(ge);
                 prefixedInitEnsures.add(ge);
             }
             ops.add(new GhostOp("initialisation", List.of(), initAssigned, prefixedInitEnsures));
@@ -329,7 +340,9 @@ public final class GhostOperationsCiGenerator {
                             ge, op, varTypes, params, ctx, concreteConstants);
                     ge = prefixAcslLibFunctionsForGhost(ge);
                     ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
+                    ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
                     ge = stripBTypingCommentsForGhost(ge);
+                    ge = normalizeBooleanLiteralsForGhost(ge);
                     ge = castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
@@ -519,6 +532,15 @@ public final class GhostOperationsCiGenerator {
             return text;
         }
         return text.replaceAll("\\s*/\\*\\s*:[^*]*\\*/", "");
+    }
+
+    /** {@code TRUE}/{@code FALSE} B restantes → {@code \\true}/{@code \\false} no universo lógico ghost. */
+    private static String normalizeBooleanLiteralsForGhost(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        return text.replaceAll("\\bTRUE\\b", Matcher.quoteReplacement("\\true"))
+                .replaceAll("\\bFALSE\\b", Matcher.quoteReplacement("\\false"));
     }
 
     /** Traduz {@code equals(ss, …)} para o universo {@code dummy_*} com {@code \\old} no RHS. */
@@ -1354,8 +1376,8 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Valores enumerados ({@code ACQ}, {@code Airlock__ACQ}, …) → {@code dummy_ACQ} /
-     * {@code dummy_Airlock__ACQ} alinhados às declarações em {@link DummyGhostAxiomaticBuilder}.
+     * Valores enumerados → {@code dummy_<Maquina>__<Valor>} (ex. {@code dummy_Airlock__ACQ}), alinhado a
+     * {@link DummyGhostAxiomaticBuilder} e a {@link BxmlSetsTranslator#buildEnumRenamesWithSees}.
      */
     private static String prefixEnumValuesForGhost(
             String text, Map<String, String> enumValueRenames) {
@@ -1370,8 +1392,9 @@ public final class GhostOperationsCiGenerator {
             if (bName == null || bName.isBlank()) {
                 continue;
             }
-            String dummyVal = "dummy_" + bName;
             String acslName = e.getValue();
+            String dummyVal =
+                    acslName != null && !acslName.isBlank() ? "dummy_" + acslName : "dummy_" + bName;
             if (acslName != null && !acslName.isBlank()) {
                 out =
                         out.replaceAll(
@@ -1382,6 +1405,40 @@ public final class GhostOperationsCiGenerator {
                     out.replaceAll(
                             "(?<!dummy_)\\b" + Pattern.quote(bName) + "\\b",
                             Matcher.quoteReplacement(dummyVal));
+        }
+        return out;
+    }
+
+    /**
+     * Conjuntos enumerados B → {@code dummy_<Maquina>__<Conjunto>} nos {@code ensures} ghost (ex.
+     * {@code belongs(v, PRESSURE)} → {@code belongs(v, dummy_Airlock_pressure_bs__PRESSURE)}).
+     */
+    private static String prefixEnumeratedSetsForGhost(
+            String text, List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSets) {
+        if (text == null || text.isEmpty() || enumeratedSets == null || enumeratedSets.isEmpty()) {
+            return text;
+        }
+        List<BxmlSetsTranslator.EnumeratedSetInfo> sorted = new ArrayList<>(enumeratedSets);
+        sorted.sort(
+                (a, b) ->
+                        Integer.compare(
+                                b.setName().length(), a.setName().length()));
+        String out = text;
+        for (BxmlSetsTranslator.EnumeratedSetInfo set : sorted) {
+            String dummySet = set.dummySetLogicName();
+            String setName = set.setName();
+            if (setName == null || setName.isBlank()) {
+                continue;
+            }
+            out =
+                    out.replaceAll(
+                            "(?<!dummy_)\\b" + Pattern.quote(setName) + "\\b",
+                            Matcher.quoteReplacement(dummySet));
+            String acslSetRef = set.machineName() + "__" + setName;
+            out =
+                    out.replaceAll(
+                            "(?<!dummy_)\\b" + Pattern.quote(acslSetRef) + "\\b",
+                            Matcher.quoteReplacement(dummySet));
         }
         return out;
     }

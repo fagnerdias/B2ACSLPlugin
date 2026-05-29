@@ -163,26 +163,26 @@ final class DummyGhostAxiomaticBuilder {
     }
 
     /**
-     * Conjuntos enumerados B ({@code PHASE = {ACQ, CTRL}}) → {@code logic DSet<integer> dummy_PHASE}
-     * e axioma {@code dummy_PHASE_values} com {@code dummy_belongs(dummy_ACQ, dummy_PHASE)}, etc.
+     * Conjuntos enumerados B → {@code dummy_<Maquina>__<Conjunto>} e {@code dummy_<Maquina>__<Valor>}.
      */
     private void appendDummyEnumeratedSets(
             StringBuilder sb, List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSets) {
         for (BxmlSetsTranslator.EnumeratedSetInfo set : enumeratedSets) {
-            String setName = set.setName();
-            sb.append("        logic DSet<integer> dummy_").append(setName).append(";\n\n");
+            String dummySet = set.dummySetLogicName();
+            sb.append("        logic DSet<integer> ").append(dummySet).append(";\n\n");
             List<String> dummyVals = new ArrayList<>();
             for (String v : set.valueNames()) {
-                dummyVals.add("dummy_" + v);
-                sb.append("        logic integer dummy_").append(v).append(";\n\n");
+                String dv = set.dummyValueLogicName(v);
+                dummyVals.add(dv);
+                sb.append("        logic integer ").append(dv).append(";\n\n");
             }
-            sb.append("        axiom dummy_").append(setName).append("_values:\n");
+            sb.append("        axiom ").append(dummySet).append("_values:\n");
             for (String dv : dummyVals) {
-                sb.append("            dummy_belongs(").append(dv).append(", dummy_").append(setName).append(")\n");
+                sb.append("            dummy_belongs(").append(dv).append(", ").append(dummySet).append(")\n");
                 sb.append("            &&\n");
             }
             sb.append("            \\forall integer x;\n");
-            sb.append("                dummy_belongs(x, dummy_").append(setName).append(") ==>\n");
+            sb.append("                dummy_belongs(x, ").append(dummySet).append(") ==>\n");
             sb.append("                (");
             for (int k = 0; k < dummyVals.size(); k++) {
                 if (k > 0) sb.append(" || ");
