@@ -181,7 +181,7 @@ public final class B2ACSLPipeline {
                 if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
                     continue;
                 }
-                GhostOperationsCiGenerator.write(cDir, mr, invariantGluingSubstitutions);
+                GhostOperationsCiGenerator.write(cDir, mr, invariantGluingSubstitutions, bdp);
                 break;
             }
 

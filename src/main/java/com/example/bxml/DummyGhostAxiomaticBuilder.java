@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -58,9 +59,32 @@ final class DummyGhostAxiomaticBuilder {
             int maxSetComprehensionIndex,
             Element machineEl,
             BxmlTranslateContext ctx) {
+        return format(
+                ghostEnsureLines,
+                abstractVarNames,
+                varTypes,
+                maxSetComprehensionIndex,
+                machineEl,
+                ctx,
+                null);
+    }
+
+    String format(
+            List<String> ghostEnsureLines,
+            List<String> abstractVarNames,
+            Map<String, String> varTypes,
+            int maxSetComprehensionIndex,
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            Path bxmlDirectory) {
         String ghostText = joinLines(ghostEnsureLines);
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSets =
-                machineEl != null ? BxmlSetsTranslator.listEnumeratedSets(machineEl) : List.of();
+                machineEl == null
+                        ? List.of()
+                        : bxmlDirectory != null
+                                ? BxmlSetsTranslator.listEnumeratedSetsWithSees(
+                                        machineEl, bxmlDirectory)
+                                : BxmlSetsTranslator.listEnumeratedSets(machineEl);
         Set<String> reservedNames =
                 reservedDummyNames(abstractVarNames, machineEl, maxSetComprehensionIndex, enumeratedSets);
 

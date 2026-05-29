@@ -184,13 +184,28 @@ public final class GhostOperationsCiGenerator {
      */
     public static void write(Path cDir, Element abstractMachineEl, Map<String, String> gluing)
             throws IOException {
+        write(cDir, abstractMachineEl, gluing, null);
+    }
+
+    /**
+     * @param bxmlDirectory pasta com os {@code .bxml} (ex. {@code src/main/resources}) para fundir
+     *        valores enumerados das máquinas em {@code SEES}
+     */
+    public static void write(
+            Path cDir,
+            Element abstractMachineEl,
+            Map<String, String> gluing,
+            Path bxmlDirectory)
+            throws IOException {
         if (cDir == null || abstractMachineEl == null) return;
         String machineName = abstractMachineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return;
 
         BxmlTranslateContext ctx =
                 BxmlTranslateContext.forMachine(abstractMachineEl, gluing)
-                        .withEnumRenames(BxmlSetsTranslator.buildEnumRenames(abstractMachineEl))
+                        .withEnumRenames(
+                                BxmlSetsTranslator.buildEnumRenamesWithSees(
+                                        abstractMachineEl, bxmlDirectory))
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
         List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
@@ -232,7 +247,8 @@ public final class GhostOperationsCiGenerator {
                                 varTypes,
                                 maxSetComp,
                                 abstractMachineEl,
-                                ctx));
+                                ctx,
+                                bxmlDirectory));
 
         for (GhostOp go : ghostOps) {
             sb.append(go.format());
@@ -257,6 +273,7 @@ public final class GhostOperationsCiGenerator {
             for (String e : initEnsures) {
                 String ge = prefixAcslLibFunctionsForGhost(e);
                 ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
+                ge = stripBTypingCommentsForGhost(ge);
                 prefixedInitEnsures.add(ge);
             }
             ops.add(new GhostOp("initialisation", List.of(), initAssigned, prefixedInitEnsures));
@@ -304,11 +321,15 @@ public final class GhostOperationsCiGenerator {
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
                 List<String> ghostEnsures = new ArrayList<>();
                 for (String e : ensures) {
-                    String ge = toGhostEnsure(e, abstractSet);
+                    String ge =
+                            isPostStatePredicateEnsure(e)
+                                    ? toGhostEnsurePostState(e, abstractSet)
+                                    : toGhostEnsure(e, abstractSet);
                     ge = rewriteGhostEnsureForListDomainRestriction(
                             ge, op, varTypes, params, ctx, concreteConstants);
                     ge = prefixAcslLibFunctionsForGhost(ge);
                     ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
+                    ge = stripBTypingCommentsForGhost(ge);
                     ge = castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
@@ -460,9 +481,45 @@ public final class GhostOperationsCiGenerator {
         return out;
     }
 
-    /** Igualdade {@code <var> == <rhs>} com {@code <var>} abstrata (pós-estado: {@code dummy_<var>}, não {@code \\old}). */
+    /** Igualdade {@code <var> == <rhs>} (com cast opcional) com variável abstrata no pós-estado. */
     private static final Pattern GHOST_ENSURE_SIMPLE_ABS_VAR_EQ =
-            Pattern.compile("^([A-Za-z_]\\w*)\\s*==\\s*(.+)$", Pattern.DOTALL);
+            Pattern.compile(
+                    "^(?:\\(integer\\)|\\(int\\))?\\s*([A-Za-z_]\\w*)\\s*==\\s*(.+)$", Pattern.DOTALL);
+
+    /** {@code belongs(v, S)} vindo de {@code Becomes_In} / {@code v : S}. */
+    private static final Pattern GHOST_ENSURE_BELONGS =
+            Pattern.compile("^belongs\\s*\\(\\s*([^,]+)\\s*,\\s*([^)]+)\\s*\\)$");
+
+    /**
+     * {@code Becomes_Such_That} e predicados compostos no pós-estado (sem {@code \\old} nas variáveis
+     * abstratas).
+     */
+    private static boolean isPostStatePredicateEnsure(String ensure) {
+        if (ensure == null || ensure.isBlank()) {
+            return false;
+        }
+        if (ensure.startsWith("belongs(")) {
+            return false;
+        }
+        return ensure.contains("==>") || ensure.contains("&&");
+    }
+
+    private static String toGhostEnsurePostState(String translatedEnsure, Set<String> abstractVars) {
+        String s = stripBTypingCommentsForGhost(translatedEnsure.trim());
+        Matcher belongsM = GHOST_ENSURE_BELONGS.matcher(s);
+        if (belongsM.matches()) {
+            return toGhostEnsure(s, abstractVars);
+        }
+        return prefixAbstractVarsForGhost(s, abstractVars);
+    }
+
+    /** Anotações de tipo B ({@code x /&#42; : BOOL &#42;/}) quebram comentários ACSL em {@code .ci}. */
+    private static String stripBTypingCommentsForGhost(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        return text.replaceAll("\\s*/\\*\\s*:[^*]*\\*/", "");
+    }
 
     /** Traduz {@code equals(ss, …)} para o universo {@code dummy_*} com {@code \\old} no RHS. */
     private static String toGhostEnsure(String translatedEnsure, Set<String> abstractVars) {
@@ -480,12 +537,20 @@ public final class GhostOperationsCiGenerator {
         }
 
         if (!s.startsWith("equals(")) {
+            Matcher belongsM = GHOST_ENSURE_BELONGS.matcher(s);
+            if (belongsM.matches()) {
+                String v = stripIntegerCast(belongsM.group(1).trim());
+                String setExpr = belongsM.group(2).trim();
+                if (abstractVars.contains(v)) {
+                    return "dummy_belongs(dummy_" + v + ", " + setExpr + ")";
+                }
+            }
             Matcher simpleEq = GHOST_ENSURE_SIMPLE_ABS_VAR_EQ.matcher(s);
             if (simpleEq.matches()) {
                 String lhs = simpleEq.group(1);
                 String rhs = simpleEq.group(2).trim();
                 if (abstractVars.contains(lhs)) {
-                    return "dummy_" + lhs + " == " + rewriteAbstractIdsWithOld(rhs, abstractVars);
+                    return "dummy_" + lhs + " == " + rhs;
                 }
             }
             return rewriteAbstractIdsWithOld(s, abstractVars);
@@ -523,6 +588,20 @@ public final class GhostOperationsCiGenerator {
             }
         }
         return -1;
+    }
+
+    private static String stripIntegerCast(String expr) {
+        if (expr == null) {
+            return "";
+        }
+        String t = expr.trim();
+        if (t.startsWith("(integer)")) {
+            return t.substring("(integer)".length()).trim();
+        }
+        if (t.startsWith("(int)")) {
+            return t.substring("(int)".length()).trim();
+        }
+        return t;
     }
 
     private static String rewriteAbstractIdsWithOld(String expr, Set<String> abstractVars) {
@@ -953,7 +1032,7 @@ public final class GhostOperationsCiGenerator {
         if (sub == null) return;
         String ln = sub.getLocalName();
         switch (ln) {
-            case "Assignement_Sub" -> {
+            case "Assignement_Sub", "Becomes_In", "Becomes_Such_That" -> {
                 Element vars = firstChildElement(sub, "Variables");
                 if (vars == null) return;
                 for (Element id : directExpChildren(vars)) {
