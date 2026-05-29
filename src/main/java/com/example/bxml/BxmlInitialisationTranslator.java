@@ -88,6 +88,8 @@ public final class BxmlInitialisationTranslator {
                     }
                 }
             }
+            case "Select" -> parseSelectAsConditionalEnsures(sub, ensures, ctx);
+            case "If_Sub" -> parseIfSubAsConditionalEnsures(sub, ensures, ctx);
             default -> { /* outras substituições: extensão futura */ }
         }
     }
@@ -160,16 +162,16 @@ public final class BxmlInitialisationTranslator {
                 parseAssignementSub(ch, ensures, ctx);
             } else if ("If_Sub".equals(ch.getLocalName())) {
                 parseIfSubAsConditionalEnsures(ch, ensures, ctx);
+            } else if ("Select".equals(ch.getLocalName())) {
+                parseSelectAsConditionalEnsures(ch, ensures, ctx);
             }
         }
     }
 
     /**
-     * {@code IF cond THEN body END} em corpo paralelo → uma cláusula {@code ensures} condicional
-     * por efeito: {@code (cond) ==> (ensures_do_then)}.
-     *
-     * <p>Apenas o ramo {@code Then} é usado; o ramo {@code Else} (se existir) pode ser adicionado
-     * simetricamente com {@code !(cond) ==> (ensures_do_else)}.
+     * {@code IF cond THEN body [ELSE body] END} → cláusulas {@code ensures} condicionais:
+     * {@code (cond) ==> (efeito_then)} e, se existir {@code Else},
+     * {@code !(cond) ==> (efeito_else)}.
      */
     private static void parseIfSubAsConditionalEnsures(
             Element ifSub, List<String> ensures, BxmlTranslateContext ctx) {
@@ -185,6 +187,98 @@ public final class BxmlInitialisationTranslator {
         for (String e : thenEnsures) {
             ensures.add("(" + cond + ") ==> (" + e + ")");
         }
+
+        Element elseEl = firstChildElement(ifSub, "Else");
+        if (elseEl != null) {
+            List<String> elseEnsures = new ArrayList<>();
+            walkSubstitution(firstSubChild(elseEl), elseEnsures, ctx);
+            for (String e : elseEnsures) {
+                ensures.add("!(" + cond + ") ==> (" + e + ")");
+            }
+        }
+    }
+
+    /**
+     * {@code SELECT cond1 THEN body1 WHEN cond2 THEN body2 … [ELSE body] END} → cláusulas
+     * {@code ensures} sequenciais: o i-ésimo {@code WHEN} só dispara se os anteriores falharam.
+     */
+    private static void parseSelectAsConditionalEnsures(
+            Element select, List<String> ensures, BxmlTranslateContext ctx) {
+        Element whenClauses = firstChildElement(select, "When_Clauses");
+        List<String> whenConds = new ArrayList<>();
+        List<List<String>> whenEffects = new ArrayList<>();
+
+        if (whenClauses != null) {
+            NodeList children = whenClauses.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                Node n = children.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element when = (Element) n;
+                if (!"When".equals(when.getLocalName())) continue;
+
+                Element condEl = firstChildElement(when, "Condition");
+                Element thenEl = firstChildElement(when, "Then");
+                if (condEl == null || thenEl == null) continue;
+
+                String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
+                if (cond == null || cond.isBlank()) continue;
+
+                List<String> branchEnsures = new ArrayList<>();
+                walkSubstitution(firstSubChild(thenEl), branchEnsures, ctx);
+                whenConds.add(cond);
+                whenEffects.add(branchEnsures);
+            }
+        }
+
+        List<String> priorConds = new ArrayList<>();
+        for (int i = 0; i < whenConds.size(); i++) {
+            String effectiveCond = selectWhenCondition(whenConds.get(i), priorConds);
+            for (String e : whenEffects.get(i)) {
+                ensures.add("(" + effectiveCond + ") ==> (" + e + ")");
+            }
+            priorConds.add(whenConds.get(i));
+        }
+
+        Element elseEl = firstChildElement(select, "Else");
+        if (elseEl != null) {
+            List<String> elseEnsures = new ArrayList<>();
+            walkSubstitution(firstSubChild(elseEl), elseEnsures, ctx);
+            String elseCond = selectElseCondition(whenConds);
+            for (String e : elseEnsures) {
+                ensures.add("(" + elseCond + ") ==> (" + e + ")");
+            }
+        }
+    }
+
+    /** {@code Ci && !(C1) && … && !(C(i-1))}. */
+    private static String selectWhenCondition(String cond, List<String> priorConds) {
+        if (priorConds.isEmpty()) {
+            return cond;
+        }
+        StringBuilder sb = new StringBuilder("(").append(cond).append(")");
+        for (String prior : priorConds) {
+            sb.append(" && !(").append(prior).append(")");
+        }
+        return sb.toString();
+    }
+
+    /** {@code !(C1 || C2 || … || Cn)}; {@code \\true} se não houver ramos {@code WHEN}. */
+    private static String selectElseCondition(List<String> whenConds) {
+        if (whenConds.isEmpty()) {
+            return "\\true";
+        }
+        if (whenConds.size() == 1) {
+            return "!(" + whenConds.get(0) + ")";
+        }
+        StringBuilder sb = new StringBuilder("!(");
+        for (int i = 0; i < whenConds.size(); i++) {
+            if (i > 0) {
+                sb.append(" || ");
+            }
+            sb.append("(").append(whenConds.get(i)).append(")");
+        }
+        sb.append(")");
+        return sb.toString();
     }
 
     private static void parseAssignementSub(Element assign, List<String> ensures, BxmlTranslateContext ctx) {
