@@ -43,6 +43,57 @@ public final class BxmlSetsTranslator {
      * Usado para detectar parâmetros/variáveis C cujo tipo é um enum e que precisam de cast {@code (integer)}
      * nas anotações ACSL.
      */
+    /** Conjunto B com valores enumerados (ex. {@code PHASE = {ACQ, CTRL}}). */
+    public record EnumeratedSetInfo(String setName, List<String> valueNames) {}
+
+    /**
+     * Lista conjuntos com {@code <Enumerated_Values>} na ordem do BXML.
+     */
+    public static List<EnumeratedSetInfo> listEnumeratedSets(Element machineEl) {
+        Element setsEl = firstChildElement(machineEl, "Sets");
+        if (setsEl == null) return List.of();
+        List<EnumeratedSetInfo> out = new ArrayList<>();
+        NodeList ch = setsEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element setEl = (Element) n;
+            if (!"Set".equals(setEl.getLocalName())) continue;
+            Element enumEl = firstChildElement(setEl, "Enumerated_Values");
+            if (enumEl == null) continue;
+            String setName = null;
+            NodeList setChildren = setEl.getChildNodes();
+            for (int j = 0; j < setChildren.getLength(); j++) {
+                Node sn = setChildren.item(j);
+                if (sn.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element idEl = (Element) sn;
+                if (!"Id".equals(idEl.getLocalName())) continue;
+                String name = idEl.getAttribute("value");
+                if (name != null && !name.isBlank()) {
+                    setName = name.trim();
+                    break;
+                }
+            }
+            if (setName == null) continue;
+            List<String> values = new ArrayList<>();
+            NodeList enumChildren = enumEl.getChildNodes();
+            for (int j = 0; j < enumChildren.getLength(); j++) {
+                Node en = enumChildren.item(j);
+                if (en.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ev = (Element) en;
+                if (!"Id".equals(ev.getLocalName())) continue;
+                String val = ev.getAttribute("value");
+                if (val != null && !val.isBlank()) {
+                    values.add(val.trim());
+                }
+            }
+            if (!values.isEmpty()) {
+                out.add(new EnumeratedSetInfo(setName, values));
+            }
+        }
+        return out;
+    }
+
     public static Set<String> buildEnumeratedSetNames(Element machineEl) {
         Element setsEl = firstChildElement(machineEl, "Sets");
         if (setsEl == null) return Set.of();

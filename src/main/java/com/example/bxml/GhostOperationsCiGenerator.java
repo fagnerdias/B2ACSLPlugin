@@ -1,5 +1,6 @@
 package com.example.bxml;
 
+import com.example.AcslLibSymbolDependencyMap;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -187,7 +188,11 @@ public final class GhostOperationsCiGenerator {
         String machineName = abstractMachineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return;
 
-        BxmlTranslateContext ctx = BxmlTranslateContext.forMachine(abstractMachineEl, gluing);
+        BxmlTranslateContext ctx =
+                BxmlTranslateContext.forMachine(abstractMachineEl, gluing)
+                        .withEnumRenames(BxmlSetsTranslator.buildEnumRenames(abstractMachineEl))
+                        .withEnumeratedSetNames(
+                                BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
         List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
         if (abstractVarNames.isEmpty()) {
             Files.deleteIfExists(cDir.resolve(GHOST_FILE));
@@ -219,7 +224,15 @@ public final class GhostOperationsCiGenerator {
                         ctx.comprehensions().maxComprehensionIndex(),
                         maxSetComprehensionIndexInGhostText(allGhostEnsureLines));
 
-        sb.append(formatDummyAxiomatic(abstractVarNames, varTypes, maxSetComp, abstractMachineEl, ctx));
+        sb.append(
+                new DummyGhostAxiomaticBuilder(AcslLibSymbolDependencyMap.instance())
+                        .format(
+                                allGhostEnsureLines,
+                                abstractVarNames,
+                                varTypes,
+                                maxSetComp,
+                                abstractMachineEl,
+                                ctx));
 
         for (GhostOp go : ghostOps) {
             sb.append(go.format());
@@ -242,7 +255,9 @@ public final class GhostOperationsCiGenerator {
         if (!initAssigned.isEmpty() && !initEnsures.isEmpty()) {
             List<String> prefixedInitEnsures = new ArrayList<>();
             for (String e : initEnsures) {
-                prefixedInitEnsures.add(prefixAcslLibFunctionsForGhost(e));
+                String ge = prefixAcslLibFunctionsForGhost(e);
+                ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
+                prefixedInitEnsures.add(ge);
             }
             ops.add(new GhostOp("initialisation", List.of(), initAssigned, prefixedInitEnsures));
         }
@@ -293,6 +308,7 @@ public final class GhostOperationsCiGenerator {
                     ge = rewriteGhostEnsureForListDomainRestriction(
                             ge, op, varTypes, params, ctx, concreteConstants);
                     ge = prefixAcslLibFunctionsForGhost(ge);
+                    ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
                     ge = castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
@@ -387,7 +403,7 @@ public final class GhostOperationsCiGenerator {
     /**
      * Segundo argumento de {@code domain_restriction(..., S)} no axiomatic ghost: nomes de set
      * comprehension vêm do tradutor como {@code set_comprehension_k}; aqui alinham-se a
-     * {@code dummy_set_comprehension_k} declarado em {@link #formatDummyAxiomatic}.
+     * {@code dummy_set_comprehension_k} declarado em {@link DummyGhostAxiomaticBuilder}.
      */
     private static String dummySetComprehensionRef(String domainRestrictionSecondArg) {
         if (domainRestrictionSecondArg == null) {
@@ -399,51 +415,6 @@ public final class GhostOperationsCiGenerator {
             return "dummy_set_comprehension_" + um.group(1);
         }
         return s;
-    }
-
-    private static String formatDummyAxiomatic(
-            List<String> abstractVarNames,
-            Map<String, String> varTypes,
-            int maxSetComprehensionIndex,
-            Element machineEl,
-            BxmlTranslateContext ctx) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("/*@\n");
-        sb.append("    axiomatic dummy_ghost {\n\n");
-        sb.append("        type DSet<A>;\n\n");
-        sb.append("        type DTuple<A, B>;\n\n");
-        sb.append("        type DRelation<A, B> = DSet<DTuple<integer, integer> >;\n\n");
-        sb.append("        type dummy_Function_int_int = DRelation<integer, integer>;\n\n");
-        for (String v : abstractVarNames) {
-            String t = varTypes.getOrDefault(v, "Set<integer>");
-            String d = dummyAxiomaticLogicType(t);
-            sb.append("        logic ").append(d).append(" dummy_").append(v).append(";\n\n");
-        }
-        appendDummyConcreteConstantDeclarations(sb, machineEl, ctx);
-        if (maxSetComprehensionIndex > 0) {
-            for (int k = 1; k <= maxSetComprehensionIndex; k++) {
-                sb.append("        logic DSet<integer> dummy_set_comprehension_").append(k).append(";\n\n");
-            }
-        }
-        sb.append("        logic DSet<integer> dummy_NAT;\n\n");
-        sb.append("        logic A dummy_empty<A>(A a);\n");
-        sb.append("        predicate dummy_belongs<A, B>(A a, B b);\n");
-        sb.append("        predicate dummy_equals<A,B>(A a, B b);\n");
-        sb.append("        logic A dummy_set_union<A, B>(A a, B b);\n");
-        sb.append("        logic integer dummy_card<A>(A a);\n");
-        sb.append("        logic DSet<A> dummy_singleton<A>(A a);\n");
-        sb.append("        predicate dummy_is_finite<A>(A a);\n");
-        sb.append(
-                "        logic DRelation<A, B> dummy_domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
-        sb.append("        logic DRelation<integer, A> dummy_list_to_function<A>(\\list<A> l);\n\n");
-        sb.append("        logic DRelation<integer, integer> dummy_array_to_function(int *x, integer length);\n");
-        sb.append("        predicate dummy_is_total_function(dummy_Function_int_int f, DSet<integer> X, DSet<integer> Y);\n");
-        sb.append("        logic DSet<A> dummy_difference<A>(DSet<A> a, DSet<A> b);\n");
-        sb.append("        logic B dummy_function_apply<A, B>(DRelation<A, B> r, A x);\n");
-        sb.append("        logic DRelation<A, B> dummy_range_restriction<A, B>(DRelation<A, B> r, DSet<B> S);\n");
-        sb.append("        logic DTuple<A, B> dummy_couple<A, B>(A a, B b);\n");
-        sb.append("    }\n*/\n");
-        return sb.toString();
     }
 
     /** Nomes em {@code Concrete_Constants} (ordem de declaração no BXML). */
@@ -468,44 +439,6 @@ public final class GhostOperationsCiGenerator {
         return out;
     }
 
-    /**
-     * Declarações {@code logic τ dummy_<c>} para cada constante concreta (espelho ghost no universo
-     * {@code dummy_ghost}).
-     */
-    private static void appendDummyConcreteConstantDeclarations(
-            StringBuilder sb, Element machineEl, BxmlTranslateContext ctx) {
-        if (machineEl == null || ctx == null) {
-            return;
-        }
-        Element block = firstChildElement(machineEl, "Concrete_Constants");
-        if (block == null) {
-            return;
-        }
-        NodeList ch = block.getChildNodes();
-        for (int i = 0; i < ch.getLength(); i++) {
-            Node n = ch.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            if (!"Id".equals(e.getLocalName())) continue;
-            String name = e.getAttribute("value");
-            if (name == null || name.isBlank()) continue;
-            String logicType = "integer";
-            String tr = e.getAttribute("typref");
-            if (!tr.isBlank()) {
-                try {
-                    int typref = Integer.parseInt(tr.trim());
-                    String t = ctx.types().acslVariableLogicTypeFromTypref(typref);
-                    if (t != null && !t.isBlank()) {
-                        logicType = t;
-                    }
-                } catch (NumberFormatException ignored) {
-                }
-            }
-            sb.append("        logic ").append(logicType).append(" dummy_").append(name.trim()).append(";\n\n");
-        }
-    }
-
     /** Substitui referências a constantes concretas por {@code dummy_<nome>} numa expressão ACSL já escrita. */
     private static String ghostDummyConcreteRefs(String acslExpr, Set<String> concreteConstantNames) {
         if (acslExpr == null || concreteConstantNames == null || concreteConstantNames.isEmpty()) {
@@ -525,45 +458,6 @@ public final class GhostOperationsCiGenerator {
             out = sb.toString();
         }
         return out;
-    }
-
-    /**
-     * Tipo ACSL da variável lógica {@code dummy_<v>} no axiomatica comentado: espelha {@code Set<…>}
-     * como {@code DSet<…>}, {@code \\list<…>} inalterado, {@code Relation_*} inalterado.
-     */
-    private static String dummyAxiomaticLogicType(String inferred) {
-        if (inferred == null || inferred.isBlank()) {
-            return "DSet<integer>";
-        }
-        String t = inferred.trim();
-        if (t.startsWith("\\list")) {
-            return t;
-        }
-        if (t.startsWith("Set<") && t.endsWith(">")) {
-            // Tipos abstratos B (ex.: book, copy) não têm representação C/ACSL;
-            // todo conjunto no universo dummy é modelado como DSet<integer>.
-            return "DSet<integer>";
-        }
-        if (t.startsWith("Relation_") || t.startsWith("Function_")) {
-            // Converte Relation_int_int / Function_int_int → DRelation<integer, integer>
-            String suffix = t.startsWith("Relation_") ? t.substring("Relation_".length())
-                                                       : t.substring("Function_".length());
-            String[] parts = suffix.split("_", 2);
-            if (parts.length == 2) {
-                return "DRelation<" + acslTypeParamName(parts[0]) + ", " + acslTypeParamName(parts[1]) + ">";
-            }
-            return "DRelation<integer, integer>";
-        }
-        return "DSet<integer>";
-    }
-
-    /** Converte token de tipo B/ACSL_Lib (ex.: {@code int}, {@code bool}) para nome ACSL genérico. */
-    private static String acslTypeParamName(String token) {
-        return switch (token.toLowerCase()) {
-            case "int", "integer" -> "integer";
-            case "bool", "boolean" -> "boolean";
-            default -> "integer";
-        };
     }
 
     /** Igualdade {@code <var> == <rhs>} com {@code <var>} abstrata (pós-estado: {@code dummy_<var>}, não {@code \\old}). */
@@ -1151,7 +1045,7 @@ public final class GhostOperationsCiGenerator {
     /**
      * Em contratos ghost ({@code ghost_operations.ci}), tipos de função na biblioteca ACSL aparecem
      * com prefixo {@code dummy_} (ex.: {@code Function_int_int} → {@code dummy_Function_int_int}),
-     * alinhados ao alias declarado em {@link #formatDummyAxiomatic} dentro de {@code dummy_ghost}.
+     * alinhados ao alias declarado em {@link DummyGhostAxiomaticBuilder} dentro de {@code dummy_ghost}.
      *
      * <p>Apenas reescreve o token quando não está já prefixado por {@code dummy_}.
      */
@@ -1164,7 +1058,7 @@ public final class GhostOperationsCiGenerator {
 
     /**
      * Prefixa {@code set_comprehension_<k>} com {@code dummy_} (alinhado às declarações
-     * {@code logic DSet<integer> dummy_set_comprehension_k} em {@link #formatDummyAxiomatic}).
+     * {@code logic DSet<integer> dummy_set_comprehension_k} em {@link DummyGhostAxiomaticBuilder}).
      */
     private static String prefixSetComprehensionsForGhost(String text) {
         if (text == null || text.isEmpty()) {
@@ -1344,44 +1238,78 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Funções da {@code ACSL_Lib} que têm contraparte no universo {@code dummy_ghost} (declaradas
-     * em {@link #formatDummyAxiomatic}); o token é prefixado com {@code dummy_} se ainda não estiver.
+     * Funções da {@code ACSL_Lib} usadas nos contratos ghost: prefixo {@code dummy_} alinhado com
+     * {@link DummyGhostAxiomaticBuilder}.
      */
-    private static final List<String> ACSL_LIB_FUNCTIONS_WITH_DUMMY_PREFIX =
-            List.of(
-                    "empty",
-                    "belongs",
-                    "equals",
-                    "set_union",
-                    "card",
-                    "singleton",
-                    "is_finite",
-                    "domain_restriction",
-                    "is_total_function",
-                    "list_to_function",
-                    "array_to_function",
-                    "difference",
-                    "function_apply",
-                    "range_restriction",
-                    "couple");
-
     private static String prefixAcslLibFunctionsForGhost(String text) {
         if (text == null || text.isEmpty()) {
             return text;
         }
+        AcslLibSymbolDependencyMap map = AcslLibSymbolDependencyMap.instance();
+        List<String> symbols = new ArrayList<>(map.allKnownSymbols());
+        symbols.sort((a, b) -> Integer.compare(b.length(), a.length()));
         String out = text;
-        for (String fn : ACSL_LIB_FUNCTIONS_WITH_DUMMY_PREFIX) {
+        for (String sym : symbols) {
+            String ghostName = ghostNameForLibSymbol(sym);
             out =
                     out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(fn) + "\\b",
-                            Matcher.quoteReplacement("dummy_" + fn));
+                            "(?<!dummy_)\\b" + Pattern.quote(sym) + "\\b",
+                            Matcher.quoteReplacement("dummy_" + ghostName));
+        }
+        for (String alias : DummyGhostAxiomaticBuilder.LIB_SYMBOL_ALIASES.keySet()) {
+            out =
+                    out.replaceAll(
+                            "(?<!dummy_)\\b" + Pattern.quote(alias) + "\\b",
+                            Matcher.quoteReplacement("dummy_" + alias));
+        }
+        return out;
+    }
+
+    private static String ghostNameForLibSymbol(String libSymbol) {
+        for (Map.Entry<String, String> e : DummyGhostAxiomaticBuilder.LIB_SYMBOL_ALIASES.entrySet()) {
+            if (e.getValue().equals(libSymbol)) {
+                return e.getKey();
+            }
+        }
+        return libSymbol;
+    }
+
+    /**
+     * Valores enumerados ({@code ACQ}, {@code Airlock__ACQ}, …) → {@code dummy_ACQ} /
+     * {@code dummy_Airlock__ACQ} alinhados às declarações em {@link DummyGhostAxiomaticBuilder}.
+     */
+    private static String prefixEnumValuesForGhost(
+            String text, Map<String, String> enumValueRenames) {
+        if (text == null || text.isEmpty() || enumValueRenames == null || enumValueRenames.isEmpty()) {
+            return text;
+        }
+        List<Map.Entry<String, String>> entries = new ArrayList<>(enumValueRenames.entrySet());
+        entries.sort((a, b) -> Integer.compare(b.getValue().length(), a.getValue().length()));
+        String out = text;
+        for (Map.Entry<String, String> e : entries) {
+            String bName = e.getKey();
+            if (bName == null || bName.isBlank()) {
+                continue;
+            }
+            String dummyVal = "dummy_" + bName;
+            String acslName = e.getValue();
+            if (acslName != null && !acslName.isBlank()) {
+                out =
+                        out.replaceAll(
+                                "(?<!dummy_)\\b" + Pattern.quote(acslName) + "\\b",
+                                Matcher.quoteReplacement(dummyVal));
+            }
+            out =
+                    out.replaceAll(
+                            "(?<!dummy_)\\b" + Pattern.quote(bName) + "\\b",
+                            Matcher.quoteReplacement(dummyVal));
         }
         return out;
     }
 
     /**
      * Conjunto {@code NAT} da ACSL_Lib → variável lógica {@code dummy_NAT} declarada em
-     * {@link #formatDummyAxiomatic} (ex.: terceiro argumento de {@code dummy_is_total_function}).
+     * {@link DummyGhostAxiomaticBuilder} (ex.: terceiro argumento de {@code dummy_is_total_function}).
      */
     private static String prefixNatSetForGhost(String text) {
         if (text == null || text.isEmpty()) {
