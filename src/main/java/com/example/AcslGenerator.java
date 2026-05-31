@@ -272,8 +272,11 @@ public final class AcslGenerator {
         // (e.g. numbers_s usa numbers), por isso todos os blocos de variáveis devem vir ANTES das
         // compreensões e das constantes/propriedades das máquinas fundidas.
         String varsAbstract =
-                BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
-                        machineEl, ctx, abstractVariableNamesForGhost);
+                BxmlMachineVariables.implementationMirrorsAbstractVariables(
+                                machineEl, mergedMachineElements)
+                        ? ""
+                        : BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
+                                machineEl, ctx, abstractVariableNamesForGhost);
         if (!varsAbstract.isBlank()) {
             sb.append(varsAbstract);
             if (!varsAbstract.endsWith("\n")) sb.append("\n");

@@ -201,6 +201,42 @@ public final class BxmlMachineVariables {
         return out;
     }
 
+    /** Nomes de variáveis declaradas ({@code Abstract_Variables} / {@code Concrete_Variables}). */
+    public static Set<String> declaredVariableNames(Element machineEl) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        for (Element idEl : listDeclaredVariableIds(machineEl)) {
+            String name = idEl.getAttribute("value");
+            if (name != null && !name.isBlank()) {
+                names.add(name.trim());
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Verdadeiro quando alguma máquina fundida do tipo {@code implementation} declara exactamente
+     * o mesmo conjunto de variáveis que a abstrata raiz (evita duplicar {@code logic v} no ACSL).
+     */
+    public static boolean implementationMirrorsAbstractVariables(
+            Element abstractMachineEl, List<Element> mergedMachineElements) {
+        if (abstractMachineEl == null || mergedMachineElements == null || mergedMachineElements.isEmpty()) {
+            return false;
+        }
+        Set<String> abstractNames = declaredVariableNames(abstractMachineEl);
+        if (abstractNames.isEmpty()) {
+            return false;
+        }
+        for (Element mel : mergedMachineElements) {
+            if (!isImplementationMachine(mel)) {
+                continue;
+            }
+            if (abstractNames.equals(declaredVariableNames(mel))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** {@code Abstract_Variables} e {@code Concrete_Variables} (filhos diretos de {@code Machine}). */
     public static List<Element> listDeclaredVariableIds(Element machineEl) {
         List<Element> out = new ArrayList<>();
