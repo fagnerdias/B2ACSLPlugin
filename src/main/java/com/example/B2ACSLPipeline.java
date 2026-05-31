@@ -458,6 +458,29 @@ public final class B2ACSLPipeline {
     }
 
     /**
+     * {@code .acsl} para {@code -acsl-import} numa única invocação Frama-C: raízes SEES quando
+     * existem; senão união (ordem estável) dos ficheiros resolvidos por cada {@code .c}.
+     */
+    private static List<Path> resolveAcslImportForAllCFiles(
+            List<Path> cFiles,
+            Path acslDir,
+            BxmlSeesGraph seesGraph,
+            List<Path> topLevelAcslFiles,
+            List<Path> allAcslFiles)
+            throws IOException {
+        if (topLevelAcslFiles != null && !topLevelAcslFiles.isEmpty()) {
+            return List.copyOf(topLevelAcslFiles);
+        }
+        LinkedHashSet<Path> ordered = new LinkedHashSet<>();
+        for (Path cFile : cFiles) {
+            ordered.addAll(
+                    resolveAcslImportForCFile(
+                            cFile, acslDir, seesGraph, topLevelAcslFiles, allAcslFiles));
+        }
+        return List.copyOf(ordered);
+    }
+
+    /**
      * {@code .acsl} para {@code -acsl-import}: o da máquina do {@code .c}, se existir; senão raízes
      * SEES ({@code topLevelAcslFiles}).
      */
@@ -520,100 +543,97 @@ public final class B2ACSLPipeline {
                 AcslLibIncludes.allowedLibSymbolsForTransitiveIncludes(
                         specScanForLemmas.toString(), ghostCiText);
 
+        List<Path> acslImportFiles =
+                resolveAcslImportForAllCFiles(
+                        cFiles, acslDir, seesGraph, topLevelAcslFiles, allAcslFiles);
+        if (acslImportFiles.isEmpty()) {
+            System.err.println("[B2ACSL] Nenhum .acsl para importar.");
+            return 4;
+        }
+
+        // frama-c -acsl-import <acsl>… [ghost_operations.ci] <c>… -print -no-unicode
+        List<String> importCmd = new ArrayList<>();
+        importCmd.add(FRAMA_C);
+        importCmd.add("-acsl-import");
+        for (Path acslImport : acslImportFiles) {
+            importCmd.add(acslImport.toString());
+        }
+        if (Files.isRegularFile(ghostCi)) {
+            importCmd.add(ghostCi.toString());
+        }
         for (Path cFile : cFiles) {
-            List<Path> acslImportForC =
-                    resolveAcslImportForCFile(
-                            cFile, acslDir, seesGraph, topLevelAcslFiles, allAcslFiles);
-            if (acslImportForC.isEmpty()) {
-                System.err.println(
-                        "[B2ACSL] Nenhum .acsl para importar ao processar " + cFile.getFileName());
-                return 4;
-            }
-            // frama-c -acsl-import <acsl>… [ghost_operations.ci] <c> -print -no-unicode
-            List<String> importCmd = new ArrayList<>();
-            importCmd.add(FRAMA_C);
-            importCmd.add("-acsl-import");
-            for (Path acslImport : acslImportForC) {
-                importCmd.add(acslImport.toString());
-            }
-            if (Files.isRegularFile(ghostCi)) {
-                importCmd.add(ghostCi.toString());
-            }
             importCmd.add(cFile.toString());
-            importCmd.add("-print");
-            importCmd.add("-no-unicode");
-            ProcessBuilder importPb = new ProcessBuilder(importCmd);
-            importPb.directory(cDir.toFile());
-            importPb.redirectOutput(mergedCode.toFile());
-            importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
+        }
+        importCmd.add("-print");
+        importCmd.add("-no-unicode");
+        System.out.println("[B2ACSL] Frama-C acsl-import: " + String.join(" ", importCmd));
 
-            Process pImport = importPb.start();
-            boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
-            if (!importOk) {
-                pImport.destroyForcibly();
-                return 5;
-            }
-            if (pImport.exitValue() != 0) {
-                return pImport.exitValue();
-            }
+        ProcessBuilder importPb = new ProcessBuilder(importCmd);
+        importPb.directory(cDir.toFile());
+        importPb.redirectOutput(mergedCode.toFile());
+        importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
 
-            stripLeadingFramaCNonCOutput(mergedCode);
-            moveNewTypesAxiomaticBlockAfterPreamble(mergedCode);
-            removeGhostPatternAxiomaticBlocks(mergedCode);
-            stripDummyPrefixFromMergedCode(mergedCode);            
-            insertGhostVariableDeclarationsFromGhostCi(mergedCode, ghostCi);
-            replaceAssertGhostWithGhostKeyword(mergedCode);
-            replaceEnsuresGhostVarWithAssignsInMerged(mergedCode);
-            addParenthesesToGhostInitialisationCall(mergedCode);
-            placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
-            liftPureGhostEnsuresToOperationContracts(mergedCode);
-            reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
-            appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
-            SpecificationAxiomaticInstantiator.monomorphizeGenericAcslBlocks(
-                    mergedCode, specificationUsedTypes);
-            SpecificationAxiomaticInstantiator.renameParameterizedTypesToConcrete(
-                    mergedCode, specificationUsedTypes);
-            SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
-            ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
+        Process pImport = importPb.start();
+        boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
+        if (!importOk) {
+            pImport.destroyForcibly();
+            return 5;
+        }
+        if (pImport.exitValue() != 0) {
+            return pImport.exitValue();
+        }
 
-            // frama-c -wp merged_code.c -wp-prover CVC5 --wp-smoke-tests -wp-rte -wp-status
-            ProcessBuilder wpPb =
-                    new ProcessBuilder(
-                            FRAMA_C,
-                            "-wp",
-                            mergedCode.getFileName().toString(),
-                            "-wp-prover",
-                            wpOptions.prover(),
-                            "-wp-smoke-tests",
-                            "-wp-split",
-                            "-wp-rte",
-                            "-wp-timeout",
-                            Integer.toString(wpOptions.timeoutSeconds()),
-                            wpOptions.outputFlag());
-            wpPb.directory(cDir.toFile());
-            wpPb.redirectErrorStream(true);
+        stripLeadingFramaCNonCOutput(mergedCode);
+        moveNewTypesAxiomaticBlockAfterPreamble(mergedCode);
+        removeGhostPatternAxiomaticBlocks(mergedCode);
+        stripDummyPrefixFromMergedCode(mergedCode);
+        insertGhostVariableDeclarationsFromGhostCi(mergedCode, ghostCi);
+        replaceAssertGhostWithGhostKeyword(mergedCode);
+        replaceEnsuresGhostVarWithAssignsInMerged(mergedCode);
+        addParenthesesToVoidGhostCalls(mergedCode);
+        placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
+        liftPureGhostEnsuresToOperationContracts(mergedCode);
+        reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
+        appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
+        SpecificationAxiomaticInstantiator.monomorphizeGenericAcslBlocks(
+                mergedCode, specificationUsedTypes);
+        SpecificationAxiomaticInstantiator.renameParameterizedTypesToConcrete(
+                mergedCode, specificationUsedTypes);
+        SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
+        ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
 
-            ProcessResult wpResult = runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS);
-            reportData.absorbOutput(
-                    wpResult.output(), mergedCode.getFileName().toString() + " (" + cFile.getFileName() + ")");
-            if (!wpResult.completed()) {
-                reportData.addTimeout(
-                        "Timeout while executing WP for "
-                                + cFile.getFileName()
-                                + " (600s limit).");
-                showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
-                return 6;
-            }
-            if (wpResult.exitCode() != 0) {
-                reportData.addFailure(
-                        "WP returned exit code "
-                                + wpResult.exitCode()
-                                + " for "
-                                + cFile.getFileName()
-                                + ".");
-                showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
-                return wpResult.exitCode();
-            }
+        String cSourcesLabel =
+                cFiles.stream().map(p -> p.getFileName().toString()).reduce((a, b) -> a + ", " + b).orElse("");
+
+        // frama-c -wp merged_code.c -wp-prover CVC5 -wp-smoke-tests -wp-rte -wp-status
+        ProcessBuilder wpPb =
+                new ProcessBuilder(
+                        FRAMA_C,
+                        "-wp",
+                        mergedCode.getFileName().toString(),
+                        "-wp-prover",
+                        wpOptions.prover(),
+                        "-wp-smoke-tests",
+                        "-wp-split",
+                        "-wp-rte",
+                        "-wp-timeout",
+                        Integer.toString(wpOptions.timeoutSeconds()),
+                        wpOptions.outputFlag());
+        wpPb.directory(cDir.toFile());
+        wpPb.redirectErrorStream(true);
+
+        ProcessResult wpResult = runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS);
+        reportData.absorbOutput(
+                wpResult.output(), mergedCode.getFileName().toString() + " (" + cSourcesLabel + ")");
+        if (!wpResult.completed()) {
+            reportData.addTimeout("Timeout while executing WP (600s limit).");
+            showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+            return 6;
+        }
+        if (wpResult.exitCode() != 0) {
+            reportData.addFailure("WP returned exit code " + wpResult.exitCode() + ".");
+            showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+            return wpResult.exitCode();
         }
         showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
         return 0;
@@ -900,13 +920,13 @@ public final class B2ACSLPipeline {
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
-    /** Garante {@code ghost initialisation();} em vez de {@code ghost initialisation;}. */
-    private static void addParenthesesToGhostInitialisationCall(Path mergedC) throws IOException {
+    /** Garante {@code ghost op();} em vez de {@code ghost op;} para chamadas ghost sem argumentos. */
+    private static void addParenthesesToVoidGhostCalls(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
         content =
-                Pattern.compile("\\bghost\\s+initialisation\\s*;")
+                Pattern.compile("\\bghost\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;")
                         .matcher(content)
-                        .replaceAll("ghost initialisation();");
+                        .replaceAll("ghost $1();");
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -929,7 +949,9 @@ public final class B2ACSLPipeline {
             return;
         }
         String merged = Files.readString(mergedC, StandardCharsets.UTF_8);
-        String ghostText = Files.readString(ghostCi, StandardCharsets.UTF_8).replace("dummy_", "");
+        String ghostText =
+                GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
+                        Files.readString(ghostCi, StandardCharsets.UTF_8));
 
         Matcher bm = GHOST_OP_BLOCK_IN_CI.matcher(ghostText);
         List<String> opNames = new ArrayList<>();
@@ -1181,7 +1203,9 @@ public final class B2ACSLPipeline {
         if (!Files.isRegularFile(ghostCi)) {
             return;
         }
-        String ghostText = Files.readString(ghostCi, StandardCharsets.UTF_8).replace("dummy_", "");
+        String ghostText =
+                GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
+                        Files.readString(ghostCi, StandardCharsets.UTF_8));
         Matcher gm = GHOST_INITIALISATION_BLOCK_IN_CI.matcher(ghostText);
         if (!gm.find()) {
             return;
