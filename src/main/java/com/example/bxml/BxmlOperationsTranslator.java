@@ -7,6 +7,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.w3c.dom.Element;
@@ -113,12 +114,13 @@ public final class BxmlOperationsTranslator {
                 requires.add(inv);
             }
             Element pre = firstChildElement(child, "Precondition");
+            List<String> outputParams = parseOutputParameterNames(child);
             if (pre != null) {
                 requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
                 rewriteRequiresForArrayBackedFunctionParams(requires, child, ctx);
+                rewriteRequiresForOutputParameters(requires, outputParams);
             }
 
-            List<String> outputParams = parseOutputParameterNames(child);
             for (String p : outputParams) {
                 requires.add("\\valid(" + p + ")");
             }
@@ -284,6 +286,39 @@ public final class BxmlOperationsTranslator {
             if (localName.equals(e.getLocalName())) return e;
         }
         return null;
+    }
+
+    /**
+     * Parâmetros de saída em C são ponteiros: {@code ret : S} no B traduz-se para
+     * {@code belongs(*ret, BOOL)} ou {@code belongs((integer)*ret, S)} nos {@code requires}.
+     */
+    private static final Pattern REQUIRES_BELONGS =
+            Pattern.compile(
+                    "^belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^)]+)\\s*\\)$");
+
+    private static void rewriteRequiresForOutputParameters(
+            List<String> requires, List<String> outputParams) {
+        if (requires == null || requires.isEmpty() || outputParams == null || outputParams.isEmpty()) {
+            return;
+        }
+        Set<String> out = new HashSet<>(outputParams);
+        for (int i = 0; i < requires.size(); i++) {
+            String req = requires.get(i);
+            if (req == null || req.isBlank()) {
+                continue;
+            }
+            Matcher m = REQUIRES_BELONGS.matcher(req.trim());
+            if (!m.matches()) {
+                continue;
+            }
+            String var = m.group(1).trim();
+            String set = m.group(2).trim();
+            if (!out.contains(var)) {
+                continue;
+            }
+            String value = "BOOL".equals(set) ? "*" + var : "(integer)*" + var;
+            requires.set(i, "belongs(" + value + ", " + set + ")");
+        }
     }
 
     /**

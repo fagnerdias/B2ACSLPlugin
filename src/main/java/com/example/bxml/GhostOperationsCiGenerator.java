@@ -277,12 +277,13 @@ public final class GhostOperationsCiGenerator {
         List<String> initEnsures = collectGhostEnsuresFromInit(abstractMachineEl, abstractSet, ctx);
         Set<String> initAssigned = new LinkedHashSet<>();
         collectAssignedAbstractVarsInInit(abstractMachineEl, abstractSet, initAssigned);
-        if (!initAssigned.isEmpty() && !initEnsures.isEmpty()) {
+        if (!initAssigned.isEmpty()) {
             List<String> prefixedInitEnsures = new ArrayList<>();
             for (String e : initEnsures) {
                 String ge = prefixAcslLibFunctionsForGhost(e);
                 ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
                 ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
+                ge = prefixGlobalLogicSetsForGhost(ge);
                 ge = stripBTypingCommentsForGhost(ge);
                 ge = normalizeBooleanLiteralsForGhost(ge);
                 prefixedInitEnsures.add(ge);
@@ -341,6 +342,7 @@ public final class GhostOperationsCiGenerator {
                     ge = prefixAcslLibFunctionsForGhost(ge);
                     ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
                     ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
+                    ge = prefixGlobalLogicSetsForGhost(ge);
                     ge = stripBTypingCommentsForGhost(ge);
                     ge = normalizeBooleanLiteralsForGhost(ge);
                     ge = castScalarIntGhostParamsInEnsure(ge, params);
@@ -564,7 +566,11 @@ public final class GhostOperationsCiGenerator {
                 String v = stripIntegerCast(belongsM.group(1).trim());
                 String setExpr = belongsM.group(2).trim();
                 if (abstractVars.contains(v)) {
-                    return "dummy_belongs(dummy_" + v + ", " + setExpr + ")";
+                    return "dummy_belongs(dummy_"
+                            + v
+                            + ", "
+                            + prefixGlobalLogicSetsForGhost(setExpr)
+                            + ")";
                 }
             }
             Matcher simpleEq = GHOST_ENSURE_SIMPLE_ABS_VAR_EQ.matcher(s);
@@ -991,8 +997,31 @@ public final class GhostOperationsCiGenerator {
                     if (g != null && !g.isBlank()) out.add(g);
                 }
             }
+            case "Becomes_In" -> {
+                Element vars = firstChildElement(sub, "Variables");
+                Element value = firstChildElement(sub, "Value");
+                if (vars == null || value == null) return;
+                String setExpr = null;
+                for (Element valExp : directExpChildren(value)) {
+                    setExpr = BxmlExpressionToAcsl.translate(valExp, ctx);
+                    break;
+                }
+                if (setExpr == null || setExpr.isBlank()) return;
+                List<String> parts = new ArrayList<>();
+                for (Element varExp : directExpChildren(vars)) {
+                    if (!"Id".equals(varExp.getLocalName())) continue;
+                    String v = varExp.getAttribute("value");
+                    if (abstractSet.contains(v)) {
+                        parts.add("belongs(dummy_" + v + ", " + setExpr + ")");
+                    }
+                }
+                if (!parts.isEmpty()) {
+                    out.add(String.join(" && ", parts));
+                }
+            }
             case "Nary_Sub" -> {
-                if (";".equals(sub.getAttribute("op"))) {
+                String op = sub.getAttribute("op");
+                if (";".equals(op) || "||".equals(op)) {
                     NodeList children = sub.getChildNodes();
                     for (int i = 0; i < children.getLength(); i++) {
                         Node n = children.item(i);
@@ -1029,6 +1058,14 @@ public final class GhostOperationsCiGenerator {
         }
         String rhs = BxmlExpressionToAcsl.translate(rhsExp, ctx);
         String rhsGhost = rewriteAbstractIdsWithOld(rhs, abstractSet);
+        String logicType = ctx.variableLogicTypes().get(v);
+        if (logicType != null
+                && (logicType.equals("boolean")
+                        || logicType.equals("integer")
+                        || logicType.equals("int")
+                        || logicType.equals("real"))) {
+            return "dummy_" + v + " == " + rhsGhost;
+        }
         return "equals(dummy_" + v + ", " + rhsGhost + ")";
     }
 
@@ -1210,7 +1247,7 @@ public final class GhostOperationsCiGenerator {
             BxmlTranslateContext ctx) {
         String s = prefixFunctionTypesForGhost(text);
         s = prefixAcslLibFunctionsForGhost(s);
-        s = prefixNatSetForGhost(s);
+        s = prefixGlobalLogicSetsForGhost(s);
         s = prefixSetComprehensionsForGhost(s);
         s = ghostDummyConcreteRefs(s, concreteConstantNames);
         s = prefixAbstractVarsForGhost(s, abstractVars);
@@ -1410,6 +1447,37 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
+     * Converte texto de {@code ghost_operations.ci} para especificações ghost no {@code merged_code.c}:
+     * restaura nomes ACSL de conjuntos ({@code dummy_M__S} → {@code S}) antes de remover o prefixo
+     * {@code dummy_} das variáveis/funções.
+     */
+    public static String stripDummyPrefixForMergedGhostSpecs(String ghostText) {
+        if (ghostText == null || ghostText.isEmpty()) {
+            return ghostText;
+        }
+        String out = ghostText;
+        Matcher setDecl =
+                Pattern.compile("logic\\s+DSet<[^>]+>\\s+(dummy_[A-Za-z0-9_]+)\\s*;").matcher(ghostText);
+        List<String> dummySetNames = new ArrayList<>();
+        while (setDecl.find()) {
+            dummySetNames.add(setDecl.group(1));
+        }
+        dummySetNames.sort((a, b) -> Integer.compare(b.length(), a.length()));
+        for (String dummySet : dummySetNames) {
+            if (!dummySet.startsWith("dummy_")) {
+                continue;
+            }
+            String rest = dummySet.substring("dummy_".length());
+            int sep = rest.lastIndexOf("__");
+            if (sep < 0 || sep + 2 >= rest.length()) {
+                continue;
+            }
+            out = out.replace(dummySet, rest.substring(sep + 2));
+        }
+        return out.replace("dummy_", "");
+    }
+
+    /**
      * Conjuntos enumerados B → {@code dummy_<Maquina>__<Conjunto>} nos {@code ensures} ghost (ex.
      * {@code belongs(v, PRESSURE)} → {@code belongs(v, dummy_Airlock_pressure_bs__PRESSURE)}).
      */
@@ -1444,15 +1512,18 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Conjunto {@code NAT} da ACSL_Lib → variável lógica {@code dummy_NAT} declarada em
-     * {@link DummyGhostAxiomaticBuilder} (ex.: terceiro argumento de {@code dummy_is_total_function}).
+     * Conjuntos globais da ACSL_Lib ({@code NAT}, {@code BOOL}) → variáveis lógicas
+     * {@code dummy_NAT} / {@code dummy_BOOL} declaradas em {@link DummyGhostAxiomaticBuilder}.
      */
-    private static String prefixNatSetForGhost(String text) {
+    private static String prefixGlobalLogicSetsForGhost(String text) {
         if (text == null || text.isEmpty()) {
             return text;
         }
-        return text.replaceAll(
-                "(?<!dummy_)\\bNAT\\b", Matcher.quoteReplacement("dummy_NAT"));
+        String out =
+                text.replaceAll(
+                        "(?<!dummy_)\\bNAT\\b", Matcher.quoteReplacement("dummy_NAT"));
+        return out.replaceAll(
+                "(?<!dummy_)\\bBOOL\\b", Matcher.quoteReplacement("dummy_BOOL"));
     }
 
     /**

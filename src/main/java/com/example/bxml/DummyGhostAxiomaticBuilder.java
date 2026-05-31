@@ -91,6 +91,7 @@ final class DummyGhostAxiomaticBuilder {
         Map<String, String> ghostNameToLibSymbol = collectGhostNameToLibSymbol(ghostText, reservedNames);
         Set<String> functionTypeAliases = collectFunctionTypeAliases(ghostText);
         boolean needsNat = ghostText.contains("dummy_NAT");
+        boolean needsBool = ghostText.contains("dummy_BOOL");
         if (!enumeratedSets.isEmpty()) {
             ghostNameToLibSymbol.putIfAbsent("belongs", "belongs");
         }
@@ -101,6 +102,7 @@ final class DummyGhostAxiomaticBuilder {
 
         if (!ghostNameToLibSymbol.isEmpty()
                 || needsNat
+                || needsBool
                 || !functionTypeAliases.isEmpty()
                 || !enumeratedSets.isEmpty()) {
             appendBaseDummyTypes(sb);
@@ -131,6 +133,10 @@ final class DummyGhostAxiomaticBuilder {
 
         if (needsNat) {
             sb.append("        logic DSet<integer> dummy_NAT;\n\n");
+        }
+
+        if (needsBool) {
+            sb.append("        logic DSet<boolean> dummy_BOOL;\n\n");
         }
 
         sb.append("    }\n*/\n");
