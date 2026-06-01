@@ -278,12 +278,17 @@ public final class AcslGenerator {
         // Cada bloco _r_variables / _i_variables pode referenciar variáveis dos blocos anteriores
         // (e.g. numbers_s usa numbers), por isso todos os blocos de variáveis devem vir ANTES das
         // compreensões e das constantes/propriedades das máquinas fundidas.
+        String concreteLinkRoot =
+                BxmlMachineVariables.anyImplementationUsesAbstractVariablesOnly(
+                                machineEl, mergedMachineElements)
+                        ? baseName
+                        : null;
         String varsAbstract =
                 BxmlMachineVariables.implementationMirrorsAbstractVariables(
                                 machineEl, mergedMachineElements)
                         ? ""
                         : BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
-                                machineEl, ctx, abstractVariableNamesForGhost);
+                                machineEl, ctx, concreteLinkRoot, abstractVariableNamesForGhost);
         if (!varsAbstract.isBlank()) {
             sb.append(varsAbstract);
             if (!varsAbstract.endsWith("\n")) sb.append("\n");

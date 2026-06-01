@@ -40,8 +40,27 @@ public final class BxmlMachineVariables {
      */
     public static String formatAxiomaticBlockWithGhostDummyReads(
             Element machineEl, BxmlTranslateContext ctx, Set<String> abstractVarNamesForGhostRead) {
+        return formatAxiomaticBlockWithGhostDummyReads(
+                machineEl, ctx, null, abstractVarNamesForGhostRead);
+    }
+
+    /**
+     * Como {@link #formatAxiomaticBlockWithGhostDummyReads(Element, BxmlTranslateContext, Set)} com
+     * ligação opcional {@code logic v = Raiz__v;} quando {@code rootAbstractForConcreteLink} não é
+     * nulo (implementação sem variáveis próprias).
+     */
+    public static String formatAxiomaticBlockWithGhostDummyReads(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractForConcreteLink,
+            Set<String> abstractVarNamesForGhostRead) {
         return formatAxiomaticBlock(
-                machineEl, ctx, null, null, Map.of(), abstractVarNamesForGhostRead);
+                machineEl,
+                ctx,
+                rootAbstractForConcreteLink,
+                null,
+                Map.of(),
+                abstractVarNamesForGhostRead);
     }
 
     /**
@@ -83,7 +102,7 @@ public final class BxmlMachineVariables {
         boolean linkConcrete =
                 rootAbstractMachineName != null
                         && !rootAbstractMachineName.isBlank()
-                        && isImplementationMachine(machineEl);
+                        && (isImplementationMachine(machineEl) || isAbstractionMachine(machineEl));
         boolean linkRefinement =
                 refinementParent != null && isRefinementMachine(machineEl);
         Map<String, String> gl =
@@ -132,7 +151,7 @@ public final class BxmlMachineVariables {
                         implRhs != null
                                 ? implRhs
                                 : rootAbstractForImplRhs + "__" + var;
-                sb.append(" = (integer)").append(rhs);
+                sb.append(" = ").append(rhs);
             } else if (refinementWithParent) {
                 Optional<String> abs =
                         BxmlConnectionAcsl.linkingAbstractVariableName(
@@ -214,6 +233,29 @@ public final class BxmlMachineVariables {
     }
 
     /**
+     * Verdadeiro quando alguma implementação fundida não declara variáveis próprias e reutiliza o
+     * estado da abstrata (liga {@code logic v = Raiz__v;} no bloco {@code Raiz_variables}).
+     */
+    public static boolean anyImplementationUsesAbstractVariablesOnly(
+            Element abstractMachineEl, List<Element> mergedMachineElements) {
+        if (abstractMachineEl == null || mergedMachineElements == null || mergedMachineElements.isEmpty()) {
+            return false;
+        }
+        if (declaredVariableNames(abstractMachineEl).isEmpty()) {
+            return false;
+        }
+        for (Element mel : mergedMachineElements) {
+            if (!isImplementationMachine(mel)) {
+                continue;
+            }
+            if (declaredVariableNames(mel).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Verdadeiro quando alguma máquina fundida do tipo {@code implementation} declara exactamente
      * o mesmo conjunto de variáveis que a abstrata raiz (evita duplicar {@code logic v} no ACSL).
      */
@@ -239,11 +281,13 @@ public final class BxmlMachineVariables {
 
     /**
      * Implementação com o mesmo conjunto de variáveis que a abstrata: o estado C é o da especificação
-     * ({@code logic v = (integer)Raiz__v;}) e não se usa camada ghost paralela.
+     * ({@code logic v = Raiz__v;}) e não se usa camada ghost paralela.
      */
     public static boolean usesDirectImplementationVariables(
             Element abstractMachineEl, List<Element> mergedMachineElements) {
-        return implementationMirrorsAbstractVariables(abstractMachineEl, mergedMachineElements);
+        return implementationMirrorsAbstractVariables(abstractMachineEl, mergedMachineElements)
+                || anyImplementationUsesAbstractVariablesOnly(
+                        abstractMachineEl, mergedMachineElements);
     }
 
     /** Ghost só quando há refinamento/implementação com estado distinto do da abstrata. */
@@ -443,6 +487,11 @@ public final class BxmlMachineVariables {
     private static boolean isImplementationMachine(Element machineEl) {
         String t = machineEl.getAttribute("type");
         return t != null && "implementation".equalsIgnoreCase(t.trim());
+    }
+
+    private static boolean isAbstractionMachine(Element machineEl) {
+        String t = machineEl.getAttribute("type");
+        return t != null && "abstraction".equalsIgnoreCase(t.trim());
     }
 
     private static boolean isRefinementMachine(Element machineEl) {
