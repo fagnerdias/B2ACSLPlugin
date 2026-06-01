@@ -430,10 +430,51 @@ public final class BxmlMachineVariables {
         if (assigned.isEmpty()) {
             return List.of();
         }
+        return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, assigned);
+    }
+
+    /**
+     * Alvos {@code Raiz__v} para {@code assigns} numa operação quando a implementação fundida não
+     * declara variáveis e a operação altera variáveis da abstração ligadas ao C.
+     */
+    public static List<String> listLinkedConcreteAssignTargetsForOperation(
+            String abstractMachineName,
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements,
+            Set<String> assignedVariableNames) {
+        if (abstractMachineName == null
+                || abstractMachineName.isBlank()
+                || abstractMachineEl == null
+                || assignedVariableNames == null
+                || assignedVariableNames.isEmpty()
+                || !anyImplementationUsesAbstractVariablesOnly(
+                        abstractMachineEl, mergedMachineElements)) {
+            return List.of();
+        }
+        Set<String> declared = declaredVariableNames(abstractMachineEl);
+        Set<String> filtered = new LinkedHashSet<>();
+        for (String v : assignedVariableNames) {
+            if (v != null && declared.contains(v.trim())) {
+                filtered.add(v.trim());
+            }
+        }
+        return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, filtered);
+    }
+
+    private static List<String> linkedConcreteAssignTargetsForVariableNames(
+            String abstractMachineName, Set<String> variableNames) {
+        if (abstractMachineName == null
+                || abstractMachineName.isBlank()
+                || variableNames == null
+                || variableNames.isEmpty()) {
+            return List.of();
+        }
         String prefix = abstractMachineName.trim() + "__";
         List<String> out = new ArrayList<>();
-        for (String v : assigned) {
-            out.add(prefix + v);
+        for (String v : variableNames) {
+            if (v != null && !v.isBlank()) {
+                out.add(prefix + v.trim());
+            }
         }
         return out;
     }

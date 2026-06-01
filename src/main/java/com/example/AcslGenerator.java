@@ -178,6 +178,12 @@ public final class AcslGenerator {
                         baseName, machineEl, mergedMachineElements, ctx);
         boolean useGhostAbstraction =
                 BxmlMachineVariables.needsGhostAbstraction(machineEl, mergedMachineElements);
+        Set<String> operationStateVariableNames =
+                new LinkedHashSet<>(GhostOperationsCiGenerator.listAbstractVariableNames(machineEl));
+        if (!useGhostAbstraction) {
+            operationStateVariableNames.addAll(
+                    BxmlMachineVariables.declaredVariableNames(machineEl));
+        }
         InitialisationAcsl initBare =
                 BxmlInitialisationTranslator.translate(
                         machineEl, implementationAssignTargets, ctx);
@@ -216,7 +222,7 @@ public final class AcslGenerator {
                                 machineEl,
                                 ctx,
                                 allInvariantPredicateNames,
-                                abstractVariableNamesForGhost,
+                                operationStateVariableNames,
                                 libScanRemovedBodies,
                                 baseName,
                                 mergedMachineElements,
