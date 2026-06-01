@@ -26,6 +26,7 @@ import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.model.Machine;
 import com.example.ui.FormalVerificationReportDialog;
 import com.example.ui.VerificationReportData;
+import com.example.analysis.LoopUnrollLevelEstimator;
 import com.example.ui.WpOptionsDialog;
 import com.example.ui.WpOptionsDialog.WpOptions;
 
@@ -611,20 +612,32 @@ public final class B2ACSLPipeline {
         String cSourcesLabel =
                 cFiles.stream().map(p -> p.getFileName().toString()).reduce((a, b) -> a + ", " + b).orElse("");
 
-        // frama-c -wp merged_code.c -wp-prover CVC5 -wp-smoke-tests -wp-rte -wp-status
-        ProcessBuilder wpPb =
-                new ProcessBuilder(
-                        FRAMA_C,
-                        "-wp",
-                        mergedCode.getFileName().toString(),
-                        "-wp-prover",
-                        wpOptions.prover(),
-                        "-wp-smoke-tests",
-                        "-wp-split",
-                        "-wp-rte",
-                        "-wp-timeout",
-                        Integer.toString(wpOptions.timeoutSeconds()),
-                        wpOptions.outputFlag());
+        // frama-c [-ulevel n merged.c -then] -wp merged.c -wp-prover … -wp-rte -wp-status
+        List<String> wpCmd = new ArrayList<>();
+        wpCmd.add(FRAMA_C);
+        if (wpOptions.loopSimplification()) {
+            int ulevel = LoopUnrollLevelEstimator.computeUlevel(mergedCode);
+            System.out.println(
+                    "[B2ACSL] Loop simplification: -ulevel "
+                            + ulevel
+                            + " (max loop size + 1 in "
+                            + mergedCode.getFileName()
+                            + ")");
+            wpCmd.add("-ulevel");
+            wpCmd.add(Integer.toString(ulevel));
+            wpCmd.add(mergedCode.getFileName().toString());
+            wpCmd.add("-then");
+        }
+        wpCmd.add("-wp");
+        wpCmd.add(mergedCode.getFileName().toString());
+        wpCmd.add("-wp-prover");
+        wpCmd.add(wpOptions.proversArgument());
+        wpCmd.add("-wp-smoke-tests");
+        wpCmd.add("-wp-rte");
+        wpCmd.add("-wp-timeout");
+        wpCmd.add(Integer.toString(wpOptions.timeoutSeconds()));
+        wpCmd.add(wpOptions.outputFlag());
+        ProcessBuilder wpPb = new ProcessBuilder(wpCmd);
         wpPb.directory(cDir.toFile());
         wpPb.redirectErrorStream(true);
 
