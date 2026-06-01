@@ -40,7 +40,8 @@ public final class WpOptionsDialog {
             List<String> provers,
             int timeoutSeconds,
             String outputFlag,
-            boolean loopSimplification) {
+            boolean loopSimplification,
+            boolean smokeTests) {
 
         /** Primeiro provedor (compatibilidade). */
         public String prover() {
@@ -87,6 +88,7 @@ public final class WpOptionsDialog {
             outputCombo.setSelectedItem(DEFAULT_WP_OUTPUT);
 
             JCheckBox loopSimplificationBox = new JCheckBox("Enable Loop Simplification", false);
+            JCheckBox smokeTestsBox = new JCheckBox("Enable Smoke Tests", true);
 
             JPanel root = new JPanel(new BorderLayout());
             root.setBorder(new EmptyBorder(0, 0, 0, 0));
@@ -137,6 +139,10 @@ public final class WpOptionsDialog {
             loopSimplificationBox.setOpaque(false);
             content.add(loopSimplificationBox, gbc);
 
+            gbc.gridy = 4;
+            smokeTestsBox.setOpaque(false);
+            content.add(smokeTestsBox, gbc);
+
             root.add(content, BorderLayout.CENTER);
 
             Object[] options = {"Cancel", "Run Verification"};
@@ -173,7 +179,8 @@ public final class WpOptionsDialog {
                         selectedProvers,
                         timeout,
                         output,
-                        loopSimplificationBox.isSelected());
+                        loopSimplificationBox.isSelected(),
+                        smokeTestsBox.isSelected());
             }
         } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
             System.err.println(
@@ -244,7 +251,9 @@ public final class WpOptionsDialog {
         String output = System.getProperty("b2acsl.wp.output", DEFAULT_WP_OUTPUT);
         boolean loopSimplification =
                 Boolean.parseBoolean(System.getProperty("b2acsl.wp.loopSimplification", "false"));
-        return buildWpOptions(projectName, provers, timeout, output, loopSimplification);
+        boolean smokeTests =
+                Boolean.parseBoolean(System.getProperty("b2acsl.wp.smokeTests", "true"));
+        return buildWpOptions(projectName, provers, timeout, output, loopSimplification, smokeTests);
     }
 
     private static List<String> parseProverList(String raw) {
@@ -294,7 +303,8 @@ public final class WpOptionsDialog {
             List<String> provers,
             int timeoutSeconds,
             String outputMode,
-            boolean loopSimplification) {
+            boolean loopSimplification,
+            boolean smokeTests) {
         String normalizedProjectName = projectName == null ? "" : projectName.trim();
         if (normalizedProjectName.isBlank()) {
             normalizedProjectName = DEFAULT_PROJECT_NAME;
@@ -322,7 +332,8 @@ public final class WpOptionsDialog {
                 List.copyOf(normalizedProvers),
                 normalizedTimeout,
                 normalizedOutput,
-                loopSimplification);
+                loopSimplification,
+                smokeTests);
     }
 
     private static String normalizeProverName(String prover) {

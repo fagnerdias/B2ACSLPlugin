@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -17,6 +18,8 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
+import javax.swing.border.EmptyBorder;
+import javax.swing.border.TitledBorder;
 
 public final class FormalVerificationReportDialog {
 
@@ -82,7 +85,9 @@ public final class FormalVerificationReportDialog {
                         + ", failures="
                         + reportData.failures()
                         + ", timeouts="
-                        + reportData.timeouts());
+                        + reportData.timeouts()
+                        + ", smoke tests="
+                        + reportData.smokeTestsDisplay());
         System.out.println(reportData.detailsAsText());
         System.out.println(reportData.fullOutputAsText());
     }
@@ -100,26 +105,37 @@ public final class FormalVerificationReportDialog {
     }
 
     private static JPanel buildSummary(VerificationReportData reportData) {
-        JPanel summary = new JPanel(new GridLayout(1, 4, 8, 8));
-        summary.setBorder(BorderFactory.createTitledBorder("Verification Summary"));
+        JPanel summary = new JPanel(new GridLayout(1, 5, 4, 4));
+        TitledBorder titled = BorderFactory.createTitledBorder("Verification Summary");
+        titled.setTitleFont(titled.getTitleFont().deriveFont(Font.PLAIN, 11f));
+        summary.setBorder(titled);
 
         summary.add(buildCard("Total Goals", Integer.toString(reportData.totalGoals())));
         summary.add(buildCard("Proved", Integer.toString(reportData.provedGoals())));
         summary.add(buildCard("Failures", Integer.toString(reportData.failures())));
         summary.add(buildCard("Timeouts", Integer.toString(reportData.timeouts())));
+        summary.add(buildCard("Smoke Tests", reportData.smokeTestsDisplay()));
         return summary;
     }
 
     private static JPanel buildCard(String label, String value) {
-        JPanel card = new JPanel(new BorderLayout());
-        card.setBorder(BorderFactory.createEtchedBorder());
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBorder(
+                BorderFactory.createCompoundBorder(
+                        BorderFactory.createEtchedBorder(),
+                        new EmptyBorder(4, 2, 4, 2)));
 
         JLabel top = new JLabel(label, SwingConstants.CENTER);
+        top.setAlignmentX(JLabel.CENTER_ALIGNMENT);
+        top.setFont(top.getFont().deriveFont(Font.PLAIN, 10f));
+
         JLabel bottom = new JLabel(value, SwingConstants.CENTER);
+        bottom.setAlignmentX(JLabel.CENTER_ALIGNMENT);
         bottom.setFont(bottom.getFont().deriveFont(Font.BOLD, 18f));
 
-        card.add(top, BorderLayout.NORTH);
-        card.add(bottom, BorderLayout.CENTER);
+        card.add(top);
+        card.add(bottom);
         return card;
     }
 

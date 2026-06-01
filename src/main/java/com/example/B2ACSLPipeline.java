@@ -632,7 +632,9 @@ public final class B2ACSLPipeline {
         wpCmd.add(mergedCode.getFileName().toString());
         wpCmd.add("-wp-prover");
         wpCmd.add(wpOptions.proversArgument());
-        wpCmd.add("-wp-smoke-tests");
+        if (wpOptions.smokeTests()) {
+            wpCmd.add("-wp-smoke-tests");
+        }
         wpCmd.add("-wp-rte");
         wpCmd.add("-wp-timeout");
         wpCmd.add(Integer.toString(wpOptions.timeoutSeconds()));
