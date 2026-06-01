@@ -13,6 +13,7 @@ import org.w3c.dom.NodeList;
  * <p>{@code v : iseq(T)} / {@code v : seq(T)} → {@code iSeq} / {@code is_seq_of};
  * {@code ss : POW(S)} → {@code inclusion(ss, S)}; {@code ss : FIN(ss)} → {@code is_finite(ss)};
  * {@code x : BOOL} → {@code belongs(x, BOOL)}; {@code x : NAT} → {@code belongs(x, NAT)};
+ * {@code x : INT} → {@code belongs(x, INT)};
  * {@code x /: s} → {@code not_belongs(x, s)}; comparadores inteiros {@code <=i}, {@code <i} →
  * {@code <=}, {@code <}; igualdade entre conjuntos ({@code Set<…>}, {@code ran} sobre relação, …) →
  * {@code equals(a, b)}; escalares (ex.: {@code card}) mantêm {@code ==}.
@@ -286,6 +287,7 @@ public final class BxmlPredicateToAcsl {
             if (isPrimitiveTypeName(right)) {
                 if ("NAT".equals(right)) return "belongs(" + left + ", NAT)";
                 if ("BOOL".equals(right)) return "belongs(" + left + ", BOOL)";
+                if ("INT".equals(right)) return "belongs(" + left + ", INT)";
                 return "(" + left + " /* : " + right + " */)";
             }
             return "belongs(" + left + ", " + right + ")";

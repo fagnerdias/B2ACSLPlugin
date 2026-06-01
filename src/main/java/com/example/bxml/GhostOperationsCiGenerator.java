@@ -1578,8 +1578,9 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Conjuntos globais da ACSL_Lib ({@code NAT}, {@code BOOL}) → variáveis lógicas
-     * {@code dummy_NAT} / {@code dummy_BOOL} declaradas em {@link DummyGhostAxiomaticBuilder}.
+     * Conjuntos globais da ACSL_Lib ({@code NAT}, {@code INT}, {@code BOOL}) → variáveis lógicas
+     * {@code dummy_NAT} / {@code dummy_INT} / {@code dummy_BOOL} declaradas em
+     * {@link DummyGhostAxiomaticBuilder}.
      */
     private static String prefixGlobalLogicSetsForGhost(String text) {
         if (text == null || text.isEmpty()) {
@@ -1588,6 +1589,9 @@ public final class GhostOperationsCiGenerator {
         String out =
                 text.replaceAll(
                         "(?<!dummy_)\\bNAT\\b", Matcher.quoteReplacement("dummy_NAT"));
+        out =
+                out.replaceAll(
+                        "(?<!dummy_)\\bINT\\b", Matcher.quoteReplacement("dummy_INT"));
         return out.replaceAll(
                 "(?<!dummy_)\\bBOOL\\b", Matcher.quoteReplacement("dummy_BOOL"));
     }
