@@ -7,6 +7,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.w3c.dom.Element;
@@ -92,6 +93,38 @@ public final class BxmlOperationsTranslator {
             String rootAbstractMachineName,
             List<Element> mergedRefinementChain,
             Map<String, String> gluing) {
+        boolean useGhost =
+                mergedRefinementChain == null
+                        || mergedRefinementChain.isEmpty()
+                        || BxmlMachineVariables.needsGhostAbstraction(
+                                machineEl, mergedRefinementChain);
+        return translateOperations(
+                machineEl,
+                ctx,
+                invariantPredicateNames,
+                abstractVariableNames,
+                libScanGhostOperationBodies,
+                rootAbstractMachineName,
+                mergedRefinementChain,
+                gluing,
+                useGhost);
+    }
+
+    /**
+     * @param useGhostAbstraction {@code false} quando a implementação usa as mesmas variáveis C
+     *        ({@link BxmlMachineVariables#usesDirectImplementationVariables}): contratos com
+     *        {@code ensures} do corpo e sem {@code assert ghost__…}
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
 
@@ -113,12 +146,13 @@ public final class BxmlOperationsTranslator {
                 requires.add(inv);
             }
             Element pre = firstChildElement(child, "Precondition");
+            List<String> outputParams = parseOutputParameterNames(child);
             if (pre != null) {
                 requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
                 rewriteRequiresForArrayBackedFunctionParams(requires, child, ctx);
+                rewriteRequiresForOutputParameters(requires, outputParams);
             }
 
-            List<String> outputParams = parseOutputParameterNames(child);
             for (String p : outputParams) {
                 requires.add("\\valid(" + p + ")");
             }
@@ -129,6 +163,7 @@ public final class BxmlOperationsTranslator {
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
             }
             applyStarPrefixToEnsures(ensures, outputParams);
+            rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, ctx);
             List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
             for (String inv : invariantPredicateNames) {
                 ensures.add(inv);
@@ -142,7 +177,7 @@ public final class BxmlOperationsTranslator {
                             && GhostOperationsCiGenerator.operationAssignsAbstract(
                                     child, abstractVariableNames);
             boolean bodyHasAnySub = GhostOperationsCiGenerator.operationBodyHasAnySub(child);
-            if (assignsAbstract || bodyHasAnySub) {
+            if (useGhostAbstraction && (assignsAbstract || bodyHasAnySub)) {
                 ghostSlug = GhostOperationsCiGenerator.ghostOperationSlug(opName);
             }
             List<String> ghostBehaviorArgs = new ArrayList<>(inputParamNames);
@@ -156,14 +191,15 @@ public final class BxmlOperationsTranslator {
                     }
                 }
             }
-            if (assignsAbstract
+            if (useGhostAbstraction
+                    && assignsAbstract
                     && invariantPredicateNames != null
                     && !invariantPredicateNames.isEmpty()) {
                 Set<String> invariantOnly = new HashSet<>(invariantPredicateNames);
                 ensures.removeIf(e -> !invariantOnly.contains(e));
             }
             List<String> dummyGhostEnsureVars =
-                    assignsAbstract
+                    useGhostAbstraction && assignsAbstract
                             ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
                             : List.of();
 
@@ -185,6 +221,14 @@ public final class BxmlOperationsTranslator {
                                     assignedAbs,
                                     gluing,
                                     ctx);
+                    if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
+                        connectionConcreteAssigns =
+                                BxmlMachineVariables.listImplementationAssignTargetsForAbstractVariables(
+                                        rootAbstractMachineName,
+                                        mergedRefinementChain,
+                                        assignedAbs,
+                                        ctx);
+                    }
                 }
             }
 
@@ -240,10 +284,6 @@ public final class BxmlOperationsTranslator {
         return names;
     }
 
-    /**
-     * Para cada {@code ensures} da forma {@code v == E}, se {@code v} for parâmetro de saída, gera
-     * {@code *v == E}.
-     */
     private static void applyStarPrefixToEnsures(List<String> ensures, List<String> outputParams) {
         if (outputParams.isEmpty()) return;
         Set<String> out = new HashSet<>(outputParams);
@@ -271,6 +311,76 @@ public final class BxmlOperationsTranslator {
         }
     }
 
+    /**
+     * Saída C {@code bool}/{@code _Bool} vs variável lógica {@code integer} (0/1): evita mistura bool/int no WP.
+     */
+    private static void rewriteEnsuresBoolOutputEquality(
+            List<String> ensures, List<String> outputParams, Element operation, BxmlTranslateContext ctx) {
+        if (ensures == null || ensures.isEmpty() || outputParams == null || outputParams.isEmpty()) {
+            return;
+        }
+        Set<String> boolOut = boolOutputParameterNames(operation, ctx);
+        if (boolOut.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < ensures.size(); i++) {
+            String s = ensures.get(i);
+            if (s == null || s.isBlank()) {
+                continue;
+            }
+            int eq = s.indexOf(" == ");
+            if (eq < 0) {
+                continue;
+            }
+            String lhs = s.substring(0, eq).trim();
+            if (!lhs.startsWith("*")) {
+                continue;
+            }
+            String param = lhs.substring(1).trim();
+            if (!boolOut.contains(param)) {
+                continue;
+            }
+            String rhs = s.substring(eq + 4).trim();
+            ensures.set(i, "(integer)(*" + param + " != 0) == " + rhs);
+        }
+    }
+
+    private static Set<String> boolOutputParameterNames(Element operation, BxmlTranslateContext ctx) {
+        Set<String> out = new HashSet<>();
+        Element outEl = firstChildElement(operation, "Output_Parameters");
+        if (outEl == null || ctx == null) {
+            return out;
+        }
+        NodeList ch = outEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+            Element e = (Element) n;
+            if (!"Id".equals(e.getLocalName())) {
+                continue;
+            }
+            String name = e.getAttribute("value");
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            String trAttr = e.getAttribute("typref");
+            if (trAttr.isBlank()) {
+                continue;
+            }
+            try {
+                int tr = Integer.parseInt(trAttr.trim());
+                if ("BOOL".equals(ctx.types().getRawType(tr))) {
+                    out.add(name.trim());
+                }
+            } catch (NumberFormatException ignored) {
+                // skip
+            }
+        }
+        return out;
+    }
+
     private static String sanitize(String name) {
         return name.replace('-', '_');
     }
@@ -284,6 +394,39 @@ public final class BxmlOperationsTranslator {
             if (localName.equals(e.getLocalName())) return e;
         }
         return null;
+    }
+
+    /**
+     * Parâmetros de saída em C são ponteiros: {@code ret : S} no B traduz-se para
+     * {@code belongs(*ret, BOOL)} ou {@code belongs((integer)*ret, S)} nos {@code requires}.
+     */
+    private static final Pattern REQUIRES_BELONGS =
+            Pattern.compile(
+                    "^belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^)]+)\\s*\\)$");
+
+    private static void rewriteRequiresForOutputParameters(
+            List<String> requires, List<String> outputParams) {
+        if (requires == null || requires.isEmpty() || outputParams == null || outputParams.isEmpty()) {
+            return;
+        }
+        Set<String> out = new HashSet<>(outputParams);
+        for (int i = 0; i < requires.size(); i++) {
+            String req = requires.get(i);
+            if (req == null || req.isBlank()) {
+                continue;
+            }
+            Matcher m = REQUIRES_BELONGS.matcher(req.trim());
+            if (!m.matches()) {
+                continue;
+            }
+            String var = m.group(1).trim();
+            String set = m.group(2).trim();
+            if (!out.contains(var)) {
+                continue;
+            }
+            String value = "(integer)*" + var;
+            requires.set(i, "belongs(" + value + ", " + set + ")");
+        }
     }
 
     /**

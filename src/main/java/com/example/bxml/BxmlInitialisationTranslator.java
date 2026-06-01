@@ -78,16 +78,8 @@ public final class BxmlInitialisationTranslator {
             case "ANY_Sub" -> {
                 /* Tratado como contrato ghost por GhostOperationsCiGenerator; nada a emitir aqui. */
             }
-            case "Becomes_Such_That" -> {
-                // pos:(P(pos)) → ensures P(pos); o * de saída é aplicado depois por applyStarPrefixToEnsures
-                Element predEl = firstChildElement(sub, "Pred");
-                if (predEl != null) {
-                    String p = BxmlPredicateToAcsl.translateInvariantContent(predEl, ctx);
-                    if (p != null && !p.isBlank()) {
-                        ensures.add(p.trim());
-                    }
-                }
-            }
+            case "Becomes_In" -> parseBecomesInSub(sub, ensures, ctx);
+            case "Becomes_Such_That" -> parseBecomesSuchThatSub(sub, ensures, ctx);
             case "Select" -> parseSelectAsConditionalEnsures(sub, ensures, ctx);
             case "If_Sub" -> parseIfSubAsConditionalEnsures(sub, ensures, ctx);
             default -> { /* outras substituições: extensão futura */ }
@@ -160,6 +152,10 @@ public final class BxmlInitialisationTranslator {
             if ("Attr".equals(ch.getLocalName())) continue;
             if ("Assignement_Sub".equals(ch.getLocalName())) {
                 parseAssignementSub(ch, ensures, ctx);
+            } else if ("Becomes_In".equals(ch.getLocalName())) {
+                parseBecomesInSub(ch, ensures, ctx);
+            } else if ("Becomes_Such_That".equals(ch.getLocalName())) {
+                parseBecomesSuchThatSub(ch, ensures, ctx);
             } else if ("If_Sub".equals(ch.getLocalName())) {
                 parseIfSubAsConditionalEnsures(ch, ensures, ctx);
             } else if ("Select".equals(ch.getLocalName())) {
@@ -279,6 +275,51 @@ public final class BxmlInitialisationTranslator {
         }
         sb.append(")");
         return sb.toString();
+    }
+
+    /**
+     * {@code Becomes_Such_That} (B: {@code v1,…,vn : (P)}) → {@code ensures P} com {@code P} no pós-estado.
+     */
+    private static void parseBecomesSuchThatSub(
+            Element becomesSuch, List<String> ensures, BxmlTranslateContext ctx) {
+        Element predEl = firstChildElement(becomesSuch, "Pred");
+        if (predEl == null) {
+            return;
+        }
+        String p = BxmlPredicateToAcsl.translateInvariantContent(predEl, ctx);
+        if (p != null && !p.isBlank()) {
+            ensures.add(p.trim());
+        }
+    }
+
+    /**
+     * {@code Becomes_In} (B: {@code v :: E}) → {@code belongs(v, E)} para cada variável em
+     * {@code Variables} (pós-estado da operação / inicialização).
+     */
+    private static void parseBecomesInSub(Element becomesIn, List<String> ensures, BxmlTranslateContext ctx) {
+        Element vars = firstChildElement(becomesIn, "Variables");
+        Element value = firstChildElement(becomesIn, "Value");
+        if (vars == null || value == null) {
+            return;
+        }
+        String setExpr = null;
+        for (Element valExp : directExpChildren(value)) {
+            setExpr = BxmlExpressionToAcsl.translate(valExp, ctx);
+            break;
+        }
+        if (setExpr == null || setExpr.isBlank()) {
+            return;
+        }
+        List<String> parts = new ArrayList<>();
+        for (Element varExp : directExpChildren(vars)) {
+            String v = BxmlExpressionToAcsl.translate(varExp, ctx);
+            if (v != null && !v.isBlank()) {
+                parts.add("belongs(" + v + ", " + setExpr + ")");
+            }
+        }
+        if (!parts.isEmpty()) {
+            ensures.add(String.join(" && ", parts));
+        }
     }
 
     private static void parseAssignementSub(Element assign, List<String> ensures, BxmlTranslateContext ctx) {

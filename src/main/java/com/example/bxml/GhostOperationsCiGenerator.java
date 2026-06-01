@@ -1,5 +1,6 @@
 package com.example.bxml;
 
+import com.example.AcslLibSymbolDependencyMap;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -123,11 +124,18 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Bloco {@code axiomatic Nome_ghost_patterns} com {@code logic integer dummy_ghost_<v>} e predicados
+     * Bloco {@code axiomatic Nome_ghost_patterns} com {@code logic … dummy_ghost_<v>} e predicados
      * {@code ghost_<op>} para inicialização e operações não puras.
      */
     public static String formatGhostPatternsAxiomaticBlock(
             Element abstractMachineEl, String machineNamePrefix) {
+        return formatGhostPatternsAxiomaticBlock(abstractMachineEl, machineNamePrefix, Map.of());
+    }
+
+    public static String formatGhostPatternsAxiomaticBlock(
+            Element abstractMachineEl,
+            String machineNamePrefix,
+            Map<String, String> variableLogicTypes) {
         if (abstractMachineEl == null
                 || machineNamePrefix == null
                 || machineNamePrefix.isBlank()) {
@@ -136,11 +144,17 @@ public final class GhostOperationsCiGenerator {
         List<String> vars = listAbstractVariableNames(abstractMachineEl);
         if (vars.isEmpty()) return "";
 
+        Map<String, String> types =
+                variableLogicTypes == null ? Map.of() : variableLogicTypes;
         Set<String> abstractSet = new LinkedHashSet<>(vars);
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic ").append(machineNamePrefix).append("_ghost_patterns {\n\n");
         for (String v : vars) {
-            sb.append("    logic int dummy_ghost_").append(v).append(";\n\n");
+            sb.append("    logic ")
+                    .append(ghostLogicTypeFromInferred(types.get(v)))
+                    .append(" dummy_ghost_")
+                    .append(v)
+                    .append(";\n\n");
         }
         if (initialisationAssignsAbstract(abstractMachineEl, abstractSet)) {
             sb.append("    predicate ghost__initialisation;\n\n");
@@ -183,11 +197,49 @@ public final class GhostOperationsCiGenerator {
      */
     public static void write(Path cDir, Element abstractMachineEl, Map<String, String> gluing)
             throws IOException {
+        write(cDir, abstractMachineEl, gluing, null);
+    }
+
+    /**
+     * @param bxmlDirectory pasta com os {@code .bxml} (ex. {@code src/main/resources}) para fundir
+     *        valores enumerados das máquinas em {@code SEES}
+     */
+    public static void write(
+            Path cDir,
+            Element abstractMachineEl,
+            Map<String, String> gluing,
+            Path bxmlDirectory)
+            throws IOException {
+        write(cDir, abstractMachineEl, gluing, bxmlDirectory, List.of());
+    }
+
+    /**
+     * @param mergedMachineElements refinamentos/implementações fundidos na abstrata; se a
+     *        implementação espelha as variáveis abstratas, não gera {@code ghost_operations.ci}
+     */
+    public static void write(
+            Path cDir,
+            Element abstractMachineEl,
+            Map<String, String> gluing,
+            Path bxmlDirectory,
+            List<Element> mergedMachineElements)
+            throws IOException {
         if (cDir == null || abstractMachineEl == null) return;
+        Path target = cDir.resolve(GHOST_FILE);
+        if (!BxmlMachineVariables.needsGhostAbstraction(abstractMachineEl, mergedMachineElements)) {
+            Files.deleteIfExists(target);
+            return;
+        }
         String machineName = abstractMachineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return;
 
-        BxmlTranslateContext ctx = BxmlTranslateContext.forMachine(abstractMachineEl, gluing);
+        BxmlTranslateContext ctx =
+                BxmlTranslateContext.forMachine(abstractMachineEl, gluing)
+                        .withEnumRenames(
+                                BxmlSetsTranslator.buildEnumRenamesWithSees(
+                                        abstractMachineEl, bxmlDirectory))
+                        .withEnumeratedSetNames(
+                                BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
         List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
         if (abstractVarNames.isEmpty()) {
             Files.deleteIfExists(cDir.resolve(GHOST_FILE));
@@ -204,12 +256,21 @@ public final class GhostOperationsCiGenerator {
                 .append(" */\n\n");
 
         for (String v : abstractVarNames) {
-            sb.append("//@ ghost int ghost_").append(v).append(";\n");
+            String cType = ghostCTypeFromLogicType(varTypes.get(v));
+            sb.append("//@ ghost ").append(cType).append(" ghost_").append(v).append(";\n");
         }
         sb.append("\n");
 
+        List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
+                BxmlSetsTranslator.listEnumeratedSetsWithSees(abstractMachineEl, bxmlDirectory);
         List<GhostOp> ghostOps =
-                buildGhostOperations(abstractMachineEl, abstractSet, ctx, varTypes, concreteConstants);
+                buildGhostOperations(
+                        abstractMachineEl,
+                        abstractSet,
+                        ctx,
+                        varTypes,
+                        concreteConstants,
+                        enumeratedSetsForGhost);
         List<String> allGhostEnsureLines = new ArrayList<>();
         for (GhostOp go : ghostOps) {
             allGhostEnsureLines.addAll(go.ghostEnsures());
@@ -219,7 +280,16 @@ public final class GhostOperationsCiGenerator {
                         ctx.comprehensions().maxComprehensionIndex(),
                         maxSetComprehensionIndexInGhostText(allGhostEnsureLines));
 
-        sb.append(formatDummyAxiomatic(abstractVarNames, varTypes, maxSetComp, abstractMachineEl, ctx));
+        sb.append(
+                new DummyGhostAxiomaticBuilder(AcslLibSymbolDependencyMap.instance())
+                        .format(
+                                allGhostEnsureLines,
+                                abstractVarNames,
+                                varTypes,
+                                maxSetComp,
+                                abstractMachineEl,
+                                ctx,
+                                bxmlDirectory));
 
         for (GhostOp go : ghostOps) {
             sb.append(go.format());
@@ -234,15 +304,22 @@ public final class GhostOperationsCiGenerator {
             Set<String> abstractSet,
             BxmlTranslateContext ctx,
             Map<String, String> varTypes,
-            Set<String> concreteConstants) {
+            Set<String> concreteConstants,
+            List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost) {
         List<GhostOp> ops = new ArrayList<>();
         List<String> initEnsures = collectGhostEnsuresFromInit(abstractMachineEl, abstractSet, ctx);
         Set<String> initAssigned = new LinkedHashSet<>();
         collectAssignedAbstractVarsInInit(abstractMachineEl, abstractSet, initAssigned);
-        if (!initAssigned.isEmpty() && !initEnsures.isEmpty()) {
+        if (!initAssigned.isEmpty()) {
             List<String> prefixedInitEnsures = new ArrayList<>();
             for (String e : initEnsures) {
-                prefixedInitEnsures.add(prefixAcslLibFunctionsForGhost(e));
+                String ge = prefixAcslLibFunctionsForGhost(e);
+                ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
+                ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
+                ge = prefixGlobalLogicSetsForGhost(ge);
+                ge = stripBTypingCommentsForGhost(ge);
+                ge = normalizeBooleanLiteralsForGhost(ge);
+                prefixedInitEnsures.add(ge);
             }
             ops.add(new GhostOp("initialisation", List.of(), initAssigned, prefixedInitEnsures));
         }
@@ -289,10 +366,18 @@ public final class GhostOperationsCiGenerator {
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
                 List<String> ghostEnsures = new ArrayList<>();
                 for (String e : ensures) {
-                    String ge = toGhostEnsure(e, abstractSet);
+                    String ge =
+                            isPostStatePredicateEnsure(e)
+                                    ? toGhostEnsurePostState(e, abstractSet)
+                                    : toGhostEnsure(e, abstractSet);
                     ge = rewriteGhostEnsureForListDomainRestriction(
                             ge, op, varTypes, params, ctx, concreteConstants);
                     ge = prefixAcslLibFunctionsForGhost(ge);
+                    ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
+                    ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
+                    ge = prefixGlobalLogicSetsForGhost(ge);
+                    ge = stripBTypingCommentsForGhost(ge);
+                    ge = normalizeBooleanLiteralsForGhost(ge);
                     ge = castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
@@ -387,7 +472,7 @@ public final class GhostOperationsCiGenerator {
     /**
      * Segundo argumento de {@code domain_restriction(..., S)} no axiomatic ghost: nomes de set
      * comprehension vêm do tradutor como {@code set_comprehension_k}; aqui alinham-se a
-     * {@code dummy_set_comprehension_k} declarado em {@link #formatDummyAxiomatic}.
+     * {@code dummy_set_comprehension_k} declarado em {@link DummyGhostAxiomaticBuilder}.
      */
     private static String dummySetComprehensionRef(String domainRestrictionSecondArg) {
         if (domainRestrictionSecondArg == null) {
@@ -399,51 +484,6 @@ public final class GhostOperationsCiGenerator {
             return "dummy_set_comprehension_" + um.group(1);
         }
         return s;
-    }
-
-    private static String formatDummyAxiomatic(
-            List<String> abstractVarNames,
-            Map<String, String> varTypes,
-            int maxSetComprehensionIndex,
-            Element machineEl,
-            BxmlTranslateContext ctx) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("/*@\n");
-        sb.append("    axiomatic dummy_ghost {\n\n");
-        sb.append("        type DSet<A>;\n\n");
-        sb.append("        type DTuple<A, B>;\n\n");
-        sb.append("        type DRelation<A, B> = DSet<DTuple<integer, integer> >;\n\n");
-        sb.append("        type dummy_Function_int_int = DRelation<integer, integer>;\n\n");
-        for (String v : abstractVarNames) {
-            String t = varTypes.getOrDefault(v, "Set<integer>");
-            String d = dummyAxiomaticLogicType(t);
-            sb.append("        logic ").append(d).append(" dummy_").append(v).append(";\n\n");
-        }
-        appendDummyConcreteConstantDeclarations(sb, machineEl, ctx);
-        if (maxSetComprehensionIndex > 0) {
-            for (int k = 1; k <= maxSetComprehensionIndex; k++) {
-                sb.append("        logic DSet<integer> dummy_set_comprehension_").append(k).append(";\n\n");
-            }
-        }
-        sb.append("        logic DSet<integer> dummy_NAT;\n\n");
-        sb.append("        logic A dummy_empty<A>(A a);\n");
-        sb.append("        predicate dummy_belongs<A, B>(A a, B b);\n");
-        sb.append("        predicate dummy_equals<A,B>(A a, B b);\n");
-        sb.append("        logic A dummy_set_union<A, B>(A a, B b);\n");
-        sb.append("        logic integer dummy_card<A>(A a);\n");
-        sb.append("        logic DSet<A> dummy_singleton<A>(A a);\n");
-        sb.append("        predicate dummy_is_finite<A>(A a);\n");
-        sb.append(
-                "        logic DRelation<A, B> dummy_domain_restriction<A, B>(DRelation<A, B> r, DSet<A> S);\n\n");
-        sb.append("        logic DRelation<integer, A> dummy_list_to_function<A>(\\list<A> l);\n\n");
-        sb.append("        logic DRelation<integer, integer> dummy_array_to_function(int *x, integer length);\n");
-        sb.append("        predicate dummy_is_total_function(dummy_Function_int_int f, DSet<integer> X, DSet<integer> Y);\n");
-        sb.append("        logic DSet<A> dummy_difference<A>(DSet<A> a, DSet<A> b);\n");
-        sb.append("        logic B dummy_function_apply<A, B>(DRelation<A, B> r, A x);\n");
-        sb.append("        logic DRelation<A, B> dummy_range_restriction<A, B>(DRelation<A, B> r, DSet<B> S);\n");
-        sb.append("        logic DTuple<A, B> dummy_couple<A, B>(A a, B b);\n");
-        sb.append("    }\n*/\n");
-        return sb.toString();
     }
 
     /** Nomes em {@code Concrete_Constants} (ordem de declaração no BXML). */
@@ -468,44 +508,6 @@ public final class GhostOperationsCiGenerator {
         return out;
     }
 
-    /**
-     * Declarações {@code logic τ dummy_<c>} para cada constante concreta (espelho ghost no universo
-     * {@code dummy_ghost}).
-     */
-    private static void appendDummyConcreteConstantDeclarations(
-            StringBuilder sb, Element machineEl, BxmlTranslateContext ctx) {
-        if (machineEl == null || ctx == null) {
-            return;
-        }
-        Element block = firstChildElement(machineEl, "Concrete_Constants");
-        if (block == null) {
-            return;
-        }
-        NodeList ch = block.getChildNodes();
-        for (int i = 0; i < ch.getLength(); i++) {
-            Node n = ch.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            if (!"Id".equals(e.getLocalName())) continue;
-            String name = e.getAttribute("value");
-            if (name == null || name.isBlank()) continue;
-            String logicType = "integer";
-            String tr = e.getAttribute("typref");
-            if (!tr.isBlank()) {
-                try {
-                    int typref = Integer.parseInt(tr.trim());
-                    String t = ctx.types().acslVariableLogicTypeFromTypref(typref);
-                    if (t != null && !t.isBlank()) {
-                        logicType = t;
-                    }
-                } catch (NumberFormatException ignored) {
-                }
-            }
-            sb.append("        logic ").append(logicType).append(" dummy_").append(name.trim()).append(";\n\n");
-        }
-    }
-
     /** Substitui referências a constantes concretas por {@code dummy_<nome>} numa expressão ACSL já escrita. */
     private static String ghostDummyConcreteRefs(String acslExpr, Set<String> concreteConstantNames) {
         if (acslExpr == null || concreteConstantNames == null || concreteConstantNames.isEmpty()) {
@@ -527,48 +529,54 @@ public final class GhostOperationsCiGenerator {
         return out;
     }
 
-    /**
-     * Tipo ACSL da variável lógica {@code dummy_<v>} no axiomatica comentado: espelha {@code Set<…>}
-     * como {@code DSet<…>}, {@code \\list<…>} inalterado, {@code Relation_*} inalterado.
-     */
-    private static String dummyAxiomaticLogicType(String inferred) {
-        if (inferred == null || inferred.isBlank()) {
-            return "DSet<integer>";
-        }
-        String t = inferred.trim();
-        if (t.startsWith("\\list")) {
-            return t;
-        }
-        if (t.startsWith("Set<") && t.endsWith(">")) {
-            // Tipos abstratos B (ex.: book, copy) não têm representação C/ACSL;
-            // todo conjunto no universo dummy é modelado como DSet<integer>.
-            return "DSet<integer>";
-        }
-        if (t.startsWith("Relation_") || t.startsWith("Function_")) {
-            // Converte Relation_int_int / Function_int_int → DRelation<integer, integer>
-            String suffix = t.startsWith("Relation_") ? t.substring("Relation_".length())
-                                                       : t.substring("Function_".length());
-            String[] parts = suffix.split("_", 2);
-            if (parts.length == 2) {
-                return "DRelation<" + acslTypeParamName(parts[0]) + ", " + acslTypeParamName(parts[1]) + ">";
-            }
-            return "DRelation<integer, integer>";
-        }
-        return "DSet<integer>";
-    }
-
-    /** Converte token de tipo B/ACSL_Lib (ex.: {@code int}, {@code bool}) para nome ACSL genérico. */
-    private static String acslTypeParamName(String token) {
-        return switch (token.toLowerCase()) {
-            case "int", "integer" -> "integer";
-            case "bool", "boolean" -> "boolean";
-            default -> "integer";
-        };
-    }
-
-    /** Igualdade {@code <var> == <rhs>} com {@code <var>} abstrata (pós-estado: {@code dummy_<var>}, não {@code \\old}). */
+    /** Igualdade {@code <var> == <rhs>} (com cast opcional) com variável abstrata no pós-estado. */
     private static final Pattern GHOST_ENSURE_SIMPLE_ABS_VAR_EQ =
-            Pattern.compile("^([A-Za-z_]\\w*)\\s*==\\s*(.+)$", Pattern.DOTALL);
+            Pattern.compile(
+                    "^(?:\\(integer\\)|\\(int\\))?\\s*([A-Za-z_]\\w*)\\s*==\\s*(.+)$", Pattern.DOTALL);
+
+    /** {@code belongs(v, S)} vindo de {@code Becomes_In} / {@code v : S}. */
+    private static final Pattern GHOST_ENSURE_BELONGS =
+            Pattern.compile("^belongs\\s*\\(\\s*([^,]+)\\s*,\\s*([^)]+)\\s*\\)$");
+
+    /**
+     * {@code Becomes_Such_That} e predicados compostos no pós-estado (sem {@code \\old} nas variáveis
+     * abstratas).
+     */
+    private static boolean isPostStatePredicateEnsure(String ensure) {
+        if (ensure == null || ensure.isBlank()) {
+            return false;
+        }
+        if (ensure.startsWith("belongs(")) {
+            return false;
+        }
+        return ensure.contains("==>") || ensure.contains("&&");
+    }
+
+    private static String toGhostEnsurePostState(String translatedEnsure, Set<String> abstractVars) {
+        String s = stripBTypingCommentsForGhost(translatedEnsure.trim());
+        Matcher belongsM = GHOST_ENSURE_BELONGS.matcher(s);
+        if (belongsM.matches()) {
+            return toGhostEnsure(s, abstractVars);
+        }
+        return prefixAbstractVarsForGhost(s, abstractVars);
+    }
+
+    /** Anotações de tipo B ({@code x /&#42; : BOOL &#42;/}) quebram comentários ACSL em {@code .ci}. */
+    private static String stripBTypingCommentsForGhost(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        return text.replaceAll("\\s*/\\*\\s*:[^*]*\\*/", "");
+    }
+
+    /** {@code TRUE}/{@code FALSE} B restantes → {@code \\true}/{@code \\false} no universo lógico ghost. */
+    private static String normalizeBooleanLiteralsForGhost(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        return text.replaceAll("\\bTRUE\\b", Matcher.quoteReplacement("\\true"))
+                .replaceAll("\\bFALSE\\b", Matcher.quoteReplacement("\\false"));
+    }
 
     /** Traduz {@code equals(ss, …)} para o universo {@code dummy_*} com {@code \\old} no RHS. */
     private static String toGhostEnsure(String translatedEnsure, Set<String> abstractVars) {
@@ -586,12 +594,24 @@ public final class GhostOperationsCiGenerator {
         }
 
         if (!s.startsWith("equals(")) {
+            Matcher belongsM = GHOST_ENSURE_BELONGS.matcher(s);
+            if (belongsM.matches()) {
+                String v = stripIntegerCast(belongsM.group(1).trim());
+                String setExpr = belongsM.group(2).trim();
+                if (abstractVars.contains(v)) {
+                    return "dummy_belongs(dummy_"
+                            + v
+                            + ", "
+                            + prefixGlobalLogicSetsForGhost(setExpr)
+                            + ")";
+                }
+            }
             Matcher simpleEq = GHOST_ENSURE_SIMPLE_ABS_VAR_EQ.matcher(s);
             if (simpleEq.matches()) {
                 String lhs = simpleEq.group(1);
                 String rhs = simpleEq.group(2).trim();
                 if (abstractVars.contains(lhs)) {
-                    return "dummy_" + lhs + " == " + rewriteAbstractIdsWithOld(rhs, abstractVars);
+                    return "dummy_" + lhs + " == " + rhs;
                 }
             }
             return rewriteAbstractIdsWithOld(s, abstractVars);
@@ -629,6 +649,20 @@ public final class GhostOperationsCiGenerator {
             }
         }
         return -1;
+    }
+
+    private static String stripIntegerCast(String expr) {
+        if (expr == null) {
+            return "";
+        }
+        String t = expr.trim();
+        if (t.startsWith("(integer)")) {
+            return t.substring("(integer)".length()).trim();
+        }
+        if (t.startsWith("(int)")) {
+            return t.substring("(int)".length()).trim();
+        }
+        return t;
     }
 
     private static String rewriteAbstractIdsWithOld(String expr, Set<String> abstractVars) {
@@ -996,8 +1030,31 @@ public final class GhostOperationsCiGenerator {
                     if (g != null && !g.isBlank()) out.add(g);
                 }
             }
+            case "Becomes_In" -> {
+                Element vars = firstChildElement(sub, "Variables");
+                Element value = firstChildElement(sub, "Value");
+                if (vars == null || value == null) return;
+                String setExpr = null;
+                for (Element valExp : directExpChildren(value)) {
+                    setExpr = BxmlExpressionToAcsl.translate(valExp, ctx);
+                    break;
+                }
+                if (setExpr == null || setExpr.isBlank()) return;
+                List<String> parts = new ArrayList<>();
+                for (Element varExp : directExpChildren(vars)) {
+                    if (!"Id".equals(varExp.getLocalName())) continue;
+                    String v = varExp.getAttribute("value");
+                    if (abstractSet.contains(v)) {
+                        parts.add("belongs(dummy_" + v + ", " + setExpr + ")");
+                    }
+                }
+                if (!parts.isEmpty()) {
+                    out.add(String.join(" && ", parts));
+                }
+            }
             case "Nary_Sub" -> {
-                if (";".equals(sub.getAttribute("op"))) {
+                String op = sub.getAttribute("op");
+                if (";".equals(op) || "||".equals(op)) {
                     NodeList children = sub.getChildNodes();
                     for (int i = 0; i < children.getLength(); i++) {
                         Node n = children.item(i);
@@ -1034,6 +1091,14 @@ public final class GhostOperationsCiGenerator {
         }
         String rhs = BxmlExpressionToAcsl.translate(rhsExp, ctx);
         String rhsGhost = rewriteAbstractIdsWithOld(rhs, abstractSet);
+        String logicType = ctx.variableLogicTypes().get(v);
+        if (logicType != null
+                && (logicType.equals("boolean")
+                        || logicType.equals("integer")
+                        || logicType.equals("int")
+                        || logicType.equals("real"))) {
+            return "dummy_" + v + " == " + rhsGhost;
+        }
         return "equals(dummy_" + v + ", " + rhsGhost + ")";
     }
 
@@ -1059,7 +1124,7 @@ public final class GhostOperationsCiGenerator {
         if (sub == null) return;
         String ln = sub.getLocalName();
         switch (ln) {
-            case "Assignement_Sub" -> {
+            case "Assignement_Sub", "Becomes_In", "Becomes_Such_That" -> {
                 Element vars = firstChildElement(sub, "Variables");
                 if (vars == null) return;
                 for (Element id : directExpChildren(vars)) {
@@ -1151,7 +1216,7 @@ public final class GhostOperationsCiGenerator {
     /**
      * Em contratos ghost ({@code ghost_operations.ci}), tipos de função na biblioteca ACSL aparecem
      * com prefixo {@code dummy_} (ex.: {@code Function_int_int} → {@code dummy_Function_int_int}),
-     * alinhados ao alias declarado em {@link #formatDummyAxiomatic} dentro de {@code dummy_ghost}.
+     * alinhados ao alias declarado em {@link DummyGhostAxiomaticBuilder} dentro de {@code dummy_ghost}.
      *
      * <p>Apenas reescreve o token quando não está já prefixado por {@code dummy_}.
      */
@@ -1164,7 +1229,7 @@ public final class GhostOperationsCiGenerator {
 
     /**
      * Prefixa {@code set_comprehension_<k>} com {@code dummy_} (alinhado às declarações
-     * {@code logic DSet<integer> dummy_set_comprehension_k} em {@link #formatDummyAxiomatic}).
+     * {@code logic DSet<integer> dummy_set_comprehension_k} em {@link DummyGhostAxiomaticBuilder}).
      */
     private static String prefixSetComprehensionsForGhost(String text) {
         if (text == null || text.isEmpty()) {
@@ -1215,7 +1280,7 @@ public final class GhostOperationsCiGenerator {
             BxmlTranslateContext ctx) {
         String s = prefixFunctionTypesForGhost(text);
         s = prefixAcslLibFunctionsForGhost(s);
-        s = prefixNatSetForGhost(s);
+        s = prefixGlobalLogicSetsForGhost(s);
         s = prefixSetComprehensionsForGhost(s);
         s = ghostDummyConcreteRefs(s, concreteConstantNames);
         s = prefixAbstractVarsForGhost(s, abstractVars);
@@ -1344,51 +1409,187 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Funções da {@code ACSL_Lib} que têm contraparte no universo {@code dummy_ghost} (declaradas
-     * em {@link #formatDummyAxiomatic}); o token é prefixado com {@code dummy_} se ainda não estiver.
+     * Funções da {@code ACSL_Lib} usadas nos contratos ghost: prefixo {@code dummy_} alinhado com
+     * {@link DummyGhostAxiomaticBuilder}.
      */
-    private static final List<String> ACSL_LIB_FUNCTIONS_WITH_DUMMY_PREFIX =
-            List.of(
-                    "empty",
-                    "belongs",
-                    "equals",
-                    "set_union",
-                    "card",
-                    "singleton",
-                    "is_finite",
-                    "domain_restriction",
-                    "is_total_function",
-                    "list_to_function",
-                    "array_to_function",
-                    "difference",
-                    "function_apply",
-                    "range_restriction",
-                    "couple");
-
     private static String prefixAcslLibFunctionsForGhost(String text) {
         if (text == null || text.isEmpty()) {
             return text;
         }
+        AcslLibSymbolDependencyMap map = AcslLibSymbolDependencyMap.instance();
+        List<String> symbols = new ArrayList<>(map.allKnownSymbols());
+        symbols.sort((a, b) -> Integer.compare(b.length(), a.length()));
         String out = text;
-        for (String fn : ACSL_LIB_FUNCTIONS_WITH_DUMMY_PREFIX) {
+        for (String sym : symbols) {
+            String ghostName = ghostNameForLibSymbol(sym);
             out =
                     out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(fn) + "\\b",
-                            Matcher.quoteReplacement("dummy_" + fn));
+                            "(?<!dummy_)\\b" + Pattern.quote(sym) + "\\b",
+                            Matcher.quoteReplacement("dummy_" + ghostName));
+        }
+        for (String alias : DummyGhostAxiomaticBuilder.LIB_SYMBOL_ALIASES.keySet()) {
+            out =
+                    out.replaceAll(
+                            "(?<!dummy_)\\b" + Pattern.quote(alias) + "\\b",
+                            Matcher.quoteReplacement("dummy_" + alias));
+        }
+        return out;
+    }
+
+    private static String ghostNameForLibSymbol(String libSymbol) {
+        for (Map.Entry<String, String> e : DummyGhostAxiomaticBuilder.LIB_SYMBOL_ALIASES.entrySet()) {
+            if (e.getValue().equals(libSymbol)) {
+                return e.getKey();
+            }
+        }
+        return libSymbol;
+    }
+
+    /**
+     * Valores enumerados → {@code dummy_<Maquina>__<Valor>} (ex. {@code dummy_Airlock__ACQ}), alinhado a
+     * {@link DummyGhostAxiomaticBuilder} e a {@link BxmlSetsTranslator#buildEnumRenamesWithSees}.
+     */
+    private static String prefixEnumValuesForGhost(
+            String text, Map<String, String> enumValueRenames) {
+        if (text == null || text.isEmpty() || enumValueRenames == null || enumValueRenames.isEmpty()) {
+            return text;
+        }
+        List<Map.Entry<String, String>> entries = new ArrayList<>(enumValueRenames.entrySet());
+        entries.sort((a, b) -> Integer.compare(b.getValue().length(), a.getValue().length()));
+        String out = text;
+        for (Map.Entry<String, String> e : entries) {
+            String bName = e.getKey();
+            if (bName == null || bName.isBlank()) {
+                continue;
+            }
+            String acslName = e.getValue();
+            String dummyVal =
+                    acslName != null && !acslName.isBlank() ? "dummy_" + acslName : "dummy_" + bName;
+            if (acslName != null && !acslName.isBlank()) {
+                out =
+                        out.replaceAll(
+                                "(?<!dummy_)\\b" + Pattern.quote(acslName) + "\\b",
+                                Matcher.quoteReplacement(dummyVal));
+            }
+            out =
+                    out.replaceAll(
+                            "(?<!dummy_)\\b" + Pattern.quote(bName) + "\\b",
+                            Matcher.quoteReplacement(dummyVal));
         }
         return out;
     }
 
     /**
-     * Conjunto {@code NAT} da ACSL_Lib → variável lógica {@code dummy_NAT} declarada em
-     * {@link #formatDummyAxiomatic} (ex.: terceiro argumento de {@code dummy_is_total_function}).
+     * Converte texto de {@code ghost_operations.ci} para especificações ghost no {@code merged_code.c}:
+     * restaura nomes ACSL de conjuntos ({@code dummy_M__S} → {@code S}) antes de remover o prefixo
+     * {@code dummy_} das variáveis/funções.
      */
-    private static String prefixNatSetForGhost(String text) {
+    public static String stripDummyPrefixForMergedGhostSpecs(String ghostText) {
+        if (ghostText == null || ghostText.isEmpty()) {
+            return ghostText;
+        }
+        String out = ghostText;
+        Matcher setDecl =
+                Pattern.compile("logic\\s+DSet<[^>]+>\\s+(dummy_[A-Za-z0-9_]+)\\s*;").matcher(ghostText);
+        List<String> dummySetNames = new ArrayList<>();
+        while (setDecl.find()) {
+            dummySetNames.add(setDecl.group(1));
+        }
+        dummySetNames.sort((a, b) -> Integer.compare(b.length(), a.length()));
+        for (String dummySet : dummySetNames) {
+            if (!dummySet.startsWith("dummy_")) {
+                continue;
+            }
+            String rest = dummySet.substring("dummy_".length());
+            int sep = rest.lastIndexOf("__");
+            if (sep < 0 || sep + 2 >= rest.length()) {
+                continue;
+            }
+            out = out.replace(dummySet, rest.substring(sep + 2));
+        }
+        return out.replace("dummy_", "");
+    }
+
+    /**
+     * Normaliza comparações booleanas em especificações ghost fundidas (0/1, alinhado a {@code _Bool}).
+     */
+    public static String normalizeIntegerBoolComparisonsInMergedGhostSpecs(String ghostText) {
+        if (ghostText == null || ghostText.isEmpty()) {
+            return ghostText;
+        }
+        return ghostText
+                .replaceAll("==\\s*\\\\false\\b", "== 0")
+                .replaceAll("==\\s*\\\\true\\b", "== 1")
+                .replaceAll("!=\\s*\\\\false\\b", "!= 0")
+                .replaceAll("!=\\s*\\\\true\\b", "!= 1");
+    }
+
+    /**
+     * Nomes de variáveis abstratas a partir das declarações {@code //@ ghost T ghost_<v>;} em
+     * {@code ghost_operations.ci}.
+     */
+    public static List<String> listAbstractVarNamesFromGhostCi(Path ghostCi) throws IOException {
+        if (ghostCi == null || !Files.isRegularFile(ghostCi)) {
+            return List.of();
+        }
+        Pattern decl = Pattern.compile("//@\\s+ghost\\s+\\w+\\s+ghost_([A-Za-z_]\\w*)\\s*;");
+        List<String> out = new ArrayList<>();
+        for (String line : Files.readAllLines(ghostCi, StandardCharsets.UTF_8)) {
+            Matcher m = decl.matcher(line.trim());
+            if (m.find()) {
+                out.add(m.group(1));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Conjuntos enumerados B → {@code dummy_<Maquina>__<Conjunto>} nos {@code ensures} ghost (ex.
+     * {@code belongs(v, PRESSURE)} → {@code belongs(v, dummy_Airlock_pressure_bs__PRESSURE)}).
+     */
+    private static String prefixEnumeratedSetsForGhost(
+            String text, List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSets) {
+        if (text == null || text.isEmpty() || enumeratedSets == null || enumeratedSets.isEmpty()) {
+            return text;
+        }
+        List<BxmlSetsTranslator.EnumeratedSetInfo> sorted = new ArrayList<>(enumeratedSets);
+        sorted.sort(
+                (a, b) ->
+                        Integer.compare(
+                                b.setName().length(), a.setName().length()));
+        String out = text;
+        for (BxmlSetsTranslator.EnumeratedSetInfo set : sorted) {
+            String dummySet = set.dummySetLogicName();
+            String setName = set.setName();
+            if (setName == null || setName.isBlank()) {
+                continue;
+            }
+            out =
+                    out.replaceAll(
+                            "(?<!dummy_)\\b" + Pattern.quote(setName) + "\\b",
+                            Matcher.quoteReplacement(dummySet));
+            String acslSetRef = set.machineName() + "__" + setName;
+            out =
+                    out.replaceAll(
+                            "(?<!dummy_)\\b" + Pattern.quote(acslSetRef) + "\\b",
+                            Matcher.quoteReplacement(dummySet));
+        }
+        return out;
+    }
+
+    /**
+     * Conjuntos globais da ACSL_Lib ({@code NAT}, {@code BOOL}) → variáveis lógicas
+     * {@code dummy_NAT} / {@code dummy_BOOL} declaradas em {@link DummyGhostAxiomaticBuilder}.
+     */
+    private static String prefixGlobalLogicSetsForGhost(String text) {
         if (text == null || text.isEmpty()) {
             return text;
         }
-        return text.replaceAll(
-                "(?<!dummy_)\\bNAT\\b", Matcher.quoteReplacement("dummy_NAT"));
+        String out =
+                text.replaceAll(
+                        "(?<!dummy_)\\bNAT\\b", Matcher.quoteReplacement("dummy_NAT"));
+        return out.replaceAll(
+                "(?<!dummy_)\\bBOOL\\b", Matcher.quoteReplacement("dummy_BOOL"));
     }
 
     /**
@@ -1822,6 +2023,33 @@ public final class GhostOperationsCiGenerator {
         if (opName == null || opName.isBlank()) return "operation";
         if ("INITIALISATION".equalsIgnoreCase(opName)) return "initialisation";
         return opName.replace('-', '_').toLowerCase();
+    }
+
+    /** Tipo C para {@code //@ ghost T ghost_<v>;} alinhado ao {@code logic} da máquina. */
+    private static String ghostCTypeFromLogicType(String logicType) {
+        if (logicType == null || logicType.isBlank()) {
+            return "int";
+        }
+        return switch (logicType.trim()) {
+            case "boolean" -> "_Bool";
+            case "real" -> "double";
+            default -> "int";
+        };
+    }
+
+    /** Tipo {@code logic} ACSL para {@code dummy_ghost_<v>} / variáveis ghost. */
+    private static String ghostLogicTypeFromInferred(String logicType) {
+        if (logicType == null || logicType.isBlank()) {
+            return "integer";
+        }
+        String t = logicType.trim();
+        if ("boolean".equals(t) || "integer".equals(t) || "real".equals(t) || "int".equals(t)) {
+            return t.equals("int") ? "integer" : t.equals("boolean") ? "integer" : t;
+        }
+        if (t.startsWith("\\list") || t.startsWith("Set<")) {
+            return "integer";
+        }
+        return "integer";
     }
 
     private static List<Element> directExpChildren(Element parent) {

@@ -12,6 +12,7 @@ import org.w3c.dom.NodeList;
  *
  * <p>{@code v : iseq(T)} / {@code v : seq(T)} → {@code iSeq} / {@code is_seq_of};
  * {@code ss : POW(S)} → {@code inclusion(ss, S)}; {@code ss : FIN(ss)} → {@code is_finite(ss)};
+ * {@code x : BOOL} → {@code belongs(x, BOOL)}; {@code x : NAT} → {@code belongs(x, NAT)};
  * {@code x /: s} → {@code not_belongs(x, s)}; comparadores inteiros {@code <=i}, {@code <i} →
  * {@code <=}, {@code <}; igualdade entre conjuntos ({@code Set<…>}, {@code ran} sobre relação, …) →
  * {@code equals(a, b)}; escalares (ex.: {@code card}) mantêm {@code ==}.
@@ -284,6 +285,7 @@ public final class BxmlPredicateToAcsl {
             // x : T — pertença (ex.: nn : NAT → belongs(nn, NAT)) — ACSL_Lib/set_functions/belongs.acsl
             if (isPrimitiveTypeName(right)) {
                 if ("NAT".equals(right)) return "belongs(" + left + ", NAT)";
+                if ("BOOL".equals(right)) return "belongs(" + left + ", BOOL)";
                 return "(" + left + " /* : " + right + " */)";
             }
             return "belongs(" + left + ", " + right + ")";
@@ -294,6 +296,24 @@ public final class BxmlPredicateToAcsl {
             return "inclusion(" + left + ", " + right + ")";
         }
         if ("=".equals(op)) {
+            if ("Id".equals(leftEl.getLocalName())
+                    && "Boolean_Literal".equals(rightEl.getLocalName())) {
+                return "("
+                        + BxmlExpressionToAcsl.translate(leftEl, ctx)
+                        + " == "
+                        + BxmlExpressionToAcsl.booleanLiteralRhsForVariable(
+                                leftEl, rightEl.getAttribute("value"), ctx)
+                        + ")";
+            }
+            if ("Id".equals(rightEl.getLocalName())
+                    && "Boolean_Literal".equals(leftEl.getLocalName())) {
+                return "("
+                        + BxmlExpressionToAcsl.translate(rightEl, ctx)
+                        + " == "
+                        + BxmlExpressionToAcsl.booleanLiteralRhsForVariable(
+                                rightEl, leftEl.getAttribute("value"), ctx)
+                        + ")";
+            }
             if (BxmlExpressionToAcsl.isListValued(leftEl, ctx)
                     && BxmlExpressionToAcsl.isRelationOrFunctionValued(rightEl, ctx)) {
                 return "(" + right + " == list_to_function(" + left + "))";

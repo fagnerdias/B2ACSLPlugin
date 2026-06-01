@@ -13,7 +13,7 @@ import java.nio.file.Path;
  *   <li>Ler arquivos .bxml na pasta bdp passada como parâmetro</li>
  *   <li>Gerar arquivos temporários .acsl com especificação de cada máquina (abstração, refinamento, etc.)</li>
  *   <li>Obter arquivos .c em lang/c/ (mesmo path, trocando bdp por lang)</li>
- *   <li>Executar Frama-C: acsl-importer e WP</li>
+ *   <li>Executar Frama-C: acsl-import (todos os .c) e WP sobre merged_code.c</li>
  *   <li>Retornar valor para Atelier B</li>
  * </ol>
  *

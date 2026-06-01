@@ -139,7 +139,16 @@ public final class AcslLibIncludes {
      * não entra no ficheiro gerado.
      */
     public static String formatIncludeBlock(String acslText, String extraTextForSymbolScan) {
-        List<String> lines = collectIncludeLines(acslText, extraTextForSymbolScan);
+        return formatIncludeBlock(acslText, extraTextForSymbolScan, null);
+    }
+
+    /**
+     * Como {@link #formatIncludeBlock(String, String)}, fundindo caminhos relativos da
+     * {@code B2ACSLLib} vindos de máquinas {@code SEES} (sem duplicar linhas {@code include}).
+     */
+    public static String formatIncludeBlock(
+            String acslText, String extraTextForSymbolScan, java.util.Collection<String> additionalLibRelPaths) {
+        List<String> lines = collectIncludeLines(acslText, extraTextForSymbolScan, additionalLibRelPaths);
         if (lines.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         for (String line : lines) {
@@ -147,6 +156,127 @@ public final class AcslLibIncludes {
         }
         sb.append('\n');
         return sb.toString();
+    }
+
+    private static final Pattern FIRST_AXIOMATIC_OR_FUNCTION =
+            Pattern.compile("(?m)^\\s*(axiomatic|function)\\s+");
+
+    /**
+     * Caminhos relativos na {@code B2ACSLLib} declarados no preâmbulo ({@code include "import/…"}),
+     * excluindo {@code include "OutraMaquina.acsl"}.
+     */
+    public static List<String> parseLibIncludeRelativePathsFromPreamble(String acslText) {
+        if (acslText == null || acslText.isBlank()) {
+            return List.of();
+        }
+        int preambleEnd = acslText.length();
+        Matcher cut = FIRST_AXIOMATIC_OR_FUNCTION.matcher(acslText);
+        if (cut.find()) {
+            preambleEnd = cut.start();
+        }
+        String preamble = acslText.substring(0, preambleEnd);
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        Matcher m = INCLUDE_IN_LIB.matcher(preamble);
+        while (m.find()) {
+            String includePath = m.group(1).replace('\\', '/').trim();
+            if (includePath.isEmpty()) {
+                continue;
+            }
+            if (isOtherMachineAcslInclude(includePath)) {
+                continue;
+            }
+            String rel = includePathToLibRelativePath(includePath);
+            if (!rel.isBlank()) {
+                out.add(rel);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /** {@code MaquinaVista.acsl} no mesmo diretório — não é include da biblioteca. */
+    private static boolean isOtherMachineAcslInclude(String includePath) {
+        String p = includePath.replace('\\', '/');
+        int slash = p.lastIndexOf('/');
+        String base = slash >= 0 ? p.substring(slash + 1) : p;
+        return base.endsWith(".acsl")
+                && slash < 0
+                && !TYPES_LIB_REL.equals(p)
+                && !p.equals("types.acsl");
+    }
+
+    /** {@code import/set_functions/belongs.acsl} → {@code set_functions/belongs.acsl}. */
+    private static String includePathToLibRelativePath(String includePath) {
+        String p = includePath.replace('\\', '/');
+        String middle = propertyOrEmpty("b2acsl.acslLibIncludeMiddle");
+        String base = propertyOrEmpty("b2acsl.acslLibIncludeBase");
+        if (!middle.isEmpty()) {
+            String midPrefix = middle.endsWith("/") ? middle : middle + "/";
+            if (p.startsWith(midPrefix)) {
+                p = p.substring(midPrefix.length());
+            }
+        }
+        if (!base.isEmpty()) {
+            String basePrefix = base.endsWith("/") ? base : base + "/";
+            if (p.startsWith(basePrefix)) {
+                p = p.substring(basePrefix.length());
+            }
+            if (!middle.isEmpty()) {
+                String midPrefix = middle.endsWith("/") ? middle : middle + "/";
+                if (p.startsWith(midPrefix)) {
+                    p = p.substring(midPrefix.length());
+                }
+            }
+        }
+        return p;
+    }
+
+    /**
+     * Remove linhas {@code include "import/…"} / {@code include "…/…/*.acsl"} do preâmbulo,
+     * mantendo comentários iniciais e o corpo ({@code axiomatic}, {@code function}, …).
+     */
+    public static String removeLibIncludesFromPreamble(String acslText) {
+        if (acslText == null || acslText.isBlank()) {
+            return acslText == null ? "" : acslText;
+        }
+        Matcher cut = FIRST_AXIOMATIC_OR_FUNCTION.matcher(acslText);
+        int bodyStart = cut.find() ? cut.start() : acslText.length();
+        String header = acslText.substring(0, bodyStart);
+        String body = acslText.substring(bodyStart);
+        StringBuilder keptHeader = new StringBuilder();
+        for (String line : header.split("\n", -1)) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("include \"")) {
+                String path = trimmed.substring("include \"".length());
+                int end = path.indexOf('"');
+                if (end >= 0) {
+                    path = path.substring(0, end);
+                }
+                if (!isOtherMachineAcslInclude(path)) {
+                    continue;
+                }
+            }
+            keptHeader.append(line).append('\n');
+        }
+        String h = keptHeader.toString();
+        if (!h.isBlank() && !h.endsWith("\n\n")) {
+            if (!h.endsWith("\n")) {
+                h = h + "\n";
+            }
+            h = h + "\n";
+        }
+        return h + body;
+    }
+
+    /** Corpo ACSL após o bloco de {@code include} do preâmbulo (para varredura de símbolos). */
+    public static String acslBodyAfterPreambleIncludes(String acslText) {
+        if (acslText == null || acslText.isBlank()) {
+            return "";
+        }
+        Matcher cut = FIRST_AXIOMATIC_OR_FUNCTION.matcher(acslText);
+        if (cut.find()) {
+            return acslText.substring(cut.start());
+        }
+        return acslText;
     }
 
     /**
@@ -304,18 +434,60 @@ public final class AcslLibIncludes {
     }
 
     static List<String> collectIncludeLines(String acslText, String extraTextForSymbolScan) {
+        return collectIncludeLines(acslText, extraTextForSymbolScan, null);
+    }
+
+    static List<String> collectIncludeLines(
+            String acslText,
+            String extraTextForSymbolScan,
+            java.util.Collection<String> additionalLibRelPaths) {
         String scan = acslText == null ? "" : acslText;
         if (extraTextForSymbolScan != null && !extraTextForSymbolScan.isBlank()) {
             scan = scan + "\n" + extraTextForSymbolScan;
         }
-        List<String> seeds = orderedLibRelativePaths(scan);
-        if (seeds.isEmpty()) return List.of();
+        LinkedHashSet<String> fileSeeds = new LinkedHashSet<>(orderedLibRelativePaths(scan));
+        if (additionalLibRelPaths != null) {
+            for (String rel : additionalLibRelPaths) {
+                if (rel != null && !rel.isBlank()) {
+                    fileSeeds.add(rel.replace('\\', '/').trim());
+                }
+            }
+        }
+        return emitIncludeLinesFromLibFileSeeds(fileSeeds);
+    }
 
-        List<String> seedsWithTypes = new ArrayList<>(seeds.size() + 1);
-        seedsWithTypes.add(TYPES_LIB_REL);
-        seedsWithTypes.addAll(seeds);
+    private static List<String> emitIncludeLinesFromLibFileSeeds(LinkedHashSet<String> fileSeeds) {
+        if (fileSeeds.isEmpty()) {
+            return List.of();
+        }
+        fileSeeds.add(TYPES_LIB_REL);
 
         Path diskRoot = resolveAcslLibRootOnDisk();
+        fileSeeds.removeIf(rel -> !libFileExists(diskRoot, rel));
+        if (fileSeeds.isEmpty()) {
+            return List.of();
+        }
+
+        List<String> orderedSeeds = new ArrayList<>();
+        for (String path : FILE_ORDER) {
+            if (fileSeeds.contains(path)) {
+                orderedSeeds.add(path);
+            }
+        }
+        for (String f : fileSeeds) {
+            if (!orderedSeeds.contains(f)) {
+                orderedSeeds.add(f);
+            }
+        }
+
+        List<String> seedsWithTypes = new ArrayList<>(orderedSeeds.size() + 1);
+        seedsWithTypes.add(TYPES_LIB_REL);
+        for (String s : orderedSeeds) {
+            if (!TYPES_LIB_REL.equals(s)) {
+                seedsWithTypes.add(s);
+            }
+        }
+
         List<String> transitive;
         try {
             transitive = transitiveAcslLibPaths(diskRoot, seedsWithTypes);

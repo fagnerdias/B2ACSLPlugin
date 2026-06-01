@@ -21,6 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.example.bxml.BxmlGluingNormalizer;
+import com.example.bxml.BxmlSeesGraph;
 import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.model.Machine;
 import com.example.ui.FormalVerificationReportDialog;
@@ -35,6 +36,8 @@ import org.w3c.dom.Element;
  * {@code merged_code.c} + WP) -> resultado para Atelier B.
  */
 public final class B2ACSLPipeline {
+
+    private record MachineFile(Machine machine, Path bxmlPath) {}
 
     private static final String FRAMA_C = "frama-c";
 
@@ -95,7 +98,6 @@ public final class B2ACSLPipeline {
             return 2;
         }
 
-        record MachineFile(Machine machine, Path bxmlPath) {}
         List<MachineFile> machines = new ArrayList<>();
         for (Path f : bxmlFiles) {
             try {
@@ -112,6 +114,9 @@ public final class B2ACSLPipeline {
         }
 
         Map<String, String> invariantGluingSubstitutions = BxmlGluingNormalizer.collectFromAllBxmlFiles(bxmlFiles);
+
+        BxmlSeesGraph seesGraph = BxmlSeesGraph.fromBxmlDirectory(bdp);
+        logSeesRelations(seesGraph);
 
         // Mapa máquina -> nome em <Abstraction> (refinamento / implementação)
         Map<String, String> abstractionParentByMachine = buildAbstractionParentMap(bxmlFiles);
@@ -151,18 +156,35 @@ public final class B2ACSLPipeline {
         boolean keepFiles = KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank();
         try {
             List<Path> acslFiles = new ArrayList<>();
-            for (MachineFile mf : machines) {
+            Set<String> abstractMachineNames = new LinkedHashSet<>();
+            List<MachineFile> machinesForAcsl =
+                    orderMachinesForAcslGeneration(machines, seesGraph);
+            for (MachineFile mf : machinesForAcsl) {
                 Element machineRoot = AcslGenerator.parseMachineElement(mf.bxmlPath());
                 if (AcslGenerator.getAbstractionReferenceName(machineRoot).isPresent()) {
                     continue;
                 }
                 String machineName = mf.machine().getMachineName();
+                abstractMachineNames.add(machineName);
                 List<Path> mergePaths =
                         mergePathsByRootAbstract.getOrDefault(machineName, List.of());
                 Optional<Path> acsl =
                         AcslGenerator.generateAcsl(
-                                mf.machine(), mf.bxmlPath(), acslDir, mergePaths, invariantGluingSubstitutions);
+                                mf.machine(),
+                                mf.bxmlPath(),
+                                acslDir,
+                                mergePaths,
+                                invariantGluingSubstitutions,
+                                seesGraph.seenOnlyMachineNames());
                 acsl.ifPresent(acslFiles::add);
+            }
+            List<String> topLevelImportMachines =
+                    seesGraph.topLevelImportMachineNames(abstractMachineNames);
+            List<Path> topLevelAcslFiles =
+                    filterAcslFilesByMachineNames(acslFiles, topLevelImportMachines);
+            if (!topLevelImportMachines.isEmpty()) {
+                System.out.println(
+                        "[B2ACSL] Importação ACSL Frama-C (raiz SEES): " + topLevelImportMachines);
             }
             if (keepFiles) {
                 System.out.println("[B2ACSL] ACSL gravados em: " + acslDir);
@@ -181,7 +203,13 @@ public final class B2ACSLPipeline {
                 if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
                     continue;
                 }
-                GhostOperationsCiGenerator.write(cDir, mr, invariantGluingSubstitutions);
+                String machineName = mf.machine().getMachineName();
+                List<Element> mergedEls = new ArrayList<>();
+                for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
+                    mergedEls.add(AcslGenerator.parseMachineElement(mp));
+                }
+                GhostOperationsCiGenerator.write(
+                        cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
                 break;
             }
 
@@ -208,7 +236,7 @@ public final class B2ACSLPipeline {
             int framaResult;
             String projectName = inferProjectNameFromBdp(bdp);
             if (MOCK_MODE) {
-                framaResult = runMockFramaC(acslFiles, cFiles, cDir);
+                framaResult = runMockFramaC(topLevelAcslFiles, cFiles, cDir);
             } else {
                 WpOptions wpOptions = WpOptionsDialog.promptWpOptions(projectName);
                 if (wpOptions == null) {
@@ -218,7 +246,10 @@ public final class B2ACSLPipeline {
                 String selectedProjectName = wpOptions.projectName();
                 framaResult =
                         runFramaC(
+                                topLevelAcslFiles,
                                 acslFiles,
+                                acslDir,
+                                seesGraph,
                                 cFiles,
                                 cDir,
                                 specificationUsedTypes,
@@ -349,8 +380,146 @@ public final class B2ACSLPipeline {
         return 0;
     }
 
+    /**
+     * Gera primeiro os {@code .acsl} das máquinas só vistas em {@code SEES}, para a máquina que vê
+     * poder fundir os respetivos {@code include} da biblioteca.
+     */
+    private static List<MachineFile> orderMachinesForAcslGeneration(
+            List<MachineFile> machines, BxmlSeesGraph seesGraph) {
+        if (machines == null || machines.isEmpty()) {
+            return List.of();
+        }
+        Set<String> seenOnly =
+                seesGraph == null ? Set.of() : seesGraph.seenOnlyMachineNames();
+        List<MachineFile> seenFirst = new ArrayList<>();
+        List<MachineFile> rest = new ArrayList<>();
+        List<MachineFile> refinements = new ArrayList<>();
+        for (MachineFile mf : machines) {
+            try {
+                Element root = AcslGenerator.parseMachineElement(mf.bxmlPath());
+                if (AcslGenerator.getAbstractionReferenceName(root).isPresent()) {
+                    refinements.add(mf);
+                    continue;
+                }
+                String name = mf.machine().getMachineName();
+                if (seenOnly.contains(name)) {
+                    seenFirst.add(mf);
+                } else {
+                    rest.add(mf);
+                }
+            } catch (Exception e) {
+                rest.add(mf);
+            }
+        }
+        List<MachineFile> ordered = new ArrayList<>(seenFirst.size() + rest.size() + refinements.size());
+        ordered.addAll(seenFirst);
+        ordered.addAll(rest);
+        ordered.addAll(refinements);
+        return ordered;
+    }
+
+    private static void logSeesRelations(BxmlSeesGraph seesGraph) {
+        if (seesGraph == null) {
+            return;
+        }
+        for (BxmlSeesGraph.SeesRelation r : seesGraph.relations()) {
+            System.out.println("[B2ACSL] SEES: " + r.viewer() + " → " + r.seen());
+        }
+    }
+
+    private static List<Path> filterAcslFilesByMachineNames(
+            List<Path> acslFiles, List<String> machineNames) {
+        if (acslFiles == null || acslFiles.isEmpty()) {
+            return List.of();
+        }
+        if (machineNames == null || machineNames.isEmpty()) {
+            return List.copyOf(acslFiles);
+        }
+        Set<String> names = new LinkedHashSet<>(machineNames);
+        return acslFiles.stream()
+                .filter(
+                        p -> {
+                            String fn = p.getFileName().toString();
+                            if (!fn.endsWith(".acsl")) {
+                                return false;
+                            }
+                            String mn = fn.substring(0, fn.length() - ".acsl".length());
+                            return names.contains(mn);
+                        })
+                .toList();
+    }
+
+    /**
+     * Nome da máquina abstrata a partir do ficheiro C (ex. {@code Airlock_i.c} → {@code Airlock}).
+     */
+    private static String abstractMachineNameFromCFile(Path cFile) {
+        String base = cFile.getFileName().toString();
+        if (base.endsWith(".c")) {
+            base = base.substring(0, base.length() - 2);
+        }
+        if (base.endsWith("_i") || base.endsWith("_r")) {
+            return base.substring(0, base.length() - 2);
+        }
+        return base;
+    }
+
+    /**
+     * {@code .acsl} para {@code -acsl-import} numa única invocação Frama-C: raízes SEES quando
+     * existem; senão união (ordem estável) dos ficheiros resolvidos por cada {@code .c}.
+     */
+    private static List<Path> resolveAcslImportForAllCFiles(
+            List<Path> cFiles,
+            Path acslDir,
+            BxmlSeesGraph seesGraph,
+            List<Path> topLevelAcslFiles,
+            List<Path> allAcslFiles)
+            throws IOException {
+        if (topLevelAcslFiles != null && !topLevelAcslFiles.isEmpty()) {
+            return List.copyOf(topLevelAcslFiles);
+        }
+        LinkedHashSet<Path> ordered = new LinkedHashSet<>();
+        for (Path cFile : cFiles) {
+            ordered.addAll(
+                    resolveAcslImportForCFile(
+                            cFile, acslDir, seesGraph, topLevelAcslFiles, allAcslFiles));
+        }
+        return List.copyOf(ordered);
+    }
+
+    /**
+     * {@code .acsl} para {@code -acsl-import}: o da máquina do {@code .c}, se existir; senão raízes
+     * SEES ({@code topLevelAcslFiles}).
+     */
+    private static List<Path> resolveAcslImportForCFile(
+            Path cFile,
+            Path acslDir,
+            BxmlSeesGraph seesGraph,
+            List<Path> topLevelAcslFiles,
+            List<Path> allAcslFiles)
+            throws IOException {
+        String machine = abstractMachineNameFromCFile(cFile);
+        Path own = acslDir.resolve(machine + ".acsl");
+        if (Files.isRegularFile(own)) {
+            if (seesGraph != null && seesGraph.isReferencedBySees(machine)) {
+                Optional<Path> libSidecar =
+                        AcslGenerator.writeLibIncludesSidecarForSeenMachine(machine, acslDir);
+                if (libSidecar.isPresent()) {
+                    return List.of(libSidecar.get(), own);
+                }
+            }
+            return List.of(own);
+        }
+        if (topLevelAcslFiles != null && !topLevelAcslFiles.isEmpty()) {
+            return topLevelAcslFiles;
+        }
+        return allAcslFiles == null ? List.of() : allAcslFiles;
+    }
+
     private static int runFramaC(
-            List<Path> acslFiles,
+            List<Path> topLevelAcslFiles,
+            List<Path> allAcslFiles,
+            Path acslDir,
+            BxmlSeesGraph seesGraph,
             List<Path> cFiles,
             Path cDir,
             List<String> specificationUsedTypes,
@@ -361,22 +530,15 @@ public final class B2ACSLPipeline {
         VerificationReportData reportData = new VerificationReportData();
         long wpStartNanos = System.nanoTime();
 
-        String acslPath = acslFiles.stream()
-                .map(Path::toString)
-                .reduce((a, b) -> a + " " + b)
-                .orElse("");
-
         Path mergedCode = cDir.resolve(MERGED_CODE_FILE_NAME);
 
         Path ghostCi = GhostOperationsCiGenerator.targetPath(cDir);
         StringBuilder specScanForLemmas = new StringBuilder();
-        for (String part : acslPath.split("\\s+")) {
-            if (part == null || part.isBlank()) {
-                continue;
-            }
-            Path ap = Path.of(part);
-            if (Files.isRegularFile(ap)) {
-                specScanForLemmas.append(Files.readString(ap, StandardCharsets.UTF_8)).append('\n');
+        if (allAcslFiles != null) {
+            for (Path ap : allAcslFiles) {
+                if (ap != null && Files.isRegularFile(ap)) {
+                    specScanForLemmas.append(Files.readString(ap, StandardCharsets.UTF_8)).append('\n');
+                }
             }
         }
         String ghostCiText =
@@ -387,90 +549,97 @@ public final class B2ACSLPipeline {
                 AcslLibIncludes.allowedLibSymbolsForTransitiveIncludes(
                         specScanForLemmas.toString(), ghostCiText);
 
+        List<Path> acslImportFiles =
+                resolveAcslImportForAllCFiles(
+                        cFiles, acslDir, seesGraph, topLevelAcslFiles, allAcslFiles);
+        if (acslImportFiles.isEmpty()) {
+            System.err.println("[B2ACSL] Nenhum .acsl para importar.");
+            return 4;
+        }
+
+        // frama-c -acsl-import <acsl>… [ghost_operations.ci] <c>… -print -no-unicode
+        List<String> importCmd = new ArrayList<>();
+        importCmd.add(FRAMA_C);
+        importCmd.add("-acsl-import");
+        for (Path acslImport : acslImportFiles) {
+            importCmd.add(acslImport.toString());
+        }
+        if (Files.isRegularFile(ghostCi)) {
+            importCmd.add(ghostCi.toString());
+        }
         for (Path cFile : cFiles) {
-            // frama-c -acsl-import <acsl> [ghost_operations.ci] <c> -print -no-unicode  (saída → merged_code.c)
-            List<String> importCmd = new ArrayList<>();
-            importCmd.add(FRAMA_C);
-            importCmd.add("-acsl-import");
-            importCmd.add(acslPath);
-            if (Files.isRegularFile(ghostCi)) {
-                importCmd.add(ghostCi.toString());
-            }
             importCmd.add(cFile.toString());
-            importCmd.add("-print");
-            importCmd.add("-no-unicode");
-            ProcessBuilder importPb = new ProcessBuilder(importCmd);
-            importPb.directory(cDir.toFile());
-            importPb.redirectOutput(mergedCode.toFile());
-            importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
+        }
+        importCmd.add("-print");
+        importCmd.add("-no-unicode");
+        System.out.println("[B2ACSL] Frama-C acsl-import: " + String.join(" ", importCmd));
 
-            Process pImport = importPb.start();
-            boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
-            if (!importOk) {
-                pImport.destroyForcibly();
-                return 5;
-            }
-            if (pImport.exitValue() != 0) {
-                return pImport.exitValue();
-            }
+        ProcessBuilder importPb = new ProcessBuilder(importCmd);
+        importPb.directory(cDir.toFile());
+        importPb.redirectOutput(mergedCode.toFile());
+        importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
 
-            stripLeadingFramaCNonCOutput(mergedCode);
-            moveNewTypesAxiomaticBlockAfterPreamble(mergedCode);
-            removeGhostPatternAxiomaticBlocks(mergedCode);
-            stripDummyPrefixFromMergedCode(mergedCode);            
-            insertGhostVariableDeclarationsFromGhostCi(mergedCode, ghostCi);
-            replaceAssertGhostWithGhostKeyword(mergedCode);
-            replaceEnsuresGhostVarWithAssignsInMerged(mergedCode);
-            addParenthesesToGhostInitialisationCall(mergedCode);
-            placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
-            liftPureGhostEnsuresToOperationContracts(mergedCode);
-            reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
-            appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
-            SpecificationAxiomaticInstantiator.monomorphizeGenericAcslBlocks(
-                    mergedCode, specificationUsedTypes);
-            SpecificationAxiomaticInstantiator.renameParameterizedTypesToConcrete(
-                    mergedCode, specificationUsedTypes);
-            SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
-            ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
+        Process pImport = importPb.start();
+        boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
+        if (!importOk) {
+            pImport.destroyForcibly();
+            return 5;
+        }
+        if (pImport.exitValue() != 0) {
+            return pImport.exitValue();
+        }
 
-            // frama-c -wp merged_code.c -wp-prover CVC5 --wp-smoke-tests -wp-rte -wp-status
-            ProcessBuilder wpPb =
-                    new ProcessBuilder(
-                            FRAMA_C,
-                            "-wp",
-                            mergedCode.getFileName().toString(),
-                            "-wp-prover",
-                            wpOptions.prover(),
-                            "-wp-smoke-tests",
-                            "-wp-split",
-                            "-wp-rte",
-                            "-wp-timeout",
-                            Integer.toString(wpOptions.timeoutSeconds()),
-                            wpOptions.outputFlag());
-            wpPb.directory(cDir.toFile());
-            wpPb.redirectErrorStream(true);
+        stripLeadingFramaCNonCOutput(mergedCode);
+        moveNewTypesAxiomaticBlockAfterPreamble(mergedCode);
+        removeGhostPatternAxiomaticBlocks(mergedCode);
+        stripDummyPrefixFromMergedCode(mergedCode);
+        insertGhostVariableDeclarationsFromGhostCi(mergedCode, ghostCi);
+        replaceAssertGhostWithGhostKeyword(mergedCode);
+        replaceEnsuresGhostVarWithAssignsInMerged(mergedCode);
+        addParenthesesToVoidGhostCalls(mergedCode);
+        placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
+        liftPureGhostEnsuresToOperationContracts(mergedCode);
+        reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
+        appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
+        SpecificationAxiomaticInstantiator.monomorphizeGenericAcslBlocks(
+                mergedCode, specificationUsedTypes);
+        SpecificationAxiomaticInstantiator.renameParameterizedTypesToConcrete(
+                mergedCode, specificationUsedTypes);
+        SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
+        ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
 
-            ProcessResult wpResult = runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS);
-            reportData.absorbOutput(
-                    wpResult.output(), mergedCode.getFileName().toString() + " (" + cFile.getFileName() + ")");
-            if (!wpResult.completed()) {
-                reportData.addTimeout(
-                        "Timeout while executing WP for "
-                                + cFile.getFileName()
-                                + " (600s limit).");
-                showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
-                return 6;
-            }
-            if (wpResult.exitCode() != 0) {
-                reportData.addFailure(
-                        "WP returned exit code "
-                                + wpResult.exitCode()
-                                + " for "
-                                + cFile.getFileName()
-                                + ".");
-                showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
-                return wpResult.exitCode();
-            }
+        String cSourcesLabel =
+                cFiles.stream().map(p -> p.getFileName().toString()).reduce((a, b) -> a + ", " + b).orElse("");
+
+        // frama-c -wp merged_code.c -wp-prover CVC5 -wp-smoke-tests -wp-rte -wp-status
+        ProcessBuilder wpPb =
+                new ProcessBuilder(
+                        FRAMA_C,
+                        "-wp",
+                        mergedCode.getFileName().toString(),
+                        "-wp-prover",
+                        wpOptions.prover(),
+                        "-wp-smoke-tests",
+                        "-wp-split",
+                        "-wp-rte",
+                        "-wp-timeout",
+                        Integer.toString(wpOptions.timeoutSeconds()),
+                        wpOptions.outputFlag());
+        wpPb.directory(cDir.toFile());
+        wpPb.redirectErrorStream(true);
+
+        ProcessResult wpResult = runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS);
+        reportData.absorbOutput(
+                wpResult.output(), mergedCode.getFileName().toString() + " (" + cSourcesLabel + ")");
+        if (!wpResult.completed()) {
+            reportData.addTimeout("Timeout while executing WP (600s limit).");
+            showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+            return 6;
+        }
+        if (wpResult.exitCode() != 0) {
+            reportData.addFailure("WP returned exit code " + wpResult.exitCode() + ".");
+            showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+            return wpResult.exitCode();
         }
         showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
         return 0;
@@ -757,13 +926,13 @@ public final class B2ACSLPipeline {
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
-    /** Garante {@code ghost initialisation();} em vez de {@code ghost initialisation;}. */
-    private static void addParenthesesToGhostInitialisationCall(Path mergedC) throws IOException {
+    /** Garante {@code ghost op();} em vez de {@code ghost op;} para chamadas ghost sem argumentos. */
+    private static void addParenthesesToVoidGhostCalls(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
         content =
-                Pattern.compile("\\bghost\\s+initialisation\\s*;")
+                Pattern.compile("\\bghost\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;")
                         .matcher(content)
-                        .replaceAll("ghost initialisation();");
+                        .replaceAll("ghost $1();");
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -786,7 +955,10 @@ public final class B2ACSLPipeline {
             return;
         }
         String merged = Files.readString(mergedC, StandardCharsets.UTF_8);
-        String ghostText = Files.readString(ghostCi, StandardCharsets.UTF_8).replace("dummy_", "");
+        String ghostText =
+                GhostOperationsCiGenerator.normalizeIntegerBoolComparisonsInMergedGhostSpecs(
+                        GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
+                                Files.readString(ghostCi, StandardCharsets.UTF_8)));
 
         Matcher bm = GHOST_OP_BLOCK_IN_CI.matcher(ghostText);
         List<String> opNames = new ArrayList<>();
@@ -1038,7 +1210,10 @@ public final class B2ACSLPipeline {
         if (!Files.isRegularFile(ghostCi)) {
             return;
         }
-        String ghostText = Files.readString(ghostCi, StandardCharsets.UTF_8).replace("dummy_", "");
+        String ghostText =
+                GhostOperationsCiGenerator.normalizeIntegerBoolComparisonsInMergedGhostSpecs(
+                        GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
+                                Files.readString(ghostCi, StandardCharsets.UTF_8)));
         Matcher gm = GHOST_INITIALISATION_BLOCK_IN_CI.matcher(ghostText);
         if (!gm.find()) {
             return;

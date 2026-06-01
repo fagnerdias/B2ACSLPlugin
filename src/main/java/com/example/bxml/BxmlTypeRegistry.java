@@ -122,7 +122,7 @@ public final class BxmlTypeRegistry {
         if (bName == null || bName.isBlank()) return "integer";
         return switch (bName) {
             case "INTEGER", "INT", "NAT" -> "integer";
-            case "BOOL" -> "boolean";
+            case "BOOL" -> "integer";
             default -> "integer"; // conjuntos deferidos B (ex.: BOOK, COPY) → integer
         };
     }
@@ -138,7 +138,7 @@ public final class BxmlTypeRegistry {
         if (bName == null || bName.isBlank()) return "integer";
         return switch (bName) {
             case "INTEGER", "INT", "NAT" -> "integer";
-            case "BOOL" -> "boolean";
+            case "BOOL" -> "integer";
             default -> bName.toLowerCase();
         };
     }
