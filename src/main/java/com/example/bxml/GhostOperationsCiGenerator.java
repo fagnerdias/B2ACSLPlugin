@@ -47,14 +47,21 @@ public final class GhostOperationsCiGenerator {
 
     public static boolean initialisationAssignsAbstract(
             Element abstractMachineEl, Set<String> abstractVariableNames) {
-        if (abstractMachineEl == null
-                || abstractVariableNames == null
-                || abstractVariableNames.isEmpty()) {
-            return false;
+        return !variablesAssignedInInitialisation(abstractMachineEl, abstractVariableNames)
+                .isEmpty();
+    }
+
+    /**
+     * Variáveis da máquina (em {@code candidateNames}) atribuídas na cláusula {@code Initialisation}.
+     */
+    public static Set<String> variablesAssignedInInitialisation(
+            Element machineEl, Set<String> candidateNames) {
+        Set<String> out = new LinkedHashSet<>();
+        if (machineEl == null || candidateNames == null || candidateNames.isEmpty()) {
+            return out;
         }
-        Set<String> assigned = new LinkedHashSet<>();
-        collectAssignedAbstractVarsInInit(abstractMachineEl, abstractVariableNames, assigned);
-        return !assigned.isEmpty();
+        collectAssignedAbstractVarsInInit(machineEl, candidateNames, out);
+        return out;
     }
 
     public static boolean operationAssignsAbstract(
@@ -1578,8 +1585,9 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Conjuntos globais da ACSL_Lib ({@code NAT}, {@code BOOL}) → variáveis lógicas
-     * {@code dummy_NAT} / {@code dummy_BOOL} declaradas em {@link DummyGhostAxiomaticBuilder}.
+     * Conjuntos globais da ACSL_Lib ({@code NAT}, {@code INT}, {@code BOOL}) → variáveis lógicas
+     * {@code dummy_NAT} / {@code dummy_INT} / {@code dummy_BOOL} declaradas em
+     * {@link DummyGhostAxiomaticBuilder}.
      */
     private static String prefixGlobalLogicSetsForGhost(String text) {
         if (text == null || text.isEmpty()) {
@@ -1588,6 +1596,9 @@ public final class GhostOperationsCiGenerator {
         String out =
                 text.replaceAll(
                         "(?<!dummy_)\\bNAT\\b", Matcher.quoteReplacement("dummy_NAT"));
+        out =
+                out.replaceAll(
+                        "(?<!dummy_)\\bINT\\b", Matcher.quoteReplacement("dummy_INT"));
         return out.replaceAll(
                 "(?<!dummy_)\\bBOOL\\b", Matcher.quoteReplacement("dummy_BOOL"));
     }

@@ -229,6 +229,14 @@ public final class BxmlOperationsTranslator {
                                         assignedAbs,
                                         ctx);
                     }
+                    if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
+                        connectionConcreteAssigns =
+                                BxmlMachineVariables.listLinkedConcreteAssignTargetsForOperation(
+                                        rootAbstractMachineName,
+                                        machineEl,
+                                        mergedRefinementChain,
+                                        assignedAbs);
+                    }
                 }
             }
 

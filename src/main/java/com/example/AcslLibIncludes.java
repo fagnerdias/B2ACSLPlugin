@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
  * {@code equals}) têm todos os seus ficheiros definidores incluídos — são sobrecargas de tipo
  * distintas e coexistem sem conflito em ACSL.
  *
- * <p>Usos de {@code NAT}, {@code NAT1} ou {@code BOOL} como identificadores incluem
+ * <p>Usos de {@code NAT}, {@code NAT1}, {@code INT} ou {@code BOOL} como identificadores incluem
  * {@code set_functions/variables.acsl}.
  *
  * <p>Propriedades opcionais (JVM / {@code META-INF/b2acsl.properties}):
@@ -65,11 +65,11 @@ public final class AcslLibIncludes {
     /** {@code types.acsl} — tipos base {@code Set}, {@code Tuple}, {@code Relation}, {@code Function}. */
     private static final String TYPES_LIB_REL = "types.acsl";
 
-    /** Conjuntos globais {@code NAT}, {@code NAT1}, {@code BOOL}. */
+    /** Conjuntos globais {@code NAT}, {@code NAT1}, {@code INT}, {@code BOOL}. */
     private static final String VARIABLES_LIB_REL = "set_functions/variables.acsl";
 
     private static final Pattern GLOBAL_SET_CONSTANT_ID =
-            Pattern.compile("(?<![A-Za-z0-9_])(?:NAT1|NAT|BOOL)(?![A-Za-z0-9_])");
+            Pattern.compile("(?<![A-Za-z0-9_])(?:NAT1|NAT|INT|BOOL)(?![A-Za-z0-9_])");
 
     /**
      * Ordem preferida dos {@code include} para o {@code .acsl} gerado: dependências lógicas

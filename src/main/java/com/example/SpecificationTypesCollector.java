@@ -116,7 +116,7 @@ public final class SpecificationTypesCollector {
             }
             sb.append(t).append(' ');
             if (t.startsWith("Set") || t.contains("Set<")) {
-                sb.append("belongs empty singleton set_union card equals inclusion is_finite disjoint NAT BOOL ");
+                sb.append("belongs empty singleton set_union card equals inclusion is_finite disjoint NAT INT BOOL ");
             }
             if (t.contains("list") || t.contains("\\list")) {
                 sb.append("is_seq_of ran length iseq list_to_function ");
