@@ -955,14 +955,10 @@ public final class B2ACSLPipeline {
             return;
         }
         String merged = Files.readString(mergedC, StandardCharsets.UTF_8);
-        List<String> abstractVarNames =
-                GhostOperationsCiGenerator.listAbstractVarNamesFromGhostCi(ghostCi);
         String ghostText =
-                GhostOperationsCiGenerator.mapGhostOperationSpecRefsToGhostVariables(
-                        GhostOperationsCiGenerator.normalizeIntegerBoolComparisonsInMergedGhostSpecs(
-                                GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
-                                        Files.readString(ghostCi, StandardCharsets.UTF_8))),
-                        abstractVarNames);
+                GhostOperationsCiGenerator.normalizeIntegerBoolComparisonsInMergedGhostSpecs(
+                        GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
+                                Files.readString(ghostCi, StandardCharsets.UTF_8)));
 
         Matcher bm = GHOST_OP_BLOCK_IN_CI.matcher(ghostText);
         List<String> opNames = new ArrayList<>();

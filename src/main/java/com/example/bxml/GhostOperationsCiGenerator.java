@@ -1544,52 +1544,6 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Em blocos ghost de operação no merge, {@code ensures} devem referir {@code ghost_<v>}, não as
-     * variáveis lógicas {@code v} ligadas a memória C — caso contrário o WP smoke-test marca o
-     * código concreto seguinte como morto (inconsistência de especificação).
-     */
-    public static String mapGhostOperationSpecRefsToGhostVariables(
-            String ghostText, List<String> abstractVarNames) {
-        if (ghostText == null
-                || ghostText.isEmpty()
-                || abstractVarNames == null
-                || abstractVarNames.isEmpty()) {
-            return ghostText;
-        }
-        List<String> sorted = new ArrayList<>(abstractVarNames);
-        sorted.sort((a, b) -> Integer.compare(b.length(), a.length()));
-        Pattern blockPat =
-                Pattern.compile(
-                        "(?s)(/\\*@\\s*ghost\\b.*?\\bvoid\\s+[A-Za-z_]\\w*\\s*\\([^;{}]*\\)\\s*;\\s*\\*/)");
-        Matcher m = blockPat.matcher(ghostText);
-        StringBuilder sb = new StringBuilder();
-        while (m.find()) {
-            String block = m.group(1);
-            m.appendReplacement(sb, Matcher.quoteReplacement(mapAbstractVarRefsInGhostBlock(block, sorted)));
-        }
-        m.appendTail(sb);
-        return sb.toString();
-    }
-
-    private static String mapAbstractVarRefsInGhostBlock(String block, List<String> abstractVarsSorted) {
-        String out = block;
-        for (String v : abstractVarsSorted) {
-            if (v == null || v.isBlank()) {
-                continue;
-            }
-            out =
-                    out.replaceAll(
-                            "\\\\old\\(\\s*" + Pattern.quote(v) + "\\s*\\)",
-                            Matcher.quoteReplacement("\\old(ghost_" + v + ")"));
-            out =
-                    out.replaceAll(
-                            "(?<!ghost_)\\b" + Pattern.quote(v) + "\\b",
-                            Matcher.quoteReplacement("ghost_" + v));
-        }
-        return out;
-    }
-
-    /**
      * Conjuntos enumerados B → {@code dummy_<Maquina>__<Conjunto>} nos {@code ensures} ghost (ex.
      * {@code belongs(v, PRESSURE)} → {@code belongs(v, dummy_Airlock_pressure_bs__PRESSURE)}).
      */
