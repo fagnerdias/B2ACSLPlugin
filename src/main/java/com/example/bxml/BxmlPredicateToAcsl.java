@@ -296,6 +296,24 @@ public final class BxmlPredicateToAcsl {
             return "inclusion(" + left + ", " + right + ")";
         }
         if ("=".equals(op)) {
+            if ("Id".equals(leftEl.getLocalName())
+                    && "Boolean_Literal".equals(rightEl.getLocalName())) {
+                return "("
+                        + BxmlExpressionToAcsl.translate(leftEl, ctx)
+                        + " == "
+                        + BxmlExpressionToAcsl.booleanLiteralRhsForVariable(
+                                leftEl, rightEl.getAttribute("value"), ctx)
+                        + ")";
+            }
+            if ("Id".equals(rightEl.getLocalName())
+                    && "Boolean_Literal".equals(leftEl.getLocalName())) {
+                return "("
+                        + BxmlExpressionToAcsl.translate(rightEl, ctx)
+                        + " == "
+                        + BxmlExpressionToAcsl.booleanLiteralRhsForVariable(
+                                rightEl, leftEl.getAttribute("value"), ctx)
+                        + ")";
+            }
             if (BxmlExpressionToAcsl.isListValued(leftEl, ctx)
                     && BxmlExpressionToAcsl.isRelationOrFunctionValued(rightEl, ctx)) {
                 return "(" + right + " == list_to_function(" + left + "))";

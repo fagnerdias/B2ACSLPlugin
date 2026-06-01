@@ -175,12 +175,15 @@ public final class AcslGenerator {
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
         List<String> implementationAssignTargets =
                 BxmlMachineVariables.listImplementationAssignTargets(baseName, mergedMachineElements, ctx);
+        boolean useGhostAbstraction =
+                BxmlMachineVariables.needsGhostAbstraction(machineEl, mergedMachineElements);
         InitialisationAcsl initBare =
                 BxmlInitialisationTranslator.translate(
                         machineEl, implementationAssignTargets, ctx);
         boolean initGhostAssert =
-                GhostOperationsCiGenerator.initialisationAssignsAbstract(
-                        machineEl, abstractVariableNamesForGhost);
+                useGhostAbstraction
+                        && GhostOperationsCiGenerator.initialisationAssignsAbstract(
+                                machineEl, abstractVariableNamesForGhost);
         List<String> dummyGhostVarsForInit =
                 initGhostAssert
                         ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
@@ -216,7 +219,8 @@ public final class AcslGenerator {
                                 libScanRemovedBodies,
                                 baseName,
                                 mergedMachineElements,
-                                gluing)
+                                gluing,
+                                useGhostAbstraction)
                         : List.of();
 
         StringBuilder sb = new StringBuilder();
@@ -260,7 +264,10 @@ public final class AcslGenerator {
                 p -> sb.append("include \"").append(p.getFileName().toString()).append("\";\n\n"));
 
         String ghostPatternsBlock =
-                GhostOperationsCiGenerator.formatGhostPatternsAxiomaticBlock(machineEl, baseName);
+                useGhostAbstraction
+                        ? GhostOperationsCiGenerator.formatGhostPatternsAxiomaticBlock(
+                                machineEl, baseName, ctx.variableLogicTypes())
+                        : "";
         if (!ghostPatternsBlock.isBlank()) {
             sb.append(ghostPatternsBlock);
             if (!ghostPatternsBlock.endsWith("\n")) sb.append("\n");

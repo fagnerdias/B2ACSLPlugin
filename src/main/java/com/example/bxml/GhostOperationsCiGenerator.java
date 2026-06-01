@@ -124,11 +124,18 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Bloco {@code axiomatic Nome_ghost_patterns} com {@code logic integer dummy_ghost_<v>} e predicados
+     * Bloco {@code axiomatic Nome_ghost_patterns} com {@code logic … dummy_ghost_<v>} e predicados
      * {@code ghost_<op>} para inicialização e operações não puras.
      */
     public static String formatGhostPatternsAxiomaticBlock(
             Element abstractMachineEl, String machineNamePrefix) {
+        return formatGhostPatternsAxiomaticBlock(abstractMachineEl, machineNamePrefix, Map.of());
+    }
+
+    public static String formatGhostPatternsAxiomaticBlock(
+            Element abstractMachineEl,
+            String machineNamePrefix,
+            Map<String, String> variableLogicTypes) {
         if (abstractMachineEl == null
                 || machineNamePrefix == null
                 || machineNamePrefix.isBlank()) {
@@ -137,11 +144,17 @@ public final class GhostOperationsCiGenerator {
         List<String> vars = listAbstractVariableNames(abstractMachineEl);
         if (vars.isEmpty()) return "";
 
+        Map<String, String> types =
+                variableLogicTypes == null ? Map.of() : variableLogicTypes;
         Set<String> abstractSet = new LinkedHashSet<>(vars);
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic ").append(machineNamePrefix).append("_ghost_patterns {\n\n");
         for (String v : vars) {
-            sb.append("    logic int dummy_ghost_").append(v).append(";\n\n");
+            sb.append("    logic ")
+                    .append(ghostLogicTypeFromInferred(types.get(v)))
+                    .append(" dummy_ghost_")
+                    .append(v)
+                    .append(";\n\n");
         }
         if (initialisationAssignsAbstract(abstractMachineEl, abstractSet)) {
             sb.append("    predicate ghost__initialisation;\n\n");
@@ -197,7 +210,26 @@ public final class GhostOperationsCiGenerator {
             Map<String, String> gluing,
             Path bxmlDirectory)
             throws IOException {
+        write(cDir, abstractMachineEl, gluing, bxmlDirectory, List.of());
+    }
+
+    /**
+     * @param mergedMachineElements refinamentos/implementações fundidos na abstrata; se a
+     *        implementação espelha as variáveis abstratas, não gera {@code ghost_operations.ci}
+     */
+    public static void write(
+            Path cDir,
+            Element abstractMachineEl,
+            Map<String, String> gluing,
+            Path bxmlDirectory,
+            List<Element> mergedMachineElements)
+            throws IOException {
         if (cDir == null || abstractMachineEl == null) return;
+        Path target = cDir.resolve(GHOST_FILE);
+        if (!BxmlMachineVariables.needsGhostAbstraction(abstractMachineEl, mergedMachineElements)) {
+            Files.deleteIfExists(target);
+            return;
+        }
         String machineName = abstractMachineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return;
 
@@ -224,7 +256,8 @@ public final class GhostOperationsCiGenerator {
                 .append(" */\n\n");
 
         for (String v : abstractVarNames) {
-            sb.append("//@ ghost int ghost_").append(v).append(";\n");
+            String cType = ghostCTypeFromLogicType(varTypes.get(v));
+            sb.append("//@ ghost ").append(cType).append(" ghost_").append(v).append(";\n");
         }
         sb.append("\n");
 
@@ -1478,6 +1511,85 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
+     * Normaliza comparações booleanas em especificações ghost fundidas (0/1, alinhado a {@code _Bool}).
+     */
+    public static String normalizeIntegerBoolComparisonsInMergedGhostSpecs(String ghostText) {
+        if (ghostText == null || ghostText.isEmpty()) {
+            return ghostText;
+        }
+        return ghostText
+                .replaceAll("==\\s*\\\\false\\b", "== 0")
+                .replaceAll("==\\s*\\\\true\\b", "== 1")
+                .replaceAll("!=\\s*\\\\false\\b", "!= 0")
+                .replaceAll("!=\\s*\\\\true\\b", "!= 1");
+    }
+
+    /**
+     * Nomes de variáveis abstratas a partir das declarações {@code //@ ghost T ghost_<v>;} em
+     * {@code ghost_operations.ci}.
+     */
+    public static List<String> listAbstractVarNamesFromGhostCi(Path ghostCi) throws IOException {
+        if (ghostCi == null || !Files.isRegularFile(ghostCi)) {
+            return List.of();
+        }
+        Pattern decl = Pattern.compile("//@\\s+ghost\\s+\\w+\\s+ghost_([A-Za-z_]\\w*)\\s*;");
+        List<String> out = new ArrayList<>();
+        for (String line : Files.readAllLines(ghostCi, StandardCharsets.UTF_8)) {
+            Matcher m = decl.matcher(line.trim());
+            if (m.find()) {
+                out.add(m.group(1));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Em blocos ghost de operação no merge, {@code ensures} devem referir {@code ghost_<v>}, não as
+     * variáveis lógicas {@code v} ligadas a memória C — caso contrário o WP smoke-test marca o
+     * código concreto seguinte como morto (inconsistência de especificação).
+     */
+    public static String mapGhostOperationSpecRefsToGhostVariables(
+            String ghostText, List<String> abstractVarNames) {
+        if (ghostText == null
+                || ghostText.isEmpty()
+                || abstractVarNames == null
+                || abstractVarNames.isEmpty()) {
+            return ghostText;
+        }
+        List<String> sorted = new ArrayList<>(abstractVarNames);
+        sorted.sort((a, b) -> Integer.compare(b.length(), a.length()));
+        Pattern blockPat =
+                Pattern.compile(
+                        "(?s)(/\\*@\\s*ghost\\b.*?\\bvoid\\s+[A-Za-z_]\\w*\\s*\\([^;{}]*\\)\\s*;\\s*\\*/)");
+        Matcher m = blockPat.matcher(ghostText);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String block = m.group(1);
+            m.appendReplacement(sb, Matcher.quoteReplacement(mapAbstractVarRefsInGhostBlock(block, sorted)));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    private static String mapAbstractVarRefsInGhostBlock(String block, List<String> abstractVarsSorted) {
+        String out = block;
+        for (String v : abstractVarsSorted) {
+            if (v == null || v.isBlank()) {
+                continue;
+            }
+            out =
+                    out.replaceAll(
+                            "\\\\old\\(\\s*" + Pattern.quote(v) + "\\s*\\)",
+                            Matcher.quoteReplacement("\\old(ghost_" + v + ")"));
+            out =
+                    out.replaceAll(
+                            "(?<!ghost_)\\b" + Pattern.quote(v) + "\\b",
+                            Matcher.quoteReplacement("ghost_" + v));
+        }
+        return out;
+    }
+
+    /**
      * Conjuntos enumerados B → {@code dummy_<Maquina>__<Conjunto>} nos {@code ensures} ghost (ex.
      * {@code belongs(v, PRESSURE)} → {@code belongs(v, dummy_Airlock_pressure_bs__PRESSURE)}).
      */
@@ -1957,6 +2069,33 @@ public final class GhostOperationsCiGenerator {
         if (opName == null || opName.isBlank()) return "operation";
         if ("INITIALISATION".equalsIgnoreCase(opName)) return "initialisation";
         return opName.replace('-', '_').toLowerCase();
+    }
+
+    /** Tipo C para {@code //@ ghost T ghost_<v>;} alinhado ao {@code logic} da máquina. */
+    private static String ghostCTypeFromLogicType(String logicType) {
+        if (logicType == null || logicType.isBlank()) {
+            return "int";
+        }
+        return switch (logicType.trim()) {
+            case "boolean" -> "_Bool";
+            case "real" -> "double";
+            default -> "int";
+        };
+    }
+
+    /** Tipo {@code logic} ACSL para {@code dummy_ghost_<v>} / variáveis ghost. */
+    private static String ghostLogicTypeFromInferred(String logicType) {
+        if (logicType == null || logicType.isBlank()) {
+            return "integer";
+        }
+        String t = logicType.trim();
+        if ("boolean".equals(t) || "integer".equals(t) || "real".equals(t) || "int".equals(t)) {
+            return t.equals("int") ? "integer" : t.equals("boolean") ? "integer" : t;
+        }
+        if (t.startsWith("\\list") || t.startsWith("Set<")) {
+            return "integer";
+        }
+        return "integer";
     }
 
     private static List<Element> directExpChildren(Element parent) {

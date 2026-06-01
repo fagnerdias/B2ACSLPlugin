@@ -136,7 +136,7 @@ final class DummyGhostAxiomaticBuilder {
         }
 
         if (needsBool) {
-            sb.append("        logic DSet<boolean> dummy_BOOL;\n\n");
+            sb.append("        logic DSet<integer> dummy_BOOL;\n\n");
         }
 
         sb.append("    }\n*/\n");

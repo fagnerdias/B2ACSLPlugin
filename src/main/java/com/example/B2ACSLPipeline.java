@@ -203,7 +203,13 @@ public final class B2ACSLPipeline {
                 if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
                     continue;
                 }
-                GhostOperationsCiGenerator.write(cDir, mr, invariantGluingSubstitutions, bdp);
+                String machineName = mf.machine().getMachineName();
+                List<Element> mergedEls = new ArrayList<>();
+                for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
+                    mergedEls.add(AcslGenerator.parseMachineElement(mp));
+                }
+                GhostOperationsCiGenerator.write(
+                        cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
                 break;
             }
 
@@ -949,9 +955,14 @@ public final class B2ACSLPipeline {
             return;
         }
         String merged = Files.readString(mergedC, StandardCharsets.UTF_8);
+        List<String> abstractVarNames =
+                GhostOperationsCiGenerator.listAbstractVarNamesFromGhostCi(ghostCi);
         String ghostText =
-                GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
-                        Files.readString(ghostCi, StandardCharsets.UTF_8));
+                GhostOperationsCiGenerator.mapGhostOperationSpecRefsToGhostVariables(
+                        GhostOperationsCiGenerator.normalizeIntegerBoolComparisonsInMergedGhostSpecs(
+                                GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
+                                        Files.readString(ghostCi, StandardCharsets.UTF_8))),
+                        abstractVarNames);
 
         Matcher bm = GHOST_OP_BLOCK_IN_CI.matcher(ghostText);
         List<String> opNames = new ArrayList<>();
@@ -1204,8 +1215,9 @@ public final class B2ACSLPipeline {
             return;
         }
         String ghostText =
-                GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
-                        Files.readString(ghostCi, StandardCharsets.UTF_8));
+                GhostOperationsCiGenerator.normalizeIntegerBoolComparisonsInMergedGhostSpecs(
+                        GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
+                                Files.readString(ghostCi, StandardCharsets.UTF_8)));
         Matcher gm = GHOST_INITIALISATION_BLOCK_IN_CI.matcher(ghostText);
         if (!gm.find()) {
             return;

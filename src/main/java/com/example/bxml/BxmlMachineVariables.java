@@ -128,11 +128,11 @@ public final class BxmlMachineVariables {
             }
             sb.append("    logic ").append(logicType).append(" ").append(var);
             if (rootAbstractForImplRhs != null) {
-                sb.append(" = ")
-                        .append(
-                                implRhs != null
-                                        ? implRhs
-                                        : rootAbstractForImplRhs + "__" + var);
+                String rhs =
+                        implRhs != null
+                                ? implRhs
+                                : rootAbstractForImplRhs + "__" + var;
+                sb.append(" = (integer)").append(rhs);
             } else if (refinementWithParent) {
                 Optional<String> abs =
                         BxmlConnectionAcsl.linkingAbstractVariableName(
@@ -237,6 +237,21 @@ public final class BxmlMachineVariables {
         return false;
     }
 
+    /**
+     * Implementação com o mesmo conjunto de variáveis que a abstrata: o estado C é o da especificação
+     * ({@code logic v = (integer)Raiz__v;}) e não se usa camada ghost paralela.
+     */
+    public static boolean usesDirectImplementationVariables(
+            Element abstractMachineEl, List<Element> mergedMachineElements) {
+        return implementationMirrorsAbstractVariables(abstractMachineEl, mergedMachineElements);
+    }
+
+    /** Ghost só quando há refinamento/implementação com estado distinto do da abstrata. */
+    public static boolean needsGhostAbstraction(
+            Element abstractMachineEl, List<Element> mergedMachineElements) {
+        return !usesDirectImplementationVariables(abstractMachineEl, mergedMachineElements);
+    }
+
     /** {@code Abstract_Variables} e {@code Concrete_Variables} (filhos diretos de {@code Machine}). */
     public static List<Element> listDeclaredVariableIds(Element machineEl) {
         List<Element> out = new ArrayList<>();
@@ -313,6 +328,40 @@ public final class BxmlMachineVariables {
             }
         }
         return new ArrayList<>(targets);
+    }
+
+    /**
+     * Alvos {@code Raiz__v} da implementação para variáveis abstratas atribuídas na operação (modo
+     * directo, sem invariante na implementação).
+     */
+    public static List<String> listImplementationAssignTargetsForAbstractVariables(
+            String abstractMachineName,
+            List<Element> mergedMachineElements,
+            Set<String> abstractVariableNames,
+            BxmlTranslateContext ctx) {
+        if (abstractMachineName == null
+                || abstractMachineName.isBlank()
+                || abstractVariableNames == null
+                || abstractVariableNames.isEmpty()) {
+            return List.of();
+        }
+        String prefix = abstractMachineName.trim() + "__";
+        List<String> out = new ArrayList<>();
+        for (String target :
+                listImplementationAssignTargets(abstractMachineName, mergedMachineElements, ctx)) {
+            if (target == null || !target.startsWith(prefix)) {
+                continue;
+            }
+            String var = target.substring(prefix.length());
+            int bracket = var.indexOf('[');
+            if (bracket >= 0) {
+                var = var.substring(0, bracket);
+            }
+            if (abstractVariableNames.contains(var)) {
+                out.add(target);
+            }
+        }
+        return out;
     }
 
     public static List<String> listImplementationAssignTargets(

@@ -39,6 +39,11 @@ public final class BxmlExpressionToAcsl {
         }
         String l = translate(leftExp, ctx);
         String r = translate(rightExp, ctx);
+        if ("Boolean_Literal".equals(rightExp.getLocalName())) {
+            r = booleanLiteralRhsForVariable(leftExp, rightExp.getAttribute("value"), ctx);
+        } else if ("Boolean_Literal".equals(leftExp.getLocalName())) {
+            l = booleanLiteralRhsForVariable(rightExp, leftExp.getAttribute("value"), ctx);
+        }
         if (isSetValued(leftExp, ctx) && isSetValued(rightExp, ctx)) {
             return "equals(" + l + ", " + r + ")";
         }
@@ -315,6 +320,25 @@ public final class BxmlExpressionToAcsl {
             case "FALSE" -> "\\false";
             default -> value.trim();
         };
+    }
+
+    /**
+     * Comparação com variável BOOL modelada como {@code integer} (0/1) alinhada a {@code _Bool} em C.
+     */
+    public static String booleanLiteralRhsForVariable(
+            Element varExp, String bLiteralValue, BxmlTranslateContext ctx) {
+        if (varExp != null
+                && "Id".equals(varExp.getLocalName())
+                && ctx != null
+                && ctx.variableLogicTypes() != null) {
+            String v = varExp.getAttribute("value");
+            if ("integer".equals(ctx.variableLogicTypes().get(v))) {
+                return "TRUE".equalsIgnoreCase(bLiteralValue == null ? "" : bLiteralValue.trim())
+                        ? "1"
+                        : "0";
+            }
+        }
+        return translateBooleanLiteral(bLiteralValue);
     }
 
     public static String translate(Element exp, BxmlTranslateContext ctx) {
