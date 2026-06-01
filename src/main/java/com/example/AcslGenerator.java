@@ -174,7 +174,8 @@ public final class AcslGenerator {
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
         List<String> implementationAssignTargets =
-                BxmlMachineVariables.listImplementationAssignTargets(baseName, mergedMachineElements, ctx);
+                BxmlMachineVariables.listInitialisationAssignTargets(
+                        baseName, machineEl, mergedMachineElements, ctx);
         boolean useGhostAbstraction =
                 BxmlMachineVariables.needsGhostAbstraction(machineEl, mergedMachineElements);
         InitialisationAcsl initBare =

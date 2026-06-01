@@ -408,6 +408,55 @@ public final class BxmlMachineVariables {
         return out;
     }
 
+    /**
+     * Alvos {@code Raiz__v} para {@code assigns} na inicialização quando a implementação fundida não
+     * declara variáveis e reutiliza o estado da abstração ligado ao C ({@code logic v = Raiz__v;}).
+     */
+    public static List<String> listLinkedConcreteAssignTargetsForInitialisation(
+            String abstractMachineName,
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements) {
+        if (abstractMachineName == null
+                || abstractMachineName.isBlank()
+                || abstractMachineEl == null
+                || !anyImplementationUsesAbstractVariablesOnly(
+                        abstractMachineEl, mergedMachineElements)) {
+            return List.of();
+        }
+        Set<String> declared = declaredVariableNames(abstractMachineEl);
+        Set<String> assigned =
+                GhostOperationsCiGenerator.variablesAssignedInInitialisation(
+                        abstractMachineEl, declared);
+        if (assigned.isEmpty()) {
+            return List.of();
+        }
+        String prefix = abstractMachineName.trim() + "__";
+        List<String> out = new ArrayList<>();
+        for (String v : assigned) {
+            out.add(prefix + v);
+        }
+        return out;
+    }
+
+    /**
+     * Alvos {@code assigns} da inicialização: variáveis concretas da implementação fundida, ou
+     * {@code Raiz__v} para variáveis da abstração atribuídas na init quando a implementação não
+     * declara estado próprio.
+     */
+    public static List<String> listInitialisationAssignTargets(
+            String abstractMachineName,
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements,
+            BxmlTranslateContext ctx) {
+        List<String> fromImpl =
+                listImplementationAssignTargets(abstractMachineName, mergedMachineElements, ctx);
+        if (!fromImpl.isEmpty()) {
+            return fromImpl;
+        }
+        return listLinkedConcreteAssignTargetsForInitialisation(
+                abstractMachineName, abstractMachineEl, mergedMachineElements);
+    }
+
     public static List<String> listImplementationAssignTargets(
             String abstractMachineName, List<Element> mergedMachineElements) {
         return listImplementationAssignTargets(abstractMachineName, mergedMachineElements, null);
