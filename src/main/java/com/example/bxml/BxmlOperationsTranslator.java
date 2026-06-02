@@ -240,6 +240,14 @@ public final class BxmlOperationsTranslator {
                 }
             }
 
+            List<BxmlLoopTranslator.LoopContract> loops = List.of();
+            if (mergedRefinementChain != null && !mergedRefinementChain.isEmpty()) {
+                Element implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
+                if (implOp != null) {
+                    loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(implOp, ctx);
+                }
+            }
+
             out.add(
                     new OperationAcsl(
                             funcName,
@@ -249,7 +257,8 @@ public final class BxmlOperationsTranslator {
                             ghostSlug,
                             ghostBehaviorArgs,
                             dummyGhostEnsureVars,
-                            connectionConcreteAssigns));
+                            connectionConcreteAssigns,
+                            loops));
         }
         return out;
     }
@@ -553,13 +562,36 @@ public final class BxmlOperationsTranslator {
              * {@code assigns Raiz__v} para variáveis concretas ligadas por refinamento quando a operação
              * ghost altera a abstrata (omitidas se já redundantes).
              */
-            List<String> connectionConcreteAssigns) {
+            List<String> connectionConcreteAssigns,
+            List<BxmlLoopTranslator.LoopContract> loops) {
 
         public OperationAcsl {
             dummyGhostEnsureVarNames =
                     dummyGhostEnsureVarNames == null ? List.of() : List.copyOf(dummyGhostEnsureVarNames);
             connectionConcreteAssigns =
                     connectionConcreteAssigns == null ? List.of() : List.copyOf(connectionConcreteAssigns);
+            loops = loops == null ? List.of() : List.copyOf(loops);
+        }
+
+        public OperationAcsl(
+                String functionName,
+                List<String> requires,
+                List<String> ensures,
+                List<String> outputParameters,
+                String ghostBehaviorSlug,
+                List<String> ghostBehaviorInputNames,
+                List<String> dummyGhostEnsureVarNames,
+                List<String> connectionConcreteAssigns) {
+            this(
+                    functionName,
+                    requires,
+                    ensures,
+                    outputParameters,
+                    ghostBehaviorSlug,
+                    ghostBehaviorInputNames,
+                    dummyGhostEnsureVarNames,
+                    connectionConcreteAssigns,
+                    List.of());
         }
 
         /** Mesmo esquema que {@link com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl#toContractText()}. */
@@ -599,6 +631,18 @@ public final class BxmlOperationsTranslator {
                     sb.append("(").append(String.join(", ", ghostBehaviorInputNames)).append(")");
                 }
                 sb.append(";\n");
+            }
+            for (BxmlLoopTranslator.LoopContract loop : loops) {
+                sb.append("    at loop ").append(loop.index()).append(":\n");
+                if (loop.invariant() != null && !loop.invariant().isBlank()) {
+                    sb.append("        loop invariant (").append(loop.invariant()).append(");\n");
+                }
+                if (!loop.assigns().isEmpty()) {
+                    sb.append("        loop assigns ").append(String.join(", ", loop.assigns())).append(";\n");
+                }
+                if (loop.variant() != null && !loop.variant().isBlank()) {
+                    sb.append("        loop variant (").append(loop.variant()).append(");\n");
+                }
             }
             return sb.toString();
         }
