@@ -26,6 +26,7 @@ import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.model.Machine;
 import com.example.ui.FormalVerificationReportDialog;
 import com.example.ui.VerificationReportData;
+import com.example.analysis.LoopUnrollLevelEstimator;
 import com.example.ui.WpOptionsDialog;
 import com.example.ui.WpOptionsDialog.WpOptions;
 
@@ -611,38 +612,124 @@ public final class B2ACSLPipeline {
         String cSourcesLabel =
                 cFiles.stream().map(p -> p.getFileName().toString()).reduce((a, b) -> a + ", " + b).orElse("");
 
-        // frama-c -wp merged_code.c -wp-prover CVC5 -wp-smoke-tests -wp-rte -wp-status
-        ProcessBuilder wpPb =
-                new ProcessBuilder(
-                        FRAMA_C,
-                        "-wp",
-                        mergedCode.getFileName().toString(),
-                        "-wp-prover",
-                        wpOptions.prover(),
-                        "-wp-smoke-tests",
-                        "-wp-split",
-                        "-wp-rte",
-                        "-wp-timeout",
-                        Integer.toString(wpOptions.timeoutSeconds()),
-                        wpOptions.outputFlag());
-        wpPb.directory(cDir.toFile());
-        wpPb.redirectErrorStream(true);
-
-        ProcessResult wpResult = runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS);
-        reportData.absorbOutput(
-                wpResult.output(), mergedCode.getFileName().toString() + " (" + cSourcesLabel + ")");
-        if (!wpResult.completed()) {
-            reportData.addTimeout("Timeout while executing WP (600s limit).");
-            showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
-            return 6;
+        List<String> operationFunctionNames =
+                wpOptions.verifyPerOperation()
+                        ? resolveOperationFunctionNamesForWp(acslImportFiles)
+                        : List.of();
+        if (wpOptions.verifyPerOperation() && !operationFunctionNames.isEmpty()) {
+            System.out.println(
+                    "[B2ACSL] Per-operation WP enabled; functions: " + operationFunctionNames);
         }
-        if (wpResult.exitCode() != 0) {
-            reportData.addFailure("WP returned exit code " + wpResult.exitCode() + ".");
+
+        List<String> wpFunctionsToRun =
+                operationFunctionNames.isEmpty()
+                        ? List.of((String) null)
+                        : operationFunctionNames;
+        int failingExitCode = 0;
+        for (String functionName : wpFunctionsToRun) {
+            List<String> wpCmd =
+                    buildWpCommand(mergedCode, wpOptions, functionName, cSourcesLabel);
+            ProcessBuilder wpPb = new ProcessBuilder(wpCmd);
+            wpPb.directory(cDir.toFile());
+            wpPb.redirectErrorStream(true);
+
+            ProcessResult wpResult = runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS);
+            String sourceName =
+                    functionName == null
+                            ? mergedCode.getFileName().toString() + " (" + cSourcesLabel + ")"
+                            : functionName + " (" + mergedCode.getFileName().toString() + ")";
+            reportData.absorbOutput(wpResult.output(), sourceName);
+            if (!wpResult.completed()) {
+                reportData.addTimeout(
+                        "Timeout while executing WP"
+                                + (functionName == null ? "" : " for function " + functionName)
+                                + " (600s limit).");
+                showVerificationReport(
+                        projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+                return 6;
+            }
+            if (wpResult.exitCode() != 0) {
+                reportData.addFailure(
+                        "WP returned exit code "
+                                + wpResult.exitCode()
+                                + (functionName == null ? "" : " for function " + functionName)
+                                + ".");
+                if (failingExitCode == 0) {
+                    failingExitCode = wpResult.exitCode();
+                }
+            }
+        }
+        if (failingExitCode != 0) {
             showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
-            return wpResult.exitCode();
+            return failingExitCode;
         }
         showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
         return 0;
+    }
+
+    private static List<String> buildWpCommand(
+            Path mergedCode, WpOptions wpOptions, String functionName, String cSourcesLabel) throws IOException {
+        List<String> wpCmd = new ArrayList<>();
+        wpCmd.add(FRAMA_C);
+        if (wpOptions.loopSimplification()) {
+            int ulevel = LoopUnrollLevelEstimator.computeUlevel(mergedCode);
+            System.out.println(
+                    "[B2ACSL] Loop simplification: -ulevel "
+                            + ulevel
+                            + " (max loop size + 1 in "
+                            + mergedCode.getFileName()
+                            + ")");
+            wpCmd.add("-ulevel");
+            wpCmd.add(Integer.toString(ulevel));
+            wpCmd.add(mergedCode.getFileName().toString());
+            wpCmd.add("-then");
+        }
+        wpCmd.add("-wp");
+        wpCmd.add(mergedCode.getFileName().toString());
+        if (functionName != null && !functionName.isBlank()) {
+            wpCmd.add("-wp-fct");
+            wpCmd.add(functionName);
+        }
+        wpCmd.add("-wp-prover");
+        wpCmd.add(wpOptions.proversArgument());
+        if (wpOptions.smokeTests()) {
+            wpCmd.add("-wp-smoke-tests");
+        }
+        wpCmd.add("-wp-rte");
+        wpCmd.add("-wp-timeout");
+        wpCmd.add(Integer.toString(wpOptions.timeoutSeconds()));
+        wpCmd.add(wpOptions.outputFlag());
+        System.out.println(
+                "[B2ACSL] Frama-C WP"
+                        + (functionName == null ? "" : " (" + functionName + ")")
+                        + ": "
+                        + String.join(" ", wpCmd)
+                        + " // sources: "
+                        + cSourcesLabel);
+        return wpCmd;
+    }
+
+    private static List<String> resolveOperationFunctionNamesForWp(List<Path> acslImportFiles)
+            throws IOException {
+        if (acslImportFiles == null || acslImportFiles.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> orderedFunctions = new LinkedHashSet<>();
+        for (Path acslFile : acslImportFiles) {
+            if (acslFile == null || !Files.isRegularFile(acslFile)) {
+                continue;
+            }
+            String acslText = Files.readString(acslFile, StandardCharsets.UTF_8);
+            Matcher fnMatcher = ACSL_OPERATION_CONTRACT_FUNCTION.matcher(acslText);
+            while (fnMatcher.find()) {
+                String functionName = fnMatcher.group(1);
+                if (functionName == null || functionName.isBlank()) {
+                    continue;
+                }
+                orderedFunctions.add(functionName);
+            }
+        }
+        return List.copyOf(orderedFunctions);
     }
 
     private record ProcessResult(boolean completed, int exitCode, String output) {}
@@ -938,6 +1025,8 @@ public final class B2ACSLPipeline {
 
     private static final Pattern GHOST_OP_BLOCK_IN_CI =
             Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+([A-Za-z_]\\w*)\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
+    private static final Pattern ACSL_OPERATION_CONTRACT_FUNCTION =
+            Pattern.compile("(?m)^\\s*function\\s+([A-Za-z_]\\w*)\\s*:");
     private static final Pattern GHOST_INITIALISATION_BLOCK_IN_CI =
             Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
     private static final Pattern GHOST_INITIALISATION_BLOCK_IN_MERGED =

@@ -1,6 +1,7 @@
 package com.example.ui;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
@@ -10,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -17,8 +19,14 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
+import javax.swing.border.EmptyBorder;
+import javax.swing.border.TitledBorder;
 
 public final class FormalVerificationReportDialog {
+
+    private static final Color STATUS_OK = new Color(28, 130, 48);
+    private static final Color STATUS_FAIL = new Color(180, 36, 36);
+    private static final Color STATUS_TIMEOUT = new Color(176, 128, 18);
 
     private FormalVerificationReportDialog() {}
 
@@ -33,8 +41,16 @@ public final class FormalVerificationReportDialog {
             JPanel root = new JPanel(new BorderLayout(12, 12));
             root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 
+            JPanel center = new JPanel();
+            center.setLayout(new BoxLayout(center, BoxLayout.Y_AXIS));
+            center.add(buildSummary(reportData));
+            JPanel perFunction = buildPerFunctionSummary(reportData);
+            if (perFunction != null) {
+                center.add(perFunction);
+            }
+
             root.add(buildHeader(projectName, analyzedFileName, elapsedMs), BorderLayout.NORTH);
-            root.add(buildSummary(reportData), BorderLayout.CENTER);
+            root.add(center, BorderLayout.CENTER);
             root.add(buildDetails(reportData), BorderLayout.SOUTH);
 
             Object[] options = {"Close", "Save Full Output (.txt)"};
@@ -82,7 +98,9 @@ public final class FormalVerificationReportDialog {
                         + ", failures="
                         + reportData.failures()
                         + ", timeouts="
-                        + reportData.timeouts());
+                        + reportData.timeouts()
+                        + ", smoke tests="
+                        + reportData.smokeTestsDisplay());
         System.out.println(reportData.detailsAsText());
         System.out.println(reportData.fullOutputAsText());
     }
@@ -100,26 +118,49 @@ public final class FormalVerificationReportDialog {
     }
 
     private static JPanel buildSummary(VerificationReportData reportData) {
-        JPanel summary = new JPanel(new GridLayout(1, 4, 8, 8));
-        summary.setBorder(BorderFactory.createTitledBorder("Verification Summary"));
+        JPanel summary = new JPanel(new GridLayout(1, 5, 4, 4));
+        TitledBorder titled = BorderFactory.createTitledBorder("Verification Summary");
+        titled.setTitleFont(titled.getTitleFont().deriveFont(Font.PLAIN, 11f));
+        summary.setBorder(titled);
 
         summary.add(buildCard("Total Goals", Integer.toString(reportData.totalGoals())));
         summary.add(buildCard("Proved", Integer.toString(reportData.provedGoals())));
         summary.add(buildCard("Failures", Integer.toString(reportData.failures())));
         summary.add(buildCard("Timeouts", Integer.toString(reportData.timeouts())));
+        summary.add(buildCard("Smoke Tests", reportData.smokeTestsDisplay()));
         return summary;
     }
 
     private static JPanel buildCard(String label, String value) {
-        JPanel card = new JPanel(new BorderLayout());
-        card.setBorder(BorderFactory.createEtchedBorder());
+        return buildCard(label, value, null, null);
+    }
+
+    private static JPanel buildCard(
+            String label, String value, Color valueColor, Color backgroundColor) {
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBorder(
+                BorderFactory.createCompoundBorder(
+                        BorderFactory.createEtchedBorder(),
+                        new EmptyBorder(4, 2, 4, 2)));
+        if (backgroundColor != null) {
+            card.setOpaque(true);
+            card.setBackground(backgroundColor);
+        }
 
         JLabel top = new JLabel(label, SwingConstants.CENTER);
-        JLabel bottom = new JLabel(value, SwingConstants.CENTER);
-        bottom.setFont(bottom.getFont().deriveFont(Font.BOLD, 18f));
+        top.setAlignmentX(JLabel.CENTER_ALIGNMENT);
+        top.setFont(top.getFont().deriveFont(Font.PLAIN, 10f));
 
-        card.add(top, BorderLayout.NORTH);
-        card.add(bottom, BorderLayout.CENTER);
+        JLabel bottom = new JLabel(value, SwingConstants.CENTER);
+        bottom.setAlignmentX(JLabel.CENTER_ALIGNMENT);
+        bottom.setFont(bottom.getFont().deriveFont(Font.BOLD, 18f));
+        if (valueColor != null) {
+            bottom.setForeground(valueColor);
+        }
+
+        card.add(top);
+        card.add(bottom);
         return card;
     }
 
@@ -135,6 +176,49 @@ public final class FormalVerificationReportDialog {
         detailsPanel.add(new JScrollPane(detailsArea), BorderLayout.CENTER);
         return detailsPanel;
     }
+
+    private static JPanel buildPerFunctionSummary(VerificationReportData reportData) {
+        var functionSummaries = reportData.functionSummaries();
+        if (functionSummaries.size() <= 1) {
+            return null;
+        }
+        JPanel wrapper = new JPanel(new BorderLayout());
+        wrapper.setBorder(BorderFactory.createTitledBorder("Per-function verification summary"));
+
+        JPanel rows = new JPanel();
+        rows.setLayout(new BoxLayout(rows, BoxLayout.Y_AXIS));
+
+        for (VerificationReportData.FunctionSummary functionSummary : functionSummaries) {
+            FunctionStatus status = functionStatus(functionSummary);
+            JPanel row = new JPanel(new GridLayout(1, 5, 4, 4));
+            TitledBorder rowBorder =
+                    BorderFactory.createTitledBorder(
+                            status.icon() + " " + functionSummary.functionName());
+            rowBorder.setTitleColor(status.color());
+            row.setBorder(rowBorder);
+            row.add(buildCard("Total Goals", Integer.toString(functionSummary.totalGoals())));
+            row.add(buildCard("Proved", Integer.toString(functionSummary.provedGoals())));
+            row.add(buildCard("Failures", Integer.toString(functionSummary.failures())));
+            row.add(buildCard("Timeouts", Integer.toString(functionSummary.timeouts())));
+            row.add(buildCard("Smoke Tests", functionSummary.smokeTestsDisplay()));
+            rows.add(row);
+        }
+
+        wrapper.add(rows, BorderLayout.CENTER);
+        return wrapper;
+    }
+
+    private static FunctionStatus functionStatus(VerificationReportData.FunctionSummary summary) {
+        if (summary.failures() > 0) {
+            return new FunctionStatus("✗", STATUS_FAIL);
+        }
+        if (summary.timeouts() > 0) {
+            return new FunctionStatus("?", STATUS_TIMEOUT);
+        }
+        return new FunctionStatus("✓", STATUS_OK);
+    }
+
+    private record FunctionStatus(String icon, Color color) {}
 
     private static void saveFullOutput(String projectName, String fullOutput) {
         JFileChooser chooser = new JFileChooser();

@@ -7,10 +7,15 @@ import java.awt.GraphicsEnvironment;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -30,7 +35,28 @@ public final class WpOptionsDialog {
 
     private WpOptionsDialog() {}
 
-    public record WpOptions(String projectName, String prover, int timeoutSeconds, String outputFlag) {}
+    public record WpOptions(
+            String projectName,
+            List<String> provers,
+            int timeoutSeconds,
+            String outputFlag,
+            boolean loopSimplification,
+            boolean smokeTests,
+            boolean verifyPerOperation) {
+
+        /** Primeiro provedor (compatibilidade). */
+        public String prover() {
+            return provers == null || provers.isEmpty() ? DEFAULT_WP_PROVER : provers.get(0);
+        }
+
+        /** Argumento único para {@code -wp-prover} (lista separada por vírgulas). */
+        public String proversArgument() {
+            if (provers == null || provers.isEmpty()) {
+                return DEFAULT_WP_PROVER;
+            }
+            return String.join(",", provers);
+        }
+    }
 
     public static WpOptions promptWpOptions() {
         return promptWpOptions(DEFAULT_PROJECT_NAME);
@@ -42,16 +68,18 @@ public final class WpOptionsDialog {
         }
         try {
             JTextField projectField =
-                new JTextField(
-                        defaultProjectName == null || defaultProjectName.isBlank()
-                                ? DEFAULT_PROJECT_NAME
-                                : defaultProjectName);
+                    new JTextField(
+                            defaultProjectName == null || defaultProjectName.isBlank()
+                                    ? DEFAULT_PROJECT_NAME
+                                    : defaultProjectName);
             projectField.setEditable(false);
-            JComboBox<String> proverCombo = new JComboBox<>(new String[] {"CVC5", "Z3", "Alt-Ergo"});
-            proverCombo.setSelectedItem(DEFAULT_WP_PROVER);
+
+            JCheckBox cvc5Box = new JCheckBox("CVC5", true);
+            JCheckBox altErgoBox = new JCheckBox("Alt-Ergo", false);
+            JCheckBox z3Box = new JCheckBox("Z3", false);            
 
             JSpinner timeoutSpinner =
-                new JSpinner(new SpinnerNumberModel(DEFAULT_WP_TIMEOUT_SECONDS, 1, 36000, 1));
+                    new JSpinner(new SpinnerNumberModel(DEFAULT_WP_TIMEOUT_SECONDS, 1, 36000, 1));
             JComponent editor = timeoutSpinner.getEditor();
             if (editor instanceof JSpinner.DefaultEditor defaultEditor) {
                 defaultEditor.getTextField().setColumns(5);
@@ -60,12 +88,17 @@ public final class WpOptionsDialog {
             JComboBox<String> outputCombo = new JComboBox<>(new String[] {"status", "print"});
             outputCombo.setSelectedItem(DEFAULT_WP_OUTPUT);
 
+            JCheckBox loopSimplificationBox = new JCheckBox("Enable Loop Simplification", false);
+            JCheckBox smokeTestsBox = new JCheckBox("Enable Smoke Tests", true);
+            JCheckBox verifyPerOperationBox =
+                    new JCheckBox("Verify each operation separately (-wp-fct)", true);
+
             JPanel root = new JPanel(new BorderLayout());
             root.setBorder(new EmptyBorder(0, 0, 0, 0));
 
             JPanel header = new JPanel();
             header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
-            header.setBorder(new EmptyBorder(14, 16, 14, 16));        
+            header.setBorder(new EmptyBorder(14, 16, 14, 16));
             JLabel title = new JLabel("Frama-C WP Config");
             title.setForeground(Color.BLACK);
             title.setFont(title.getFont().deriveFont(Font.BOLD, 22f));
@@ -91,7 +124,7 @@ public final class WpOptionsDialog {
             content.add(field("Project name", projectField), gbc);
 
             gbc.gridy = 1;
-            content.add(field("Prover", proverCombo), gbc);
+            content.add(proversField(cvc5Box, altErgoBox, z3Box), gbc);
 
             gbc.gridy = 2;
             gbc.gridwidth = 1;
@@ -101,6 +134,22 @@ public final class WpOptionsDialog {
             gbc.gridx = 1;
             gbc.insets = new Insets(0, 0, 0, 0);
             content.add(field("Output type", outputCombo), gbc);
+
+            gbc.gridx = 0;
+            gbc.gridy = 3;
+            gbc.gridwidth = 2;
+            gbc.insets = new Insets(4, 2, 0, 0);
+            smokeTestsBox.setOpaque(false);
+            content.add(smokeTestsBox, gbc);
+
+            gbc.gridy = 4;
+            loopSimplificationBox.setOpaque(false);
+            content.add(loopSimplificationBox, gbc);
+
+            // gbc.gridy = 5;
+            // verifyPerOperationBox.setOpaque(false);
+            // content.add(verifyPerOperationBox, gbc);
+
             root.add(content, BorderLayout.CENTER);
 
             Object[] options = {"Cancel", "Run Verification"};
@@ -119,18 +168,74 @@ public final class WpOptionsDialog {
                     return null;
                 }
 
+                List<String> selectedProvers = selectedProvers(cvc5Box, altErgoBox, z3Box);
+                if (selectedProvers.isEmpty()) {
+                    JOptionPane.showMessageDialog(
+                            root,
+                            "Select at least one prover.",
+                            "Frama-C WP Configuration",
+                            JOptionPane.WARNING_MESSAGE);
+                    continue;
+                }
+
                 String project = projectField.getText();
-                String prover = (String) proverCombo.getSelectedItem();
                 int timeout = ((Number) timeoutSpinner.getValue()).intValue();
                 String output = (String) outputCombo.getSelectedItem();
-                WpOptions optionsModel = buildWpOptions(project, prover, timeout, output);
-                return optionsModel;
+                return buildWpOptions(
+                        project,
+                        selectedProvers,
+                        timeout,
+                        output,
+                        loopSimplificationBox.isSelected(),
+                        smokeTestsBox.isSelected(),
+                        verifyPerOperationBox.isSelected());
             }
         } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
             System.err.println(
                     "[B2ACSL] GUI is unavailable in this native runtime; using headless WP options.");
             return readHeadlessOptions(defaultProjectName);
         }
+    }
+
+    private static List<String> selectedProvers(
+            JCheckBox cvc5, JCheckBox altErgo, JCheckBox z3) {
+        List<String> out = new ArrayList<>();
+        if (cvc5.isSelected()) {
+            out.add("CVC5");
+        }
+        if (altErgo.isSelected()) {
+            out.add("Alt-Ergo");
+        }
+        if (z3.isSelected()) {
+            out.add("Z3");
+        }        
+        return out;
+    }
+
+    private static JPanel proversField(
+            JCheckBox cvc5, JCheckBox altErgo, JCheckBox z3) {
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setOpaque(false);
+        JLabel label = new JLabel("Provers (Select multiple):");
+        label.setBorder(new EmptyBorder(0, 2, 6, 0));
+        p.add(label);
+        JPanel row = new JPanel();
+        row.setLayout(new BoxLayout(row, BoxLayout.Y_AXIS));
+        row.setOpaque(false);
+        row.setBorder(
+                BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(new Color(191, 198, 214)),
+                        new EmptyBorder(new Insets(8, 10, 8, 10))));
+        row.setBackground(Color.WHITE);
+        for (JCheckBox box : new JCheckBox[] {cvc5, altErgo, z3}) {
+            box.setOpaque(false);
+            box.setAlignmentX(JComponent.LEFT_ALIGNMENT);
+            row.add(box);
+        }
+        row.setAlignmentX(JComponent.LEFT_ALIGNMENT);
+        p.add(row);
+        return p;
     }
 
     private static boolean isUiAvailable() {
@@ -148,10 +253,40 @@ public final class WpOptionsDialog {
                         defaultProjectName == null || defaultProjectName.isBlank()
                                 ? DEFAULT_PROJECT_NAME
                                 : defaultProjectName);
-        String prover = System.getProperty("b2acsl.wp.prover", DEFAULT_WP_PROVER);
+        String proverProp = System.getProperty("b2acsl.wp.prover", DEFAULT_WP_PROVER);
+        List<String> provers = parseProverList(proverProp);
         int timeout = Integer.getInteger("b2acsl.wp.timeout", DEFAULT_WP_TIMEOUT_SECONDS);
         String output = System.getProperty("b2acsl.wp.output", DEFAULT_WP_OUTPUT);
-        return buildWpOptions(projectName, prover, timeout, output);
+        boolean loopSimplification =
+                Boolean.parseBoolean(System.getProperty("b2acsl.wp.loopSimplification", "false"));
+        boolean smokeTests =
+                Boolean.parseBoolean(System.getProperty("b2acsl.wp.smokeTests", "true"));
+        boolean verifyPerOperation =
+                Boolean.parseBoolean(System.getProperty("b2acsl.wp.verifyPerOperation", "false"));
+        return buildWpOptions(
+                projectName,
+                provers,
+                timeout,
+                output,
+                loopSimplification,
+                smokeTests,
+                verifyPerOperation);
+    }
+
+    private static List<String> parseProverList(String raw) {
+        Set<String> ordered = new LinkedHashSet<>();
+        if (raw != null) {
+            for (String part : raw.split("[,;]")) {
+                String p = part.trim();
+                if (!p.isBlank()) {
+                    ordered.add(normalizeProverName(p));
+                }
+            }
+        }
+        if (ordered.isEmpty()) {
+            ordered.add(DEFAULT_WP_PROVER);
+        }
+        return List.copyOf(ordered);
     }
 
     private static JPanel field(String labelText, JComponent input) {
@@ -170,6 +305,10 @@ public final class WpOptionsDialog {
         }
         if (input instanceof JTextField field) {
             field.setColumns(28);
+            field.setBackground(Color.WHITE);
+        }
+        if (input instanceof JSpinner spinner) {
+            spinner.setBackground(Color.WHITE);
         }
         input.setAlignmentX(JComponent.LEFT_ALIGNMENT);
         p.add(input);
@@ -177,18 +316,28 @@ public final class WpOptionsDialog {
     }
 
     private static WpOptions buildWpOptions(
-            String projectName, String prover, int timeoutSeconds, String outputMode) {
+            String projectName,
+            List<String> provers,
+            int timeoutSeconds,
+            String outputMode,
+            boolean loopSimplification,
+            boolean smokeTests,
+            boolean verifyPerOperation) {
         String normalizedProjectName = projectName == null ? "" : projectName.trim();
         if (normalizedProjectName.isBlank()) {
             normalizedProjectName = DEFAULT_PROJECT_NAME;
         }
-        String normalizedProver =
-                switch (prover == null ? "" : prover.trim().toUpperCase()) {
-                    case "Z3" -> "Z3";
-                    case "ALT-ERGO" -> "Alt-Ergo";
-                    case "CVC5" -> "CVC5";
-                    default -> DEFAULT_WP_PROVER;
-                };
+        List<String> normalizedProvers = new ArrayList<>();
+        if (provers != null) {
+            for (String p : provers) {
+                if (p != null && !p.isBlank()) {
+                    normalizedProvers.add(normalizeProverName(p.trim()));
+                }
+            }
+        }
+        if (normalizedProvers.isEmpty()) {
+            normalizedProvers.add(DEFAULT_WP_PROVER);
+        }
         int normalizedTimeout = timeoutSeconds > 0 ? timeoutSeconds : DEFAULT_WP_TIMEOUT_SECONDS;
         String normalizedOutput =
                 switch (outputMode == null ? "" : outputMode.trim().toLowerCase()) {
@@ -196,6 +345,23 @@ public final class WpOptionsDialog {
                     case "status", "-wp-status" -> "-wp-status";
                     default -> "-wp-" + DEFAULT_WP_OUTPUT;
                 };
-        return new WpOptions(normalizedProjectName, normalizedProver, normalizedTimeout, normalizedOutput);
+        return new WpOptions(
+                normalizedProjectName,
+                List.copyOf(normalizedProvers),
+                normalizedTimeout,
+                normalizedOutput,
+                loopSimplification,
+                smokeTests,
+                verifyPerOperation);
+    }
+
+    private static String normalizeProverName(String prover) {
+        return switch (prover.toUpperCase()) {
+            case "Z3" -> "Z3";
+            case "ALT-ERGO", "ALTERGO" -> "Alt-Ergo";
+            case "COQ" -> "Coq";
+            case "CVC5" -> "CVC5";
+            default -> DEFAULT_WP_PROVER;
+        };
     }
 }
