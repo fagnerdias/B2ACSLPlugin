@@ -2,6 +2,7 @@ package com.example.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
@@ -13,6 +14,7 @@ import java.nio.file.Path;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.JFileChooser;
+import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -55,16 +57,7 @@ public final class FormalVerificationReportDialog {
 
             Object[] options = {"Close", "Save Full Output (.txt)"};
             while (true) {
-                int choice =
-                        JOptionPane.showOptionDialog(
-                                null,
-                                root,
-                                "Verification Report",
-                                JOptionPane.DEFAULT_OPTION,
-                                JOptionPane.INFORMATION_MESSAGE,
-                                null,
-                                options,
-                                options[0]);
+                int choice = showResultDialog(root, options);
                 if (choice != 1) {
                     break;
                 }
@@ -175,6 +168,39 @@ public final class FormalVerificationReportDialog {
 
         detailsPanel.add(new JScrollPane(detailsArea), BorderLayout.CENTER);
         return detailsPanel;
+    }
+
+    private static int showResultDialog(JPanel root, Object[] options) {
+        JScrollPane scrollPane = new JScrollPane(root);
+        scrollPane.setBorder(BorderFactory.createEmptyBorder());
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        scrollPane.getHorizontalScrollBar().setUnitIncrement(16);
+        scrollPane.setPreferredSize(new Dimension(1100, 720));
+
+        JOptionPane optionPane =
+                new JOptionPane(
+                        scrollPane,
+                        JOptionPane.INFORMATION_MESSAGE,
+                        JOptionPane.DEFAULT_OPTION,
+                        null,
+                        options,
+                        options[0]);
+        JDialog dialog = optionPane.createDialog(null, "Verification Report");
+        dialog.setResizable(true);
+        dialog.setMinimumSize(new Dimension(900, 600));
+        dialog.pack();
+        dialog.setVisible(true);
+
+        Object value = optionPane.getValue();
+        if (value instanceof Integer index) {
+            return index;
+        }
+        for (int i = 0; i < options.length; i++) {
+            if (options[i].equals(value)) {
+                return i;
+            }
+        }
+        return JOptionPane.CLOSED_OPTION;
     }
 
     private static JPanel buildPerFunctionSummary(VerificationReportData reportData) {
