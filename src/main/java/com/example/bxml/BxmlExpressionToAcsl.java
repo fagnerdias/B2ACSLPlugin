@@ -432,6 +432,7 @@ public final class BxmlExpressionToAcsl {
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : "card(" + a + ")";
             case "size" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
+            case "imax" -> "set_max(" + a + ")";
             case "~" -> "relation_inverse(" + a + ")";
             default -> opTrim + "(" + a + ")";
         };
@@ -488,6 +489,9 @@ public final class BxmlExpressionToAcsl {
             return "\\concat([|" + left + "|], " + right + ")";
         }
         if ("mod".equals(op)) return "(" + left + " % " + right + ")";
+        if ("**i".equals(op == null ? "" : op.trim())) {
+            return "integer_pow(" + left + ", " + right + ")";
+        }
         String infix = integerBinaryOpToAcsl(op);
         return "(" + left + " " + infix + " " + right + ")";
     }

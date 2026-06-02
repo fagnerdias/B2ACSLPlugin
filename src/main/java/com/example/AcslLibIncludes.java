@@ -65,6 +65,9 @@ public final class AcslLibIncludes {
     /** {@code types.acsl} — tipos base {@code Set}, {@code Tuple}, {@code Relation}, {@code Function}. */
     private static final String TYPES_LIB_REL = "types.acsl";
 
+    /** Funções matemáticas auxiliares (ex.: {@code pow(...)}). */
+    private static final String MATH_LIB_REL = "math.acsl";
+
     /** Conjuntos globais {@code NAT}, {@code NAT1}, {@code INT}, {@code BOOL}. */
     private static final String VARIABLES_LIB_REL = "set_functions/variables.acsl";
 
@@ -77,6 +80,7 @@ public final class AcslLibIncludes {
      */
     private static final List<String> FILE_ORDER = List.of(
             "types.acsl",
+            "math.acsl",
             "tuple_functions/tuple_couple.acsl",
             "tuple_functions/accessors.acsl",
             "tuple_functions/equals.acsl",
@@ -93,6 +97,7 @@ public final class AcslLibIncludes {
             "set_functions/inclusion.acsl",
             "set_functions/pow.acsl",            
             "set_functions/equals.acsl",
+            "set_functions/max.acsl",
             "set_functions/cartesian_product.acsl",
             "set_functions/disjoint.acsl",
             "relation_functions/singleton.acsl",
@@ -583,6 +588,9 @@ public final class AcslLibIncludes {
 
         if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
             files.add(VARIABLES_LIB_REL);
+        }
+        if (containsSymbolCall(acslText, "integer_pow")) {
+            files.add(MATH_LIB_REL);
         }
 
         if (files.isEmpty()) return List.of();
