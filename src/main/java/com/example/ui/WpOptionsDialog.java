@@ -41,7 +41,8 @@ public final class WpOptionsDialog {
             int timeoutSeconds,
             String outputFlag,
             boolean loopSimplification,
-            boolean smokeTests) {
+            boolean smokeTests,
+            boolean verifyPerOperation) {
 
         /** Primeiro provedor (compatibilidade). */
         public String prover() {
@@ -89,6 +90,8 @@ public final class WpOptionsDialog {
 
             JCheckBox loopSimplificationBox = new JCheckBox("Enable Loop Simplification", false);
             JCheckBox smokeTestsBox = new JCheckBox("Enable Smoke Tests", true);
+            JCheckBox verifyPerOperationBox =
+                    new JCheckBox("Verify each operation separately (-wp-fct)", true);
 
             JPanel root = new JPanel(new BorderLayout());
             root.setBorder(new EmptyBorder(0, 0, 0, 0));
@@ -136,12 +139,16 @@ public final class WpOptionsDialog {
             gbc.gridy = 3;
             gbc.gridwidth = 2;
             gbc.insets = new Insets(4, 2, 0, 0);
+            smokeTestsBox.setOpaque(false);
+            content.add(smokeTestsBox, gbc);
+
+            gbc.gridy = 4;
             loopSimplificationBox.setOpaque(false);
             content.add(loopSimplificationBox, gbc);
 
-            gbc.gridy = 4;
-            smokeTestsBox.setOpaque(false);
-            content.add(smokeTestsBox, gbc);
+            // gbc.gridy = 5;
+            // verifyPerOperationBox.setOpaque(false);
+            // content.add(verifyPerOperationBox, gbc);
 
             root.add(content, BorderLayout.CENTER);
 
@@ -180,7 +187,8 @@ public final class WpOptionsDialog {
                         timeout,
                         output,
                         loopSimplificationBox.isSelected(),
-                        smokeTestsBox.isSelected());
+                        smokeTestsBox.isSelected(),
+                        verifyPerOperationBox.isSelected());
             }
         } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
             System.err.println(
@@ -253,7 +261,16 @@ public final class WpOptionsDialog {
                 Boolean.parseBoolean(System.getProperty("b2acsl.wp.loopSimplification", "false"));
         boolean smokeTests =
                 Boolean.parseBoolean(System.getProperty("b2acsl.wp.smokeTests", "true"));
-        return buildWpOptions(projectName, provers, timeout, output, loopSimplification, smokeTests);
+        boolean verifyPerOperation =
+                Boolean.parseBoolean(System.getProperty("b2acsl.wp.verifyPerOperation", "false"));
+        return buildWpOptions(
+                projectName,
+                provers,
+                timeout,
+                output,
+                loopSimplification,
+                smokeTests,
+                verifyPerOperation);
     }
 
     private static List<String> parseProverList(String raw) {
@@ -304,7 +321,8 @@ public final class WpOptionsDialog {
             int timeoutSeconds,
             String outputMode,
             boolean loopSimplification,
-            boolean smokeTests) {
+            boolean smokeTests,
+            boolean verifyPerOperation) {
         String normalizedProjectName = projectName == null ? "" : projectName.trim();
         if (normalizedProjectName.isBlank()) {
             normalizedProjectName = DEFAULT_PROJECT_NAME;
@@ -333,7 +351,8 @@ public final class WpOptionsDialog {
                 normalizedTimeout,
                 normalizedOutput,
                 loopSimplification,
-                smokeTests);
+                smokeTests,
+                verifyPerOperation);
     }
 
     private static String normalizeProverName(String prover) {

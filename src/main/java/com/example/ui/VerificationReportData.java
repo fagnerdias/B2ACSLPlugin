@@ -1,8 +1,10 @@
 package com.example.ui;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,6 +43,25 @@ public final class VerificationReportData {
     private int extraTimeouts;
     private final List<String> details = new ArrayList<>();
     private final StringBuilder fullOutput = new StringBuilder();
+    private final Map<String, SourceSummary> summaryBySource = new LinkedHashMap<>();
+
+    private static final class SourceSummary {
+        int totalGoals;
+        int provedGoals;
+        int unknownGoals;
+        int timeoutGoals;
+        int smokeTestsPassed;
+        int smokeTestsTotal;
+        boolean smokeTestsPresent;
+    }
+
+    public record FunctionSummary(
+            String functionName,
+            int totalGoals,
+            int provedGoals,
+            int failures,
+            int timeouts,
+            String smokeTestsDisplay) {}
 
     public void absorbOutput(String output, String sourceName) {
         if (output == null || output.isBlank()) {
@@ -54,6 +75,7 @@ public final class VerificationReportData {
         if (!output.endsWith("\n")) {
             fullOutput.append('\n');
         }
+        SourceSummary sourceSummary = summaryBySource.computeIfAbsent(sourceName, k -> new SourceSummary());
         for (String line : output.split("\\R")) {
             String trimmed = line.trim();
             if (trimmed.isEmpty()) {
@@ -62,27 +84,40 @@ public final class VerificationReportData {
 
             Matcher provedMatcher = PROVED_GOALS_PATTERN.matcher(trimmed);
             if (provedMatcher.find()) {
-                wpProvedGoals += Integer.parseInt(provedMatcher.group(1));
-                wpTotalGoals += Integer.parseInt(provedMatcher.group(2));
+                int proved = Integer.parseInt(provedMatcher.group(1));
+                int total = Integer.parseInt(provedMatcher.group(2));
+                wpProvedGoals += proved;
+                wpTotalGoals += total;
+                sourceSummary.provedGoals += proved;
+                sourceSummary.totalGoals += total;
                 wpSummaryPresent = true;
                 continue;
             }
             Matcher unknownMatcher = UNKNOWN_SUMMARY_PATTERN.matcher(line);
             if (unknownMatcher.find()) {
-                wpUnknownGoals += Integer.parseInt(unknownMatcher.group(1));
+                int unknown = Integer.parseInt(unknownMatcher.group(1));
+                wpUnknownGoals += unknown;
+                sourceSummary.unknownGoals += unknown;
                 wpSummaryPresent = true;
                 continue;
             }
             Matcher timeoutMatcher = TIMEOUT_SUMMARY_PATTERN.matcher(line);
             if (timeoutMatcher.find()) {
-                wpTimeoutGoals += Integer.parseInt(timeoutMatcher.group(1));
+                int timeout = Integer.parseInt(timeoutMatcher.group(1));
+                wpTimeoutGoals += timeout;
+                sourceSummary.timeoutGoals += timeout;
                 wpSummaryPresent = true;
                 continue;
             }
             Matcher smokeMatcher = SMOKE_TESTS_SUMMARY_PATTERN.matcher(line);
             if (smokeMatcher.find()) {
-                wpSmokeTestsPassed += Integer.parseInt(smokeMatcher.group(1));
-                wpSmokeTestsTotal += Integer.parseInt(smokeMatcher.group(2));
+                int passed = Integer.parseInt(smokeMatcher.group(1));
+                int total = Integer.parseInt(smokeMatcher.group(2));
+                wpSmokeTestsPassed += passed;
+                wpSmokeTestsTotal += total;
+                sourceSummary.smokeTestsPassed += passed;
+                sourceSummary.smokeTestsTotal += total;
+                sourceSummary.smokeTestsPresent = true;
                 wpSmokeTestsPresent = true;
                 wpSummaryPresent = true;
                 continue;
@@ -193,5 +228,28 @@ public final class VerificationReportData {
             return "No WP output was captured.";
         }
         return fullOutput.toString();
+    }
+
+    public List<FunctionSummary> functionSummaries() {
+        if (summaryBySource.isEmpty()) {
+            return List.of();
+        }
+        List<FunctionSummary> out = new ArrayList<>();
+        for (Map.Entry<String, SourceSummary> entry : summaryBySource.entrySet()) {
+            SourceSummary summary = entry.getValue();
+            String smoke =
+                    summary.smokeTestsPresent
+                            ? summary.smokeTestsPassed + " / " + summary.smokeTestsTotal
+                            : "—";
+            out.add(
+                    new FunctionSummary(
+                            entry.getKey(),
+                            summary.totalGoals,
+                            summary.provedGoals,
+                            summary.unknownGoals,
+                            summary.timeoutGoals,
+                            smoke));
+        }
+        return List.copyOf(out);
     }
 }
