@@ -282,6 +282,10 @@ public final class BxmlPredicateToAcsl {
                         + " && is_surjective(" + fun + ", " + rangeSet + ")";
             }
             String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            if (BxmlExpressionToAcsl.isIntervalBinaryExp(rightEl)) {
+                String right = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(rightEl, ctx);
+                return "belongs(" + left + ", " + right + ")";
+            }
             String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
             // x : T — pertença (ex.: nn : NAT → belongs(nn, NAT)) — ACSL_Lib/set_functions/belongs.acsl
             if (isPrimitiveTypeName(right)) {

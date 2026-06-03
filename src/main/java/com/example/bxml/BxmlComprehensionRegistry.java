@@ -81,9 +81,34 @@ public final class BxmlComprehensionRegistry {
 
     private static void walk(Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types,
                              boolean skipOperations) {
+        if (skipOperations && "Operations".equals(e.getLocalName())) {
+            NodeList ch = e.getChildNodes();
+            for (int i = 0; i < ch.getLength(); i++) {
+                Node n = ch.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) {
+                    continue;
+                }
+                Element op = (Element) n;
+                if ("Operation".equals(op.getLocalName())) {
+                    registerComprehensionsInImplementationLoops(op, r, types);
+                }
+            }
+            return;
+        }
         if (skipOperations && IMPL_OPERATION_SCOPE_TAGS.contains(e.getLocalName())) {
             return;
         }
+        registerComprehensionElement(e, r, types);
+        NodeList ch = e.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            walk((Element) n, r, types, skipOperations);
+        }
+    }
+
+    private static void registerComprehensionElement(
+            Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
         if ("Quantified_Set".equals(e.getLocalName())) {
             r.ordered.add(e);
             r.elementTypes.put(e, types);
@@ -91,12 +116,74 @@ public final class BxmlComprehensionRegistry {
             r.ordered.add(e);
             r.elementTypes.put(e, types);
         }
-        NodeList ch = e.getChildNodes();
-        for (int i = 0; i < ch.getLength(); i++) {
-            Node n = ch.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            walk((Element) n, r, types, skipOperations);
+    }
+
+    /** Intervalos e compreensões em {@code INVARIANT}/{@code VARIANT} de loops WHILE na implementação. */
+    private static void registerComprehensionsInImplementationLoops(
+            Element operation, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
+        Element body = firstChildElement(operation, "Body");
+        if (body != null) {
+            walkWhileLoopComprehensions(body, r, types);
         }
+    }
+
+    private static void walkWhileLoopComprehensions(
+            Element sub, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
+        if (sub == null) {
+            return;
+        }
+        if ("While".equals(sub.getLocalName())) {
+            Element inv = firstChildElement(sub, "Invariant");
+            if (inv != null) {
+                walkComprehensionSubtree(inv, r, types);
+            }
+            Element variant = firstChildElement(sub, "Variant");
+            if (variant != null) {
+                walkComprehensionSubtree(variant, r, types);
+            }
+            walkWhileLoopComprehensions(firstChildElement(sub, "Body"), r, types);
+            return;
+        }
+        NodeList nl = sub.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+            Element ch = (Element) n;
+            if ("Attr".equals(ch.getLocalName())) {
+                continue;
+            }
+            walkWhileLoopComprehensions(ch, r, types);
+        }
+    }
+
+    private static void walkComprehensionSubtree(
+            Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
+        registerComprehensionElement(e, r, types);
+        NodeList nl = e.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+            walkComprehensionSubtree((Element) n, r, types);
+        }
+    }
+
+    private static Element firstChildElement(Element parent, String localName) {
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+            Element e = (Element) n;
+            if (localName.equals(e.getLocalName())) {
+                return e;
+            }
+        }
+        return null;
     }
 
     /**
@@ -416,16 +503,5 @@ public final class BxmlComprehensionRegistry {
         String elem = types.elementTypeNameForSetTypref(typref);
         String inner = types.acslElementTypeName(elem);
         return "Set<" + inner + ">";
-    }
-
-    private static Element firstChildElement(Element parent, String localName) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) return e;
-        }
-        return null;
     }
 }
