@@ -608,8 +608,10 @@ public final class BxmlOperationsTranslator {
             for (String v : dummyGhostEnsureVarNames) {
                 sb.append("    ensures  dummy_ghost_").append(v).append(";\n");
             }
+            boolean hasAssigns = false;
             for (String p : outputParameters) {
                 sb.append("    assigns *").append(p).append(";\n");
+                hasAssigns = true;
             }
             LinkedHashSet<String> connectionEmitted = new LinkedHashSet<>();
             for (String ca : connectionConcreteAssigns) {
@@ -624,6 +626,10 @@ public final class BxmlOperationsTranslator {
                     continue;
                 }
                 sb.append("    assigns ").append(ca).append(";\n");
+                hasAssigns = true;
+            }
+            if (!hasAssigns) {
+                sb.append("    assigns \\nothing;\n");
             }
             if (ghostBehaviorSlug != null && !ghostBehaviorSlug.isBlank()) {
                 sb.append("    at 1: assert ghost__").append(ghostBehaviorSlug);

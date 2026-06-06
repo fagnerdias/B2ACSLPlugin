@@ -2,6 +2,7 @@ package com.example.bxml;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -163,12 +164,38 @@ public final class BxmlSetsTranslator {
      */
     /** Nomes em {@code <Sees>/<Referenced_Machine>/<Name>} (máquinas vistas). */
     public static List<String> listReferencedMachineNames(Element machineEl) {
-        Element sees = firstChildElement(machineEl, "Sees");
-        if (sees == null) {
+        return listReferencedMachineNamesFromClause(machineEl, "Sees");
+    }
+
+    /** Nomes em {@code <Imports>/<Referenced_Machine>/<Name>} (máquinas importadas). */
+    public static List<String> listImportedMachineNames(Element machineEl) {
+        return listReferencedMachineNamesFromClause(machineEl, "Imports");
+    }
+
+    /**
+     * {@code IMPORTS} da máquina abstrata e da cadeia fundida (implementações/refinamentos), sem
+     * duplicar nomes.
+     */
+    public static List<String> listImportedMachineNamesFromChain(
+            Element rootMachineEl, List<Element> mergedMachineElements) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        names.addAll(listImportedMachineNames(rootMachineEl));
+        if (mergedMachineElements != null) {
+            for (Element mel : mergedMachineElements) {
+                names.addAll(listImportedMachineNames(mel));
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    private static List<String> listReferencedMachineNamesFromClause(
+            Element machineEl, String clauseName) {
+        Element clause = firstChildElement(machineEl, clauseName);
+        if (clause == null) {
             return List.of();
         }
         List<String> names = new ArrayList<>();
-        NodeList ch = sees.getChildNodes();
+        NodeList ch = clause.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
             Node n = ch.item(i);
             if (n.getNodeType() != Node.ELEMENT_NODE) {
@@ -191,23 +218,43 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Máquinas em {@code SEES} (abstrata) e {@code IMPORTS} (abstrata + cadeia fundida) cujos tipos
+     * enumerados entram na tradução.
+     */
+    private static List<String> dependencyMachineNamesForTranslation(
+            Element machineEl, List<Element> mergedMachineElements) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        names.addAll(listReferencedMachineNames(machineEl));
+        names.addAll(listImportedMachineNamesFromChain(machineEl, mergedMachineElements));
+        return List.copyOf(names);
+    }
+
+    /**
      * Conjuntos enumerados da máquina e das máquinas em {@code SEES} (mesma pasta de {@code .bxml}).
      */
     public static List<EnumeratedSetInfo> listEnumeratedSetsWithSees(
             Element machineEl, Path bxmlDirectory) {
+        return listEnumeratedSetsWithSees(machineEl, List.of(), bxmlDirectory);
+    }
+
+    /**
+     * Conjuntos enumerados da máquina, {@code SEES} e {@code IMPORTS} (cadeia fundida).
+     */
+    public static List<EnumeratedSetInfo> listEnumeratedSetsWithSees(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory) {
         List<EnumeratedSetInfo> merged = new ArrayList<>(listEnumeratedSets(machineEl));
         if (bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
             return merged;
         }
-        for (String seen : listReferencedMachineNames(machineEl)) {
-            Path p = bxmlDirectory.resolve(seen + ".bxml");
+        for (String dep : dependencyMachineNamesForTranslation(machineEl, mergedMachineElements)) {
+            Path p = bxmlDirectory.resolve(dep + ".bxml");
             if (!Files.isRegularFile(p)) {
                 continue;
             }
             try {
                 merged.addAll(listEnumeratedSets(parseMachineElement(p)));
             } catch (Exception ignored) {
-                // ignora SEES inacessível
+                // ignora dependência inacessível
             }
         }
         return merged;
@@ -219,20 +266,28 @@ public final class BxmlSetsTranslator {
      */
     public static Map<String, String> buildEnumRenamesWithSees(
             Element machineEl, Path bxmlDirectory) {
+        return buildEnumRenamesWithSees(machineEl, List.of(), bxmlDirectory);
+    }
+
+    /**
+     * Renomeação de valores enumerados da máquina, {@code SEES} e {@code IMPORTS} (cadeia fundida).
+     */
+    public static Map<String, String> buildEnumRenamesWithSees(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory) {
         LinkedHashMap<String, String> merged =
                 new LinkedHashMap<>(buildEnumRenames(machineEl));
         if (bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
             return merged;
         }
-        for (String seen : listReferencedMachineNames(machineEl)) {
-            Path p = bxmlDirectory.resolve(seen + ".bxml");
+        for (String dep : dependencyMachineNamesForTranslation(machineEl, mergedMachineElements)) {
+            Path p = bxmlDirectory.resolve(dep + ".bxml");
             if (!Files.isRegularFile(p)) {
                 continue;
             }
             try {
                 merged.putAll(buildEnumRenames(parseMachineElement(p)));
             } catch (Exception ignored) {
-                // ignora SEES inacessível
+                // ignora dependência inacessível
             }
         }
         return merged;
@@ -243,29 +298,166 @@ public final class BxmlSetsTranslator {
      * ficheiro próprio (abstração / componente sem {@code <Abstraction>}).
      */
     public static String formatSeesIncludeBlock(Element machineEl, Path bxmlDirectory) {
-        List<String> seenNames = listReferencedMachineNames(machineEl);
-        if (seenNames.isEmpty()) {
+        return formatMachineAcslIncludeBlock(listReferencedMachineNames(machineEl), bxmlDirectory);
+    }
+
+    /**
+     * Linhas {@code include "MaquinaImportada.acsl";} para cada máquina em {@code <Imports>} (abstrata
+     * + cadeia fundida) que gera ficheiro próprio.
+     */
+    public static String formatImportsIncludeBlock(
+            Element rootMachineEl, List<Element> mergedMachineElements, Path bxmlDirectory) {
+        return formatMachineAcslIncludeBlock(
+                listImportedMachineNamesFromChain(rootMachineEl, mergedMachineElements),
+                bxmlDirectory);
+    }
+
+    /**
+     * Mapa unificado viewer/importer → dependências diretas ({@code SEES} ∪ {@code IMPORTS}).
+     */
+    public static Map<String, List<String>> combinedDependencyMap(
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        LinkedHashMap<String, List<String>> merged = new LinkedHashMap<>();
+        if (seesGraph != null) {
+            for (Map.Entry<String, List<String>> e : seesGraph.viewerToSeenMap().entrySet()) {
+                mergeDependencyList(merged, e.getKey(), e.getValue());
+            }
+        }
+        if (importsGraph != null) {
+            for (Map.Entry<String, List<String>> e : importsGraph.importerToImportedMap().entrySet()) {
+                mergeDependencyList(merged, e.getKey(), e.getValue());
+            }
+        }
+        return Map.copyOf(merged);
+    }
+
+    /**
+     * Fecho transitivo de {@code SEES}/{@code IMPORTS} em ordem topológica (dependências antes de
+     * dependentes), para o preâmbulo do {@code .acsl} raiz de importação Frama-C.
+     */
+    public static List<String> transitiveDependencyMachineNames(
+            String rootMachineName, BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        if (rootMachineName == null || rootMachineName.isBlank()) {
+            return List.of();
+        }
+        Map<String, List<String>> deps = combinedDependencyMap(seesGraph, importsGraph);
+        LinkedHashSet<String> reachable = new LinkedHashSet<>();
+        ArrayDeque<String> stack = new ArrayDeque<>();
+        stack.push(rootMachineName.trim());
+        while (!stack.isEmpty()) {
+            String current = stack.pop();
+            for (String dep : deps.getOrDefault(current, List.of())) {
+                if (dep == null || dep.isBlank()) {
+                    continue;
+                }
+                String d = dep.trim();
+                if (reachable.add(d)) {
+                    stack.push(d);
+                }
+            }
+        }
+        return topologicalSortDependencies(reachable, deps);
+    }
+
+    /**
+     * {@code include "Dep.acsl";} apenas na raiz do grafo: fecho transitivo de {@code SEES}/{@code
+     * IMPORTS} em ordem topológica. Máquinas só dependentes não repetem includes.
+     */
+    public static String formatTransitiveDependencyIncludeBlock(
+            String rootMachineName,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            Path bxmlDirectory) {
+        return formatMachineAcslIncludeBlock(
+                transitiveDependencyMachineNames(rootMachineName, seesGraph, importsGraph),
+                bxmlDirectory);
+    }
+
+    private static void mergeDependencyList(
+            Map<String, List<String>> merged, String viewer, List<String> deps) {
+        if (viewer == null || viewer.isBlank() || deps == null || deps.isEmpty()) {
+            return;
+        }
+        LinkedHashSet<String> names = new LinkedHashSet<>(merged.getOrDefault(viewer.trim(), List.of()));
+        for (String dep : deps) {
+            if (dep != null && !dep.isBlank()) {
+                names.add(dep.trim());
+            }
+        }
+        merged.put(viewer.trim(), List.copyOf(names));
+    }
+
+    private static List<String> topologicalSortDependencies(
+            Set<String> nodes, Map<String, List<String>> viewerToDeps) {
+        if (nodes == null || nodes.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Integer> inDegree = new LinkedHashMap<>();
+        Map<String, List<String>> adj = new LinkedHashMap<>();
+        for (String n : nodes) {
+            inDegree.put(n, 0);
+        }
+        for (String m : nodes) {
+            for (String d : viewerToDeps.getOrDefault(m, List.of())) {
+                if (d == null || d.isBlank() || !nodes.contains(d.trim())) {
+                    continue;
+                }
+                String dep = d.trim();
+                adj.computeIfAbsent(dep, k -> new ArrayList<>()).add(m);
+                inDegree.merge(m, 1, Integer::sum);
+            }
+        }
+        ArrayDeque<String> ready = new ArrayDeque<>();
+        for (Map.Entry<String, Integer> e : inDegree.entrySet()) {
+            if (e.getValue() == 0) {
+                ready.add(e.getKey());
+            }
+        }
+        List<String> order = new ArrayList<>();
+        while (!ready.isEmpty()) {
+            String n = ready.removeFirst();
+            order.add(n);
+            for (String dependent : adj.getOrDefault(n, List.of())) {
+                int next = inDegree.merge(dependent, -1, Integer::sum);
+                if (next == 0) {
+                    ready.addLast(dependent);
+                }
+            }
+        }
+        if (order.size() != nodes.size()) {
+            LinkedHashSet<String> fallback = new LinkedHashSet<>(order);
+            for (String n : nodes) {
+                fallback.add(n);
+            }
+            return List.copyOf(fallback);
+        }
+        return List.copyOf(order);
+    }
+
+    private static String formatMachineAcslIncludeBlock(
+            List<String> machineNames, Path bxmlDirectory) {
+        if (machineNames == null || machineNames.isEmpty()) {
             return "";
         }
         StringBuilder sb = new StringBuilder();
-        for (String seen : seenNames) {
+        for (String name : machineNames) {
             if (bxmlDirectory == null) {
-                sb.append("include \"").append(seen).append(".acsl\";\n");
+                sb.append("include \"").append(name).append(".acsl\";\n");
                 continue;
             }
-            Path bxml = bxmlDirectory.resolve(seen + ".bxml");
+            Path bxml = bxmlDirectory.resolve(name + ".bxml");
             if (!Files.isRegularFile(bxml)) {
                 continue;
             }
             try {
-                Element seenEl = parseMachineElement(bxml);
-                if (!machineGeneratesOwnAcslFile(seenEl)) {
+                Element depEl = parseMachineElement(bxml);
+                if (!machineGeneratesOwnAcslFile(depEl)) {
                     continue;
                 }
             } catch (Exception ignored) {
                 continue;
             }
-            sb.append("include \"").append(seen).append(".acsl\";\n");
+            sb.append("include \"").append(name).append(".acsl\";\n");
         }
         if (sb.isEmpty()) {
             return "";
@@ -280,10 +472,33 @@ public final class BxmlSetsTranslator {
      */
     public static String collectSeesMachinesTextForIncludeScan(
             Element viewerMachineEl, Path bxmlDirectory, Path acslDirectory) {
+        return collectMachinesTextForIncludeScan(
+                listReferencedMachineNames(viewerMachineEl), bxmlDirectory, acslDirectory);
+    }
+
+    /**
+     * Texto das máquinas em {@code IMPORTS} para deteção de includes da {@code B2ACSLLib}.
+     */
+    public static String collectImportedMachinesTextForIncludeScan(
+            Element rootMachineEl,
+            List<Element> mergedMachineElements,
+            Path bxmlDirectory,
+            Path acslDirectory) {
+        return collectMachinesTextForIncludeScan(
+                listImportedMachineNamesFromChain(rootMachineEl, mergedMachineElements),
+                bxmlDirectory,
+                acslDirectory);
+    }
+
+    private static String collectMachinesTextForIncludeScan(
+            List<String> machineNames, Path bxmlDirectory, Path acslDirectory) {
         StringBuilder sb = new StringBuilder();
-        for (String seen : listReferencedMachineNames(viewerMachineEl)) {
+        if (machineNames == null) {
+            return "";
+        }
+        for (String name : machineNames) {
             if (acslDirectory != null) {
-                Path acsl = acslDirectory.resolve(seen + ".acsl");
+                Path acsl = acslDirectory.resolve(name + ".acsl");
                 if (Files.isRegularFile(acsl)) {
                     try {
                         sb.append(
@@ -297,7 +512,7 @@ public final class BxmlSetsTranslator {
                 }
             }
             if (bxmlDirectory != null) {
-                Path bxml = bxmlDirectory.resolve(seen + ".bxml");
+                Path bxml = bxmlDirectory.resolve(name + ".bxml");
                 if (Files.isRegularFile(bxml)) {
                     try {
                         sb.append(
@@ -318,18 +533,38 @@ public final class BxmlSetsTranslator {
      */
     public static List<String> collectLibIncludePathsFromSeenMachines(
             Element viewerMachineEl, Path bxmlDirectory, Path acslDirectory) {
+        return collectLibIncludePathsFromMachines(
+                listReferencedMachineNames(viewerMachineEl), acslDirectory);
+    }
+
+    /**
+     * Includes da {@code B2ACSLLib} nos preâmbulos dos {@code .acsl} das máquinas importadas.
+     */
+    public static List<String> collectLibIncludePathsFromImportedMachines(
+            Element rootMachineEl,
+            List<Element> mergedMachineElements,
+            Path bxmlDirectory,
+            Path acslDirectory) {
+        return collectLibIncludePathsFromMachines(
+                listImportedMachineNamesFromChain(rootMachineEl, mergedMachineElements),
+                acslDirectory);
+    }
+
+    private static List<String> collectLibIncludePathsFromMachines(
+            List<String> machineNames, Path acslDirectory) {
         LinkedHashSet<String> merged = new LinkedHashSet<>();
-        for (String seen : listReferencedMachineNames(viewerMachineEl)) {
-            if (acslDirectory != null) {
-                Path acsl = acslDirectory.resolve(seen + ".acsl");
-                if (Files.isRegularFile(acsl)) {
-                    try {
-                        merged.addAll(
-                                AcslLibIncludes.parseLibIncludeRelativePathsFromPreamble(
-                                        Files.readString(acsl)));
-                    } catch (Exception ignored) {
-                        // ignora
-                    }
+        if (machineNames == null || acslDirectory == null) {
+            return List.copyOf(merged);
+        }
+        for (String name : machineNames) {
+            Path acsl = acslDirectory.resolve(name + ".acsl");
+            if (Files.isRegularFile(acsl)) {
+                try {
+                    merged.addAll(
+                            AcslLibIncludes.parseLibIncludeRelativePathsFromPreamble(
+                                    Files.readString(acsl)));
+                } catch (Exception ignored) {
+                    // ignora
                 }
             }
         }

@@ -21,6 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.example.bxml.BxmlGluingNormalizer;
+import com.example.bxml.BxmlImportsGraph;
 import com.example.bxml.BxmlSeesGraph;
 import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.model.Machine;
@@ -117,10 +118,13 @@ public final class B2ACSLPipeline {
         Map<String, String> invariantGluingSubstitutions = BxmlGluingNormalizer.collectFromAllBxmlFiles(bxmlFiles);
 
         BxmlSeesGraph seesGraph = BxmlSeesGraph.fromBxmlDirectory(bdp);
-        logSeesRelations(seesGraph);
 
         // Mapa máquina -> nome em <Abstraction> (refinamento / implementação)
         Map<String, String> abstractionParentByMachine = buildAbstractionParentMap(bxmlFiles);
+        BxmlImportsGraph importsGraph =
+                BxmlImportsGraph.fromBxmlDirectory(bdp, abstractionParentByMachine);
+        logSeesRelations(seesGraph);
+        logImportsRelations(importsGraph);
         // Ficheiros BXML de refinamento/implementação a fundir na máquina abstrata raiz
         Map<String, List<Path>> mergePathsByRootAbstract = new HashMap<>();
         for (Path f : bxmlFiles) {
@@ -158,8 +162,10 @@ public final class B2ACSLPipeline {
         try {
             List<Path> acslFiles = new ArrayList<>();
             Set<String> abstractMachineNames = new LinkedHashSet<>();
+            Set<String> dependencyOnlyMachineNames =
+                    dependencyOnlyMachineNames(seesGraph, importsGraph);
             List<MachineFile> machinesForAcsl =
-                    orderMachinesForAcslGeneration(machines, seesGraph);
+                    orderMachinesForAcslGeneration(machines, dependencyOnlyMachineNames);
             for (MachineFile mf : machinesForAcsl) {
                 Element machineRoot = AcslGenerator.parseMachineElement(mf.bxmlPath());
                 if (AcslGenerator.getAbstractionReferenceName(machineRoot).isPresent()) {
@@ -176,11 +182,13 @@ public final class B2ACSLPipeline {
                                 acslDir,
                                 mergePaths,
                                 invariantGluingSubstitutions,
-                                seesGraph.seenOnlyMachineNames());
+                                dependencyOnlyMachineNames,
+                                seesGraph,
+                                importsGraph);
                 acsl.ifPresent(acslFiles::add);
             }
             List<String> topLevelImportMachines =
-                    seesGraph.topLevelImportMachineNames(abstractMachineNames);
+                    topLevelImportMachineNames(abstractMachineNames, dependencyOnlyMachineNames);
             List<Path> topLevelAcslFiles =
                     filterAcslFilesByMachineNames(acslFiles, topLevelImportMachines);
             if (!topLevelImportMachines.isEmpty()) {
@@ -251,6 +259,7 @@ public final class B2ACSLPipeline {
                                 acslFiles,
                                 acslDir,
                                 seesGraph,
+                                importsGraph,
                                 cFiles,
                                 cDir,
                                 specificationUsedTypes,
@@ -382,17 +391,17 @@ public final class B2ACSLPipeline {
     }
 
     /**
-     * Gera primeiro os {@code .acsl} das máquinas só vistas em {@code SEES}, para a máquina que vê
-     * poder fundir os respetivos {@code include} da biblioteca.
+     * Gera primeiro os {@code .acsl} das máquinas só vistas em {@code SEES} ou importadas em {@code
+     * IMPORTS}, para a máquina que vê/importa poder fundir os respetivos {@code include} da biblioteca.
      */
     private static List<MachineFile> orderMachinesForAcslGeneration(
-            List<MachineFile> machines, BxmlSeesGraph seesGraph) {
+            List<MachineFile> machines, Set<String> dependencyOnlyMachineNames) {
         if (machines == null || machines.isEmpty()) {
             return List.of();
         }
-        Set<String> seenOnly =
-                seesGraph == null ? Set.of() : seesGraph.seenOnlyMachineNames();
-        List<MachineFile> seenFirst = new ArrayList<>();
+        Set<String> dependencyOnly =
+                dependencyOnlyMachineNames == null ? Set.of() : dependencyOnlyMachineNames;
+        List<MachineFile> dependencyFirst = new ArrayList<>();
         List<MachineFile> rest = new ArrayList<>();
         List<MachineFile> refinements = new ArrayList<>();
         for (MachineFile mf : machines) {
@@ -403,8 +412,8 @@ public final class B2ACSLPipeline {
                     continue;
                 }
                 String name = mf.machine().getMachineName();
-                if (seenOnly.contains(name)) {
-                    seenFirst.add(mf);
+                if (dependencyOnly.contains(name)) {
+                    dependencyFirst.add(mf);
                 } else {
                     rest.add(mf);
                 }
@@ -412,11 +421,44 @@ public final class B2ACSLPipeline {
                 rest.add(mf);
             }
         }
-        List<MachineFile> ordered = new ArrayList<>(seenFirst.size() + rest.size() + refinements.size());
-        ordered.addAll(seenFirst);
+        List<MachineFile> ordered =
+                new ArrayList<>(dependencyFirst.size() + rest.size() + refinements.size());
+        ordered.addAll(dependencyFirst);
         ordered.addAll(rest);
         ordered.addAll(refinements);
         return ordered;
+    }
+
+    private static Set<String> dependencyOnlyMachineNames(
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        if (seesGraph != null) {
+            names.addAll(seesGraph.seenOnlyMachineNames());
+        }
+        if (importsGraph != null) {
+            names.addAll(importsGraph.importedOnlyMachineNames());
+        }
+        return Set.copyOf(names);
+    }
+
+    private static List<String> topLevelImportMachineNames(
+            Set<String> abstractMachineNames, Set<String> dependencyOnlyMachineNames) {
+        if (abstractMachineNames == null || abstractMachineNames.isEmpty()) {
+            return List.of();
+        }
+        Set<String> dependencyOnly =
+                dependencyOnlyMachineNames == null ? Set.of() : dependencyOnlyMachineNames;
+        List<String> out = new ArrayList<>();
+        for (String name : abstractMachineNames) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            String n = name.trim();
+            if (!dependencyOnly.contains(n)) {
+                out.add(n);
+            }
+        }
+        return List.copyOf(out);
     }
 
     private static void logSeesRelations(BxmlSeesGraph seesGraph) {
@@ -425,6 +467,15 @@ public final class B2ACSLPipeline {
         }
         for (BxmlSeesGraph.SeesRelation r : seesGraph.relations()) {
             System.out.println("[B2ACSL] SEES: " + r.viewer() + " → " + r.seen());
+        }
+    }
+
+    private static void logImportsRelations(BxmlImportsGraph importsGraph) {
+        if (importsGraph == null) {
+            return;
+        }
+        for (BxmlImportsGraph.ImportsRelation r : importsGraph.relations()) {
+            System.out.println("[B2ACSL] IMPORTS: " + r.importer() + " → " + r.imported());
         }
     }
 
@@ -472,6 +523,7 @@ public final class B2ACSLPipeline {
             List<Path> cFiles,
             Path acslDir,
             BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
             List<Path> topLevelAcslFiles,
             List<Path> allAcslFiles)
             throws IOException {
@@ -482,26 +534,32 @@ public final class B2ACSLPipeline {
         for (Path cFile : cFiles) {
             ordered.addAll(
                     resolveAcslImportForCFile(
-                            cFile, acslDir, seesGraph, topLevelAcslFiles, allAcslFiles));
+                            cFile,
+                            acslDir,
+                            seesGraph,
+                            importsGraph,
+                            topLevelAcslFiles,
+                            allAcslFiles));
         }
         return List.copyOf(ordered);
     }
 
     /**
      * {@code .acsl} para {@code -acsl-import}: o da máquina do {@code .c}, se existir; senão raízes
-     * SEES ({@code topLevelAcslFiles}).
+     * SEES/IMPORTS ({@code topLevelAcslFiles}).
      */
     private static List<Path> resolveAcslImportForCFile(
             Path cFile,
             Path acslDir,
             BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
             List<Path> topLevelAcslFiles,
             List<Path> allAcslFiles)
             throws IOException {
         String machine = abstractMachineNameFromCFile(cFile);
         Path own = acslDir.resolve(machine + ".acsl");
         if (Files.isRegularFile(own)) {
-            if (seesGraph != null && seesGraph.isReferencedBySees(machine)) {
+            if (isDependencyOnlyMachine(machine, seesGraph, importsGraph)) {
                 Optional<Path> libSidecar =
                         AcslGenerator.writeLibIncludesSidecarForSeenMachine(machine, acslDir);
                 if (libSidecar.isPresent()) {
@@ -516,11 +574,18 @@ public final class B2ACSLPipeline {
         return allAcslFiles == null ? List.of() : allAcslFiles;
     }
 
+    private static boolean isDependencyOnlyMachine(
+            String machine, BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        return (seesGraph != null && seesGraph.isReferencedBySees(machine))
+                || (importsGraph != null && importsGraph.isReferencedByImports(machine));
+    }
+
     private static int runFramaC(
             List<Path> topLevelAcslFiles,
             List<Path> allAcslFiles,
             Path acslDir,
             BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
             List<Path> cFiles,
             Path cDir,
             List<String> specificationUsedTypes,
@@ -552,7 +617,12 @@ public final class B2ACSLPipeline {
 
         List<Path> acslImportFiles =
                 resolveAcslImportForAllCFiles(
-                        cFiles, acslDir, seesGraph, topLevelAcslFiles, allAcslFiles);
+                        cFiles,
+                        acslDir,
+                        seesGraph,
+                        importsGraph,
+                        topLevelAcslFiles,
+                        allAcslFiles);
         if (acslImportFiles.isEmpty()) {
             System.err.println("[B2ACSL] Nenhum .acsl para importar.");
             return 4;

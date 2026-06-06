@@ -29,6 +29,8 @@ import com.example.bxml.BxmlInvariantTranslator;
 import com.example.bxml.BxmlMachineVariables;
 import com.example.bxml.BxmlOperationsTranslator;
 import com.example.bxml.BxmlOperationsTranslator.OperationAcsl;
+import com.example.bxml.BxmlImportsGraph;
+import com.example.bxml.BxmlSeesGraph;
 import com.example.bxml.BxmlSetsTranslator;
 import com.example.bxml.BxmlTranslateContext;
 import com.example.bxml.LambdaFunctionRegistry;
@@ -53,8 +55,10 @@ import com.example.model.Machine;
  * {@code axiomatic Nome_properties}; {@code Values} (implementações) → {@code axiomatic Nome_values}
  * ({@link BxmlConstantsAndProperties}); em seguida
  * {@code include "connection.acsl"} se existir refinamento fundido na abstração ({@link BxmlConnectionAcsl},
- * só elo abstração→refinamento); {@code include "MaquinaVista.acsl"} para cada máquina em {@code <Sees>}
- * ({@link BxmlSetsTranslator#formatSeesIncludeBlock}).
+ * só elo abstração→refinamento); na raiz de importação Frama-C ({@code SEES}/{@code IMPORTS}), um único
+ * bloco {@code include "Dep.acsl"} com o fecho transitivo em ordem topológica
+ * ({@link BxmlSetsTranslator#formatTransitiveDependencyIncludeBlock}); máquinas só dependentes não
+ * repetem includes.
  *
  * <p>Variáveis: um bloco {@code axiomatic NomeMaquina_variables} por máquina (abstrata e cada
  * refinamento/implementação fundido), tipos inferidos quando possível ({@link BxmlMachineVariables});
@@ -115,9 +119,9 @@ public final class AcslGenerator {
     }
 
     /**
-     * @param seenOnlyMachineNames máquinas só referenciadas em {@code SEES} de outra (ex.
-     *     {@code Airlock_pressure_bs}); o {@code .acsl} gerado não repete includes da
-     *     {@code B2ACSLLib} — ficam na máquina que vê.
+     * @param seenOnlyMachineNames máquinas só referenciadas em {@code SEES} ou {@code IMPORTS} de outra
+     *     (ex. {@code Airlock_pressure_bs}); o {@code .acsl} gerado não repete includes da
+     *     {@code B2ACSLLib} — ficam na máquina que vê/importa.
      */
     public static Optional<Path> generateAcsl(
             Machine machine,
@@ -126,6 +130,31 @@ public final class AcslGenerator {
             List<Path> mergeBxmlPathsFromDescendants,
             Map<String, String> gluingSubstitutionsFromInvariants,
             Set<String> seenOnlyMachineNames)
+            throws Exception {
+        return generateAcsl(
+                machine,
+                bxmlPath,
+                outputDir,
+                mergeBxmlPathsFromDescendants,
+                gluingSubstitutionsFromInvariants,
+                seenOnlyMachineNames,
+                null,
+                null);
+    }
+
+    /**
+     * @param seesGraph grafo {@code SEES} do projeto (pode ser {@code null})
+     * @param importsGraph grafo {@code IMPORTS} do projeto (pode ser {@code null})
+     */
+    public static Optional<Path> generateAcsl(
+            Machine machine,
+            Path bxmlPath,
+            Path outputDir,
+            List<Path> mergeBxmlPathsFromDescendants,
+            Map<String, String> gluingSubstitutionsFromInvariants,
+            Set<String> seenOnlyMachineNames,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph)
             throws Exception {
         Document doc = parseXml(bxmlPath);
         Element machineEl = doc.getDocumentElement();
@@ -167,7 +196,8 @@ public final class AcslGenerator {
                         machineEl, sharedComprehensions, gluing)
                         .withLambdaRegistry(new LambdaFunctionRegistry())
                         .withEnumRenames(
-                                BxmlSetsTranslator.buildEnumRenamesWithSees(machineEl, bxmlDirectory))
+                                BxmlSetsTranslator.buildEnumRenamesWithSees(
+                                        machineEl, mergedMachineElements, bxmlDirectory))
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(machineEl));
 
@@ -394,28 +424,44 @@ public final class AcslGenerator {
         String seesMachinesScan =
                 BxmlSetsTranslator.collectSeesMachinesTextForIncludeScan(
                         machineEl, bxmlDirectory, outputDir);
+        String importsMachinesScan =
+                BxmlSetsTranslator.collectImportedMachinesTextForIncludeScan(
+                        machineEl, mergedMachineElements, bxmlDirectory, outputDir);
         String combinedExtraScan =
-                joinNonBlank(extraLibSymbolScan, seesMachinesScan);
-        List<String> seenLibIncludePaths =
+                joinNonBlank(joinNonBlank(extraLibSymbolScan, seesMachinesScan), importsMachinesScan);
+        List<String> dependencyLibIncludePaths = new ArrayList<>();
+        dependencyLibIncludePaths.addAll(
                 BxmlSetsTranslator.collectLibIncludePathsFromSeenMachines(
-                        machineEl, bxmlDirectory, outputDir);
+                        machineEl, bxmlDirectory, outputDir));
+        dependencyLibIncludePaths.addAll(
+                BxmlSetsTranslator.collectLibIncludePathsFromImportedMachines(
+                        machineEl, mergedMachineElements, bxmlDirectory, outputDir));
         String libIncludes =
                 AcslLibIncludes.formatIncludeBlock(
-                        bodyForLibScan, combinedExtraScan, seenLibIncludePaths);
-        String seesIncludes = BxmlSetsTranslator.formatSeesIncludeBlock(machineEl, bxmlDirectory);
+                        bodyForLibScan, combinedExtraScan, dependencyLibIncludePaths);
+        String machineDependencyIncludes;
+        if (seesGraph != null || importsGraph != null) {
+            machineDependencyIncludes =
+                    omitLibIncludesFromPreamble
+                            ? ""
+                            : BxmlSetsTranslator.formatTransitiveDependencyIncludeBlock(
+                                    baseName, seesGraph, importsGraph, bxmlDirectory);
+        } else {
+            String seesIncludes =
+                    BxmlSetsTranslator.formatSeesIncludeBlock(machineEl, bxmlDirectory);
+            String importsIncludes =
+                    BxmlSetsTranslator.formatImportsIncludeBlock(
+                            machineEl, mergedMachineElements, bxmlDirectory);
+            StringBuilder legacy = new StringBuilder();
+            appendAcslMachineIncludes(legacy, seesIncludes);
+            appendAcslMachineIncludes(legacy, importsIncludes);
+            machineDependencyIncludes = legacy.toString();
+        }
         StringBuilder preambleIncludes = new StringBuilder();
         if (!omitLibIncludesFromPreamble && !libIncludes.isEmpty()) {
             preambleIncludes.append(libIncludes);
         }
-        if (!seesIncludes.isEmpty()) {
-            if (!preambleIncludes.isEmpty() && !preambleIncludes.toString().endsWith("\n\n")) {
-                if (!preambleIncludes.toString().endsWith("\n")) {
-                    preambleIncludes.append("\n");
-                }
-                preambleIncludes.append("\n");
-            }
-            preambleIncludes.append(seesIncludes);
-        }
+        appendAcslMachineIncludes(preambleIncludes, machineDependencyIncludes);
         if (!preambleIncludes.isEmpty()) {
             sb.insert(headerLen, preambleIncludes);
         }
@@ -543,6 +589,19 @@ public final class AcslGenerator {
                 init.assignsTargets(),
                 init.includeGhostBehaviorAssert(),
                 init.dummyGhostEnsureVarNames());
+    }
+
+    private static void appendAcslMachineIncludes(StringBuilder preamble, String includeBlock) {
+        if (includeBlock == null || includeBlock.isEmpty()) {
+            return;
+        }
+        if (!preamble.isEmpty() && !preamble.toString().endsWith("\n\n")) {
+            if (!preamble.toString().endsWith("\n")) {
+                preamble.append("\n");
+            }
+            preamble.append("\n");
+        }
+        preamble.append(includeBlock);
     }
 
     private static String joinNonBlank(String a, String b) {

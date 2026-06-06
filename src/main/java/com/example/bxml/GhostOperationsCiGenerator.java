@@ -244,7 +244,7 @@ public final class GhostOperationsCiGenerator {
                 BxmlTranslateContext.forMachine(abstractMachineEl, gluing)
                         .withEnumRenames(
                                 BxmlSetsTranslator.buildEnumRenamesWithSees(
-                                        abstractMachineEl, bxmlDirectory))
+                                        abstractMachineEl, mergedMachineElements, bxmlDirectory))
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
         List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
@@ -269,7 +269,8 @@ public final class GhostOperationsCiGenerator {
         sb.append("\n");
 
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
-                BxmlSetsTranslator.listEnumeratedSetsWithSees(abstractMachineEl, bxmlDirectory);
+                BxmlSetsTranslator.listEnumeratedSetsWithSees(
+                        abstractMachineEl, mergedMachineElements, bxmlDirectory);
         List<GhostOp> ghostOps =
                 buildGhostOperations(
                         abstractMachineEl,
