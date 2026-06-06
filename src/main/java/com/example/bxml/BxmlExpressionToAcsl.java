@@ -433,6 +433,7 @@ public final class BxmlExpressionToAcsl {
             case "size" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
             case "imax" -> "set_max(" + a + ")";
+            case "imin" -> "set_min(" + a + ")";
             case "~" -> "relation_inverse(" + a + ")";
             default -> opTrim + "(" + a + ")";
         };

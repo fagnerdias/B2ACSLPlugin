@@ -98,6 +98,7 @@ public final class AcslLibIncludes {
             "set_functions/inclusion.acsl",
             "set_functions/pow.acsl",            
             "set_functions/equals.acsl",
+            "set_functions/min.acsl",
             "set_functions/max.acsl",
             "set_functions/cartesian_product.acsl",
             "set_functions/disjoint.acsl",
