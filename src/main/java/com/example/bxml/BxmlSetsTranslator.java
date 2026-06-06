@@ -490,6 +490,35 @@ public final class BxmlSetsTranslator {
                 acslDirectory);
     }
 
+    /**
+     * Texto do fecho transitivo {@code SEES}/{@code IMPORTS} para deteção de includes da
+     * {@code B2ACSLLib} na raiz de importação.
+     */
+    public static String collectTransitiveDependencyMachinesTextForIncludeScan(
+            String rootMachineName,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            Path bxmlDirectory,
+            Path acslDirectory) {
+        return collectMachinesTextForIncludeScan(
+                transitiveDependencyMachineNames(rootMachineName, seesGraph, importsGraph),
+                bxmlDirectory,
+                acslDirectory);
+    }
+
+    /**
+     * Includes da {@code B2ACSLLib} já emitidos nos preâmbulos do fecho transitivo de dependências.
+     */
+    public static List<String> collectLibIncludePathsFromTransitiveDependencies(
+            String rootMachineName,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            Path acslDirectory) {
+        return collectLibIncludePathsFromMachines(
+                transitiveDependencyMachineNames(rootMachineName, seesGraph, importsGraph),
+                acslDirectory);
+    }
+
     private static String collectMachinesTextForIncludeScan(
             List<String> machineNames, Path bxmlDirectory, Path acslDirectory) {
         StringBuilder sb = new StringBuilder();

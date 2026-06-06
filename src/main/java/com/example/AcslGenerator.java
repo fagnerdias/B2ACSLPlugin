@@ -421,21 +421,34 @@ public final class AcslGenerator {
         String extraLibSymbolScan =
                 libScanRemovedBodies.length() == 0 ? null : libScanRemovedBodies.toString();
         String bodyForLibScan = sb.substring(headerLen);
-        String seesMachinesScan =
-                BxmlSetsTranslator.collectSeesMachinesTextForIncludeScan(
-                        machineEl, bxmlDirectory, outputDir);
-        String importsMachinesScan =
-                BxmlSetsTranslator.collectImportedMachinesTextForIncludeScan(
-                        machineEl, mergedMachineElements, bxmlDirectory, outputDir);
+        String dependencyMachinesScan;
+        List<String> dependencyLibIncludePaths;
+        if (seesGraph != null || importsGraph != null) {
+            dependencyMachinesScan =
+                    BxmlSetsTranslator.collectTransitiveDependencyMachinesTextForIncludeScan(
+                            baseName, seesGraph, importsGraph, bxmlDirectory, outputDir);
+            dependencyLibIncludePaths =
+                    new ArrayList<>(
+                            BxmlSetsTranslator.collectLibIncludePathsFromTransitiveDependencies(
+                                    baseName, seesGraph, importsGraph, outputDir));
+        } else {
+            String seesMachinesScan =
+                    BxmlSetsTranslator.collectSeesMachinesTextForIncludeScan(
+                            machineEl, bxmlDirectory, outputDir);
+            String importsMachinesScan =
+                    BxmlSetsTranslator.collectImportedMachinesTextForIncludeScan(
+                            machineEl, mergedMachineElements, bxmlDirectory, outputDir);
+            dependencyMachinesScan = joinNonBlank(seesMachinesScan, importsMachinesScan);
+            dependencyLibIncludePaths = new ArrayList<>();
+            dependencyLibIncludePaths.addAll(
+                    BxmlSetsTranslator.collectLibIncludePathsFromSeenMachines(
+                            machineEl, bxmlDirectory, outputDir));
+            dependencyLibIncludePaths.addAll(
+                    BxmlSetsTranslator.collectLibIncludePathsFromImportedMachines(
+                            machineEl, mergedMachineElements, bxmlDirectory, outputDir));
+        }
         String combinedExtraScan =
-                joinNonBlank(joinNonBlank(extraLibSymbolScan, seesMachinesScan), importsMachinesScan);
-        List<String> dependencyLibIncludePaths = new ArrayList<>();
-        dependencyLibIncludePaths.addAll(
-                BxmlSetsTranslator.collectLibIncludePathsFromSeenMachines(
-                        machineEl, bxmlDirectory, outputDir));
-        dependencyLibIncludePaths.addAll(
-                BxmlSetsTranslator.collectLibIncludePathsFromImportedMachines(
-                        machineEl, mergedMachineElements, bxmlDirectory, outputDir));
+                joinNonBlank(extraLibSymbolScan, dependencyMachinesScan);
         String libIncludes =
                 AcslLibIncludes.formatIncludeBlock(
                         bodyForLibScan, combinedExtraScan, dependencyLibIncludePaths);
@@ -471,7 +484,8 @@ public final class AcslGenerator {
         }
         Files.writeString(acslFile, fullAcsl);
         if (!omitLibIncludesFromPreamble) {
-            AcslLibIncludes.copyReferencedLibraryFiles(fullAcsl, acslFile, extraLibSymbolScan);
+            AcslLibIncludes.copyReferencedLibraryFiles(
+                    fullAcsl, acslFile, combinedExtraScan, dependencyLibIncludePaths);
         }
         return Optional.of(acslFile);
     }

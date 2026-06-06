@@ -160,6 +160,7 @@ public final class B2ACSLPipeline {
                 : Files.createTempDirectory("b2acsl_acsl_");
         boolean keepFiles = KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank();
         try {
+            AcslLibIncludes.resetLibraryBundleUnderOutput(acslDir);
             List<Path> acslFiles = new ArrayList<>();
             Set<String> abstractMachineNames = new LinkedHashSet<>();
             Set<String> dependencyOnlyMachineNames =
