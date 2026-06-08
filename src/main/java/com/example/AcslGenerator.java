@@ -258,6 +258,22 @@ public final class AcslGenerator {
         InitialisationAcsl initBare =
                 BxmlInitialisationTranslator.translate(
                         machineEl, implementationAssignTargets, ctx);
+        // Propaga ensures e assigns das máquinas IMPORTADAS (chamadas na INITIALISATION)
+        if (importsGraph != null && isAbstraction) {
+            List<String> importedEnsures = new ArrayList<>();
+            List<String> importedAssigns = new ArrayList<>();
+            for (String imp : importsGraph.importedBy(baseName)) {
+                collectImportedInitialisationContract(imp, bxmlDirectory, importedEnsures, importedAssigns);
+            }
+            if (!importedEnsures.isEmpty() || !importedAssigns.isEmpty()) {
+                importedEnsures.addAll(initBare.ensures());
+                List<String> mergedAssigns = new ArrayList<>(importedAssigns);
+                mergedAssigns.addAll(initBare.assignsTargets());
+                initBare = new InitialisationAcsl(
+                        initBare.functionName(), importedEnsures, mergedAssigns,
+                        initBare.includeGhostBehaviorAssert(), initBare.dummyGhostEnsureVarNames());
+            }
+        }
         boolean initGhostAssert =
                 useGhostAbstraction
                         && GhostOperationsCiGenerator.initialisationAssignsAbstract(
@@ -697,5 +713,60 @@ public final class AcslGenerator {
             doc.getDocumentElement().normalize();
             return doc;
         }
+    }
+
+    /**
+     * Coleta os {@code ensures} e {@code assigns} da INITIALISATION de uma máquina importada,
+     * carregando seu BXML e a(s) implementação(ões) encontradas no mesmo diretório.
+     */
+    private static void collectImportedInitialisationContract(
+            String importedMachineName,
+            Path bxmlDirectory,
+            List<String> ensuresOut,
+            List<String> assignsOut) {
+        if (importedMachineName == null || importedMachineName.isBlank() || bxmlDirectory == null) {
+            return;
+        }
+        Path bxml = bxmlDirectory.resolve(importedMachineName.trim() + ".bxml");
+        if (!Files.isRegularFile(bxml)) {
+            return;
+        }
+        try {
+            Element importedEl = parseMachineElement(bxml);
+            List<Element> implEls = findImplementationElements(importedMachineName.trim(), bxmlDirectory);
+            BxmlTranslateContext importedCtx =
+                    BxmlTranslateContext.forMachine(importedEl)
+                            .withEnumRenames(
+                                    BxmlSetsTranslator.buildEnumRenamesWithSees(
+                                            importedEl, implEls, bxmlDirectory));
+            List<String> assignTargets =
+                    BxmlMachineVariables.listInitialisationAssignTargets(
+                            importedMachineName.trim(), importedEl, implEls, importedCtx);
+            InitialisationAcsl importedInit =
+                    BxmlInitialisationTranslator.translate(importedEl, assignTargets, importedCtx);
+            ensuresOut.addAll(importedInit.ensures());
+            // Adiciona ensures de invariante (ex. main_fuel_invariant)
+            ensuresOut.addAll(
+                    com.example.bxml.BxmlInvariantTranslator.listInvariantPredicateNames(
+                            importedEl, importedCtx));
+            assignsOut.addAll(importedInit.assignsTargets());
+        } catch (Exception ignored) {}
+    }
+
+    /** Encontra todos os BXMLs de implementação/refinamento que têm {@code machineName} como abstração. */
+    private static List<Element> findImplementationElements(String machineName, Path bxmlDirectory) {
+        List<Element> out = new ArrayList<>();
+        try (var stream = Files.list(bxmlDirectory)) {
+            for (Path p : stream.filter(f -> f.getFileName().toString().endsWith(".bxml"))
+                    .sorted().toList()) {
+                try {
+                    Element el = parseMachineElement(p);
+                    if (getAbstractionReferenceName(el).map(machineName::equals).orElse(false)) {
+                        out.add(el);
+                    }
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
+        return out;
     }
 }
