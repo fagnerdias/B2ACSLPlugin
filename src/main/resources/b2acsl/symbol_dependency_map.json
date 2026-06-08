@@ -2,7 +2,7 @@
   "_meta": {
     "generator": "scripts/generate_acsl_symbol_dependency_map.py",
     "root": "src/main/resources/lib/B2ACSLLib",
-    "symbol_count": 52
+    "symbol_count": 53
   },
   "symbols": [
     "apply",
@@ -53,6 +53,7 @@
     "set_difference",
     "set_intersection",
     "set_max",
+    "set_min",
     "set_union",
     "singleton",
     "succ",
@@ -107,6 +108,7 @@
     "set_difference": "set_functions/difference.acsl",
     "set_intersection": "set_functions/intersection.acsl",
     "set_max": "set_functions/max.acsl",
+    "set_min": "set_functions/min.acsl",
     "set_union": "set_functions/union.acsl",
     "singleton": "set_functions/singleton.acsl",
     "succ": "set_axioms/NAT_succ_axioms.acsl",
@@ -259,6 +261,9 @@
     ],
     "set_max": [
       "set_functions/max.acsl"
+    ],
+    "set_min": [
+      "set_functions/min.acsl"
     ],
     "set_union": [
       "set_functions/union.acsl"
@@ -615,6 +620,15 @@
       "belongs"
     ],
     "set_max": [
+      "belongs",
+      "empty",
+      "equals",
+      "not_belongs",
+      "pair",
+      "set_union",
+      "singleton"
+    ],
+    "set_min": [
       "belongs",
       "empty",
       "equals",
@@ -1036,6 +1050,14 @@
       "set_functions/singleton.acsl",
       "set_functions/union.acsl"
     ],
+    "set_axioms/min_axioms.acsl": [
+      "set_functions/belongs.acsl",
+      "set_functions/empty.acsl",
+      "set_functions/min.acsl",
+      "set_functions/pair.acsl",
+      "set_functions/singleton.acsl",
+      "set_functions/union.acsl"
+    ],
     "set_axioms/singleton_axioms.acsl": [
       "set_functions/belongs.acsl",
       "set_functions/singleton.acsl"
@@ -1081,6 +1103,9 @@
     ],
     "set_functions/max.acsl": [
       "set_axioms/max_axioms.acsl"
+    ],
+    "set_functions/min.acsl": [
+      "set_axioms/min_axioms.acsl"
     ],
     "set_functions/pair.acsl": [
       "set_functions/singleton.acsl",
