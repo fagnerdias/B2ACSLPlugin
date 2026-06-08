@@ -205,7 +205,7 @@ public final class BxmlExpressionToAcsl {
             return "/* null */";
         }
         if (isIntervalBinaryExp(e) || "Quantified_Set".equals(e.getLocalName())) {
-            String n = ctx.comprehensions().referenceName(e);
+            String n = ctx.comprehensions().referenceName(ctx.machineName(), e);
             return n != null ? n : translate(e, ctx);
         }
         return translate(e, ctx);
@@ -349,6 +349,9 @@ public final class BxmlExpressionToAcsl {
                 // Valores enumerados: usar o nome prefixado (ex. switch__normal)
                 String renamed = ctx.enumValueRenames().get(idVal);
                 if (renamed != null) yield renamed;
+                // Conjuntos enumerados: usar o nome prefixado (ex. ctx__ALARM_STATUS)
+                String setRenamed = ctx.enumeratedSetRenames().get(idVal);
+                if (setRenamed != null) yield setRenamed;
                 // Parâmetros/variáveis de tipo enum C: cast (integer) para compatibilidade com Set<integer>
                 if (!ctx.enumeratedSetNames().isEmpty()) {
                     String tr = exp.getAttribute("typref");
@@ -379,7 +382,7 @@ public final class BxmlExpressionToAcsl {
      * Conjunto em compreensão {@code { x | P }} — referência a {@code set_comprehension_k} do bloco axiomatic.
      */
     static String translateQuantifiedSet(Element qs, BxmlTranslateContext ctx) {
-        String named = ctx.comprehensions().referenceName(qs);
+        String named = ctx.comprehensions().referenceName(ctx.machineName(), qs);
         if (named != null) {
             return named;
         }
@@ -480,7 +483,7 @@ public final class BxmlExpressionToAcsl {
             return "set_union(" + left + ", " + right + ")";
         }
         if ("..".equals(op == null ? "" : op.trim())) {
-            String named = ctx.comprehensions().referenceName(b);
+            String named = ctx.comprehensions().referenceName(ctx.machineName(), b);
             return named != null ? named : "/* interval .. */";
         }
         if (isSequenceAppendOp(op)) {

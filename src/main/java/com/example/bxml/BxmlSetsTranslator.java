@@ -77,6 +77,17 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Nome ACSL do conjunto enumerado, ex. {@code ctx_ALARM_STATUS}. Usa {@code _} (não {@code __}) para
+     * não colidir com tipos enum C gerados pelo B ({@code ctx__ALARM_STATUS}).
+     */
+    public static String enumeratedSetAcslName(String machineName, String setName) {
+        if (machineName == null || machineName.isBlank()) {
+            return setName;
+        }
+        return machineName.trim() + "_" + setName;
+    }
+
+    /**
      * Lista conjuntos com {@code <Enumerated_Values>} na ordem do BXML.
      */
     public static List<EnumeratedSetInfo> listEnumeratedSets(Element machineEl) {
@@ -294,6 +305,53 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Mapa B-name → ACSL-name para conjuntos enumerados da máquina (ex. {@code ALARM_STATUS} →
+     * {@code ctx__ALARM_STATUS}).
+     */
+    public static Map<String, String> buildEnumeratedSetRenames(Element machineEl) {
+        String machineName = machineEl.getAttribute("name");
+        if (machineName == null || machineName.isBlank()) {
+            return Map.of();
+        }
+        machineName = machineName.trim();
+        LinkedHashMap<String, String> renames = new LinkedHashMap<>();
+        for (EnumeratedSetInfo info : listEnumeratedSets(machineEl)) {
+            renames.put(info.setName(), enumeratedSetAcslName(machineName, info.setName()));
+        }
+        return renames;
+    }
+
+    /**
+     * Renomeação de conjuntos enumerados da máquina e das dependências {@code SEES}/{@code IMPORTS}.
+     * Dependências primeiro; a máquina atual sobrescreve colisões (ex. {@code entry_point} e {@code ctx}
+     * com o mesmo nome B).
+     */
+    public static Map<String, String> buildEnumeratedSetRenamesWithSees(
+            Element machineEl, Path bxmlDirectory) {
+        return buildEnumeratedSetRenamesWithSees(machineEl, List.of(), bxmlDirectory);
+    }
+
+    public static Map<String, String> buildEnumeratedSetRenamesWithSees(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory) {
+        LinkedHashMap<String, String> merged = new LinkedHashMap<>();
+        if (bxmlDirectory != null && Files.isDirectory(bxmlDirectory)) {
+            for (String dep : dependencyMachineNamesForTranslation(machineEl, mergedMachineElements)) {
+                Path p = bxmlDirectory.resolve(dep + ".bxml");
+                if (!Files.isRegularFile(p)) {
+                    continue;
+                }
+                try {
+                    merged.putAll(buildEnumeratedSetRenames(parseMachineElement(p)));
+                } catch (Exception ignored) {
+                    // ignora dependência inacessível
+                }
+            }
+        }
+        merged.putAll(buildEnumeratedSetRenames(machineEl));
+        return merged;
+    }
+
+    /**
      * Linhas {@code include "MaquinaVista.acsl";} para cada máquina em {@code <Sees>} que gera
      * ficheiro próprio (abstração / componente sem {@code <Abstraction>}).
      */
@@ -506,6 +564,16 @@ public final class BxmlSetsTranslator {
                 acslDirectory);
     }
 
+    /** Texto de uma máquina (ACSL gerado ou BXML) para varredura de símbolos da lib. */
+    public static String collectMachineTextForIncludeScan(
+            String machineName, Path bxmlDirectory, Path acslDirectory) {
+        if (machineName == null || machineName.isBlank()) {
+            return "";
+        }
+        return collectMachinesTextForIncludeScan(
+                List.of(machineName.trim()), bxmlDirectory, acslDirectory);
+    }
+
     /**
      * Includes da {@code B2ACSLLib} já emitidos nos preâmbulos do fecho transitivo de dependências.
      */
@@ -682,6 +750,30 @@ public final class BxmlSetsTranslator {
     }
 
     public static String formatSetsBlock(Element machineEl) {
+        return formatSetsBlock(machineEl, List.of());
+    }
+
+    /**
+     * Overload com dependências: para conjuntos enumerados herdados via SEES/IMPORTS, usa o prefixo
+     * C da máquina que define o conjunto (acessível globalmente no Frama-C) em vez do prefixo da
+     * máquina atual (presente em apenas um arquivo C).
+     */
+    public static String formatSetsBlock(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory) {
+        List<Element> depMachineEls = new ArrayList<>();
+        if (bxmlDirectory != null && Files.isDirectory(bxmlDirectory)) {
+            for (String dep : dependencyMachineNamesForTranslation(machineEl, mergedMachineElements)) {
+                Path p = bxmlDirectory.resolve(dep + ".bxml");
+                if (!Files.isRegularFile(p)) continue;
+                try {
+                    depMachineEls.add(parseMachineElement(p));
+                } catch (Exception ignored) {}
+            }
+        }
+        return formatSetsBlock(machineEl, depMachineEls);
+    }
+
+    public static String formatSetsBlock(Element machineEl, List<Element> depMachineEls) {
         Element setsEl = firstChildElement(machineEl, "Sets");
         if (setsEl == null) return "";
 
@@ -709,15 +801,22 @@ public final class BxmlSetsTranslator {
                 String name = idEl.getAttribute("value");
                 if (name != null && !name.isBlank()) {
                     setName = name.trim();
-                    logics.add("    logic Set<integer> " + setName + ";");
+                    String acslSetName = enumeratedSetAcslName(machineName, setName);
+                    logics.add("    logic Set<integer> " + acslSetName + ";");
                     break;
                 }
             }
 
-            // Valores enumerados → logic integer machineName__val + um único axioma combinado
+            // Valores enumerados — usa prefixo C do dono real do conjunto (dep que o define)
             if (setName != null) {
+                String acslSetName = enumeratedSetAcslName(machineName, setName);
                 Element enumEl = firstChildElement(setEl, "Enumerated_Values");
                 if (enumEl != null) {
+                    // Prefixo C: dependência que também define o mesmo conjunto (acessível globalmente
+                    // no Frama-C por estar em múltiplos .c), ou a própria máquina se não houver.
+                    String valueMachineName = findSetOwnerMachineName(setName, depMachineEls);
+                    if (valueMachineName == null) valueMachineName = machineName;
+
                     List<String> prefixedVals = new ArrayList<>();
                     NodeList enumChildren = enumEl.getChildNodes();
                     for (int j = 0; j < enumChildren.getLength(); j++) {
@@ -727,19 +826,17 @@ public final class BxmlSetsTranslator {
                         if (!"Id".equals(ev.getLocalName())) continue;
                         String val = ev.getAttribute("value");
                         if (val == null || val.isBlank()) continue;
-                        String prefixed = machineName + "__" + val.trim();
-                        prefixedVals.add(prefixed);
+                        prefixedVals.add(valueMachineName + "__" + val.trim());
                     }
                     if (!prefixedVals.isEmpty()) {
-                        // axiom SETNAME_values: belongs(v1, S) && ... && \forall integer x; belongs(x, S) ==> (x==v1 || ...)
                         StringBuilder ax = new StringBuilder();
-                        ax.append("    axiom ").append(setName).append("_values:\n");
+                        ax.append("    axiom ").append(acslSetName).append("_values:\n");
                         for (String pv : prefixedVals) {
-                            ax.append("        belongs(").append(pv).append(", ").append(setName).append(")\n");
+                            ax.append("        belongs(").append(pv).append(", ").append(acslSetName).append(")\n");
                             ax.append("        &&\n");
                         }
                         ax.append("        \\forall integer x;\n");
-                        ax.append("            belongs(x, ").append(setName).append(") ==>\n");
+                        ax.append("            belongs(x, ").append(acslSetName).append(") ==>\n");
                         ax.append("            (");
                         for (int k = 0; k < prefixedVals.size(); k++) {
                             if (k > 0) ax.append(" || ");
@@ -762,6 +859,17 @@ public final class BxmlSetsTranslator {
         }
         sb.append("}\n");
         return sb.toString();
+    }
+
+    private static String findSetOwnerMachineName(String setName, List<Element> depMachineEls) {
+        for (Element depEl : depMachineEls) {
+            for (EnumeratedSetInfo info : listEnumeratedSets(depEl)) {
+                if (setName.equals(info.setName())) {
+                    return info.machineName();
+                }
+            }
+        }
+        return null;
     }
 
     private static Element firstChildElement(Element parent, String localName) {

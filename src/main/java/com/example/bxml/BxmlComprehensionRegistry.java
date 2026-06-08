@@ -320,11 +320,30 @@ public final class BxmlComprehensionRegistry {
         return maxIndex();
     }
 
-    /** Nome ACSL do conjunto, ex. {@code set_comprehension_1} ({@code Quantified_Set} ou intervalo {@code ..}). */
-    public String referenceName(Element comprehensionElement) {
+    /**
+     * Nome ACSL do conjunto, ex. {@code main_fuel__set_comprehension_1} ({@code Quantified_Set} ou
+     * intervalo {@code ..}).
+     */
+    public static String comprehensionSetName(String machineName, int index) {
+        if (machineName == null || machineName.isBlank()) {
+            return "set_comprehension_" + index;
+        }
+        return machineName.trim() + "__set_comprehension_" + index;
+    }
+
+    private static String comprehensionAxiomName(String machineName, int index) {
+        if (machineName == null || machineName.isBlank()) {
+            return "set_comp_" + index + "_values";
+        }
+        return machineName.trim() + "__set_comp_" + index + "_values";
+    }
+
+    public String referenceName(String machineName, Element comprehensionElement) {
         Integer idx = elementToIndex.get(comprehensionElement);
-        if (idx == null) return null;
-        return "set_comprehension_" + idx;
+        if (idx == null) {
+            return null;
+        }
+        return comprehensionSetName(machineName, idx);
     }
 
     public int size() {
@@ -348,13 +367,10 @@ public final class BxmlComprehensionRegistry {
             BxmlTypeRegistry types = elementTypes.get(qs);
             if (types == null) continue;
             String setType = acslSetTypeForElement(qs, types);
-            logics.append("    logic ")
-                    .append(setType)
-                    .append(" set_comprehension_")
-                    .append(idx)
-                    .append(";\n");
+            String setName = comprehensionSetName(machineName, idx);
+            logics.append("    logic ").append(setType).append(" ").append(setName).append(";\n");
             if (axioms.length() > 0) axioms.append("\n");
-            appendComprehensionAxiom(axioms, qs, idx, types, translateCtx);
+            appendComprehensionAxiom(axioms, qs, idx, machineName, types, translateCtx);
         }
 
         String blockName = machineName + "_comprehension_sets";
@@ -412,10 +428,11 @@ public final class BxmlComprehensionRegistry {
             StringBuilder sb,
             Element qs,
             int index,
+            String machineName,
             BxmlTypeRegistry types,
             BxmlTranslateContext translateCtx) {
         if (BxmlExpressionToAcsl.isIntervalBinaryExp(qs)) {
-            appendIntervalComprehensionAxiom(sb, qs, index, types, translateCtx);
+            appendIntervalComprehensionAxiom(sb, qs, index, machineName, types, translateCtx);
             return;
         }
         Element vars = firstChildElement(qs, "Variables");
@@ -435,8 +452,8 @@ public final class BxmlComprehensionRegistry {
         BxmlTranslateContext ctx = comprehensionCtx(types, translateCtx);
         String pred = BxmlPredicateToAcsl.translateBodyPredicate(body, ctx);
 
-        String ref = "set_comprehension_" + index;
-        String axiomName = "set_comp_" + index + "_values";
+        String ref = comprehensionSetName(machineName, index);
+        String axiomName = comprehensionAxiomName(machineName, index);
 
         sb.append("    axiom ").append(axiomName).append(":\n");
 
@@ -472,6 +489,7 @@ public final class BxmlComprehensionRegistry {
             StringBuilder sb,
             Element intervalEl,
             int index,
+            String machineName,
             BxmlTypeRegistry types,
             BxmlTranslateContext translateCtx) {
         Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(intervalEl);
@@ -489,8 +507,8 @@ public final class BxmlComprehensionRegistry {
         String elem = types.elementTypeNameForSetTypref(typref);
         String acslT = types.acslElementTypeName(elem);
 
-        String ref = "set_comprehension_" + index;
-        String axiomName = "set_comp_" + index + "_values";
+        String ref = comprehensionSetName(machineName, index);
+        String axiomName = comprehensionAxiomName(machineName, index);
         sb.append("    axiom ").append(axiomName).append(":\n");
         sb.append("        \\forall ").append(acslT).append(" x;\n");
         sb.append("        belongs(x, ").append(ref).append(") <==>\n");

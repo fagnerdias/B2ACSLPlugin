@@ -128,8 +128,16 @@ final class DummyGhostAxiomaticBuilder {
         appendDummyConcreteConstantDeclarations(sb, machineEl, ctx);
 
         if (maxSetComprehensionIndex > 0) {
+            String machineName = machineEl == null ? "" : machineEl.getAttribute("name");
+            if (machineName == null) {
+                machineName = "";
+            } else {
+                machineName = machineName.trim();
+            }
             for (int k = 1; k <= maxSetComprehensionIndex; k++) {
-                sb.append("        logic DSet<integer> dummy_set_comprehension_").append(k).append(";\n\n");
+                sb.append("        logic DSet<integer> dummy_")
+                        .append(BxmlComprehensionRegistry.comprehensionSetName(machineName, k))
+                        .append(";\n\n");
             }
         }
 
@@ -218,7 +226,7 @@ final class DummyGhostAxiomaticBuilder {
             if (ghostName.startsWith("Function_")) {
                 continue;
             }
-            if (ghostName.startsWith("set_comprehension_")) {
+            if (ghostName.contains("set_comprehension_")) {
                 continue;
             }
             if ("NAT".equals(ghostName)) {
@@ -274,8 +282,14 @@ final class DummyGhostAxiomaticBuilder {
             out.add(set.setName());
             out.addAll(set.valueNames());
         }
+        String machineName = machineEl == null ? "" : machineEl.getAttribute("name");
+        if (machineName == null) {
+            machineName = "";
+        } else {
+            machineName = machineName.trim();
+        }
         for (int k = 1; k <= maxSetComp; k++) {
-            out.add("set_comprehension_" + k);
+            out.add(BxmlComprehensionRegistry.comprehensionSetName(machineName, k));
         }
         return out;
     }

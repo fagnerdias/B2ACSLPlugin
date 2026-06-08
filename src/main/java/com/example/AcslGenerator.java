@@ -156,6 +156,38 @@ public final class AcslGenerator {
             BxmlSeesGraph seesGraph,
             BxmlImportsGraph importsGraph)
             throws Exception {
+        return generateAcsl(
+                machine,
+                bxmlPath,
+                outputDir,
+                mergeBxmlPathsFromDescendants,
+                gluingSubstitutionsFromInvariants,
+                seenOnlyMachineNames,
+                seesGraph,
+                importsGraph,
+                "",
+                "");
+    }
+
+    /**
+     * @param libIncludeCarrierMachineName única máquina cujo {@code .acsl} traz includes da
+     *     {@code B2ACSLLib} (importação Frama-C multi-ficheiro); vazio = comportamento legado por
+     *     máquina
+     * @param libIncludeScanRootMachineName raiz do projeto para varredura transitiva de símbolos da
+     *     lib (ex. {@code entry_point} quando o portador é {@code ctx})
+     */
+    public static Optional<Path> generateAcsl(
+            Machine machine,
+            Path bxmlPath,
+            Path outputDir,
+            List<Path> mergeBxmlPathsFromDescendants,
+            Map<String, String> gluingSubstitutionsFromInvariants,
+            Set<String> seenOnlyMachineNames,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            String libIncludeCarrierMachineName,
+            String libIncludeScanRootMachineName)
+            throws Exception {
         Document doc = parseXml(bxmlPath);
         Element machineEl = doc.getDocumentElement();
         if (referencesAbstractMachineViaAbstractionTag(machineEl)) {
@@ -165,8 +197,14 @@ public final class AcslGenerator {
         Files.createDirectories(outputDir);
         String baseName = machine.getMachineName();
         Path acslFile = outputDir.resolve(baseName + ".acsl");
+        boolean libCarrier =
+                libIncludeCarrierMachineName != null
+                        && !libIncludeCarrierMachineName.isBlank()
+                        && baseName.equals(libIncludeCarrierMachineName.trim());
         boolean omitLibIncludesFromPreamble =
-                seenOnlyMachineNames != null && seenOnlyMachineNames.contains(baseName);
+                libIncludeCarrierMachineName != null && !libIncludeCarrierMachineName.isBlank()
+                        ? !libCarrier
+                        : seenOnlyMachineNames != null && seenOnlyMachineNames.contains(baseName);
 
         List<Path> mergePaths =
                 mergeBxmlPathsFromDescendants == null ? List.of() : mergeBxmlPathsFromDescendants;
@@ -197,6 +235,9 @@ public final class AcslGenerator {
                         .withLambdaRegistry(new LambdaFunctionRegistry())
                         .withEnumRenames(
                                 BxmlSetsTranslator.buildEnumRenamesWithSees(
+                                        machineEl, mergedMachineElements, bxmlDirectory))
+                        .withEnumeratedSetRenames(
+                                BxmlSetsTranslator.buildEnumeratedSetRenamesWithSees(
                                         machineEl, mergedMachineElements, bxmlDirectory))
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(machineEl));
@@ -268,7 +309,7 @@ public final class AcslGenerator {
         int headerLen = sb.length();
 
         // 0) Conjuntos deferred (Sets) — posicionados logo após os includes
-        String setsBlock = BxmlSetsTranslator.formatSetsBlock(machineEl);
+        String setsBlock = BxmlSetsTranslator.formatSetsBlock(machineEl, mergedMachineElements, bxmlDirectory);
         if (!setsBlock.isBlank()) {
             sb.append(setsBlock);
             sb.append("\n");
@@ -423,14 +464,27 @@ public final class AcslGenerator {
         String bodyForLibScan = sb.substring(headerLen);
         String dependencyMachinesScan;
         List<String> dependencyLibIncludePaths;
+        String libScanRoot =
+                libCarrier
+                                && libIncludeScanRootMachineName != null
+                                && !libIncludeScanRootMachineName.isBlank()
+                        ? libIncludeScanRootMachineName.trim()
+                        : baseName;
         if (seesGraph != null || importsGraph != null) {
             dependencyMachinesScan =
                     BxmlSetsTranslator.collectTransitiveDependencyMachinesTextForIncludeScan(
-                            baseName, seesGraph, importsGraph, bxmlDirectory, outputDir);
+                            libScanRoot, seesGraph, importsGraph, bxmlDirectory, outputDir);
+            if (libCarrier && !libScanRoot.equals(baseName)) {
+                dependencyMachinesScan =
+                        joinNonBlank(
+                                dependencyMachinesScan,
+                                BxmlSetsTranslator.collectMachineTextForIncludeScan(
+                                        libScanRoot, bxmlDirectory, outputDir));
+            }
             dependencyLibIncludePaths =
                     new ArrayList<>(
                             BxmlSetsTranslator.collectLibIncludePathsFromTransitiveDependencies(
-                                    baseName, seesGraph, importsGraph, outputDir));
+                                    libScanRoot, seesGraph, importsGraph, outputDir));
         } else {
             String seesMachinesScan =
                     BxmlSetsTranslator.collectSeesMachinesTextForIncludeScan(
@@ -454,11 +508,8 @@ public final class AcslGenerator {
                         bodyForLibScan, combinedExtraScan, dependencyLibIncludePaths);
         String machineDependencyIncludes;
         if (seesGraph != null || importsGraph != null) {
-            machineDependencyIncludes =
-                    omitLibIncludesFromPreamble
-                            ? ""
-                            : BxmlSetsTranslator.formatTransitiveDependencyIncludeBlock(
-                                    baseName, seesGraph, importsGraph, bxmlDirectory);
+            // Includes de outras máquinas ficam a cargo do -acsl-import multi-ficheiro (B2ACSLPipeline).
+            machineDependencyIncludes = "";
         } else {
             String seesIncludes =
                     BxmlSetsTranslator.formatSeesIncludeBlock(machineEl, bxmlDirectory);

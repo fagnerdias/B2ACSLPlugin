@@ -245,6 +245,9 @@ public final class GhostOperationsCiGenerator {
                         .withEnumRenames(
                                 BxmlSetsTranslator.buildEnumRenamesWithSees(
                                         abstractMachineEl, mergedMachineElements, bxmlDirectory))
+                        .withEnumeratedSetRenames(
+                                BxmlSetsTranslator.buildEnumeratedSetRenamesWithSees(
+                                        abstractMachineEl, mergedMachineElements, bxmlDirectory))
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
         List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
@@ -407,11 +410,11 @@ public final class GhostOperationsCiGenerator {
 
     /** ACSL sem prefixo ghost; no {@code dummy_ghost} usam-se {@link #dummySetComprehensionRef}. */
     private static final Pattern SET_COMPREHENSION_INDEX_UNPREFIXED =
-            Pattern.compile("^set_comprehension_(\\d+)$");
+            Pattern.compile("^(?:\\w+__)?set_comprehension_(\\d+)$");
 
     /** Para contar índices em ensures completos (subexpressão). */
     private static final Pattern SET_COMPREHENSION_INDEX_IN_TEXT =
-            Pattern.compile("set_comprehension_(\\d+)");
+            Pattern.compile("(?:\\w+__)?set_comprehension_(\\d+)");
 
     /**
      * Após {@link #toGhostEnsure}: {@code \\old(dummy_seq)==domain_restriction(rel, S)} vindo de
@@ -489,7 +492,7 @@ public final class GhostOperationsCiGenerator {
         String s = domainRestrictionSecondArg.trim();
         Matcher um = SET_COMPREHENSION_INDEX_UNPREFIXED.matcher(s);
         if (um.matches()) {
-            return "dummy_set_comprehension_" + um.group(1);
+            return "dummy_" + s;
         }
         return s;
     }
@@ -1244,7 +1247,7 @@ public final class GhostOperationsCiGenerator {
             return text;
         }
         return text.replaceAll(
-                "(?<!dummy_)\\bset_comprehension_(\\d+)\\b", "dummy_set_comprehension_$1");
+                "(?<!dummy_)\\b((?:\\w+__)?set_comprehension_\\d+)\\b", "dummy_$1");
     }
 
     /**
@@ -1576,7 +1579,7 @@ public final class GhostOperationsCiGenerator {
                     out.replaceAll(
                             "(?<!dummy_)\\b" + Pattern.quote(setName) + "\\b",
                             Matcher.quoteReplacement(dummySet));
-            String acslSetRef = set.machineName() + "__" + setName;
+            String acslSetRef = BxmlSetsTranslator.enumeratedSetAcslName(set.machineName(), setName);
             out =
                     out.replaceAll(
                             "(?<!dummy_)\\b" + Pattern.quote(acslSetRef) + "\\b",
