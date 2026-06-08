@@ -72,7 +72,9 @@ public final class BxmlExpressionToAcsl {
             case "EmptySet" -> true;
             case "Quantified_Set" -> true;
             case "Binary_Exp" ->
-                    isSetUnion(exp.getAttribute("op")) || isIntervalBinaryExp(exp);
+                    isSetUnion(exp.getAttribute("op"))
+                            || isSetIntersection(exp.getAttribute("op"))
+                            || isIntervalBinaryExp(exp);
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
             default -> false;
         };
@@ -482,6 +484,10 @@ public final class BxmlExpressionToAcsl {
             // B: \/ — união → set_union (ACSL_Lib/set_functions/union.acsl)
             return "set_union(" + left + ", " + right + ")";
         }
+        if (isSetIntersection(op)) {
+            // B: /\ — interseção → set_intersection (ACSL_Lib/set_functions/intersection.acsl)
+            return "set_intersection(" + left + ", " + right + ")";
+        }
         if ("..".equals(op == null ? "" : op.trim())) {
             String named = ctx.comprehensions().referenceName(ctx.machineName(), b);
             return named != null ? named : "/* interval .. */";
@@ -558,6 +564,12 @@ public final class BxmlExpressionToAcsl {
         if (op == null || op.isEmpty()) return false;
         // BXML grava o operador de união como \/
         return "\\/".equals(op) || "/".equals(op);
+    }
+
+    private static boolean isSetIntersection(String op) {
+        if (op == null || op.isEmpty()) return false;
+        // BXML grava o operador de interseção como /\
+        return "/\\".equals(op);
     }
 
     /** Usado também por {@link BxmlPredicateToAcsl} para {@code Exp_Comparison}. */
