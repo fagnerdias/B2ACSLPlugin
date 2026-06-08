@@ -25,6 +25,14 @@ public final class BxmlComprehensionRegistry {
     private final Map<Element, Integer> elementToIndex = new IdentityHashMap<>();
     /** Tipos B por nó de compreensão (cada máquina tem o seu {@link BxmlTypeRegistry}). */
     private final IdentityHashMap<Element, BxmlTypeRegistry> elementTypes = new IdentityHashMap<>();
+    /** Máquina de origem de cada elemento de compreensão (para rastreamento do dono). */
+    private final Map<Element, String> elementToMachineName = new IdentityHashMap<>();
+    /**
+     * Nome da máquina raiz usada ao gerar o bloco axiomatic (passado a
+     * {@link #formatAxiomaticBlock}). Todos os {@code referenceName} devem usar este nome
+     * para garantir consistência com o axiomatic emitido.
+     */
+    private String rootAxiomaticMachineName = null;
     private Map<String, String> gluingSubstitutions = Map.of();
 
     private BxmlComprehensionRegistry() {}
@@ -36,8 +44,9 @@ public final class BxmlComprehensionRegistry {
 
     public static BxmlComprehensionRegistry fromMachine(Element machineEl) {
         BxmlComprehensionRegistry r = new BxmlComprehensionRegistry();
+        r.rootAxiomaticMachineName = machineEl.getAttribute("name");
         BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machineEl);
-        walk(machineEl, r, types, isImplementationMachine(machineEl));
+        walk(machineEl, r, types, isImplementationMachine(machineEl), machineEl.getAttribute("name"));
         return r;
     }
 
@@ -51,12 +60,18 @@ public final class BxmlComprehensionRegistry {
         BxmlComprehensionRegistry r = new BxmlComprehensionRegistry();
         r.setGluingSubstitutions(gluing == null ? Map.of() : gluing);
         if (machineRoots != null) {
+            boolean first = true;
             for (Element root : machineRoots) {
                 if (root == null) {
                     continue;
                 }
+                // A máquina raiz (primeira da cadeia) define o namespace do axiomatic.
+                if (first) {
+                    r.rootAxiomaticMachineName = root.getAttribute("name");
+                    first = false;
+                }
                 BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(root);
-                walk(root, r, types, isImplementationMachine(root));
+                walk(root, r, types, isImplementationMachine(root), root.getAttribute("name"));
             }
         }
         return r;
@@ -80,7 +95,7 @@ public final class BxmlComprehensionRegistry {
     }
 
     private static void walk(Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types,
-                             boolean skipOperations) {
+                             boolean skipOperations, String machineName) {
         if (skipOperations && "Operations".equals(e.getLocalName())) {
             NodeList ch = e.getChildNodes();
             for (int i = 0; i < ch.getLength(); i++) {
@@ -90,7 +105,7 @@ public final class BxmlComprehensionRegistry {
                 }
                 Element op = (Element) n;
                 if ("Operation".equals(op.getLocalName())) {
-                    registerComprehensionsInImplementationLoops(op, r, types);
+                    registerComprehensionsInImplementationLoops(op, r, types, machineName);
                 }
             }
             return;
@@ -98,50 +113,52 @@ public final class BxmlComprehensionRegistry {
         if (skipOperations && IMPL_OPERATION_SCOPE_TAGS.contains(e.getLocalName())) {
             return;
         }
-        registerComprehensionElement(e, r, types);
+        registerComprehensionElement(e, r, types, machineName);
         NodeList ch = e.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
             Node n = ch.item(i);
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            walk((Element) n, r, types, skipOperations);
+            walk((Element) n, r, types, skipOperations, machineName);
         }
     }
 
     private static void registerComprehensionElement(
-            Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
+            Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types, String machineName) {
         if ("Quantified_Set".equals(e.getLocalName())) {
             r.ordered.add(e);
             r.elementTypes.put(e, types);
+            r.elementToMachineName.put(e, machineName);
         } else if (BxmlExpressionToAcsl.isIntervalBinaryExp(e)) {
             r.ordered.add(e);
             r.elementTypes.put(e, types);
+            r.elementToMachineName.put(e, machineName);
         }
     }
 
     /** Intervalos e compreensões em {@code INVARIANT}/{@code VARIANT} de loops WHILE na implementação. */
     private static void registerComprehensionsInImplementationLoops(
-            Element operation, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
+            Element operation, BxmlComprehensionRegistry r, BxmlTypeRegistry types, String machineName) {
         Element body = firstChildElement(operation, "Body");
         if (body != null) {
-            walkWhileLoopComprehensions(body, r, types);
+            walkWhileLoopComprehensions(body, r, types, machineName);
         }
     }
 
     private static void walkWhileLoopComprehensions(
-            Element sub, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
+            Element sub, BxmlComprehensionRegistry r, BxmlTypeRegistry types, String machineName) {
         if (sub == null) {
             return;
         }
         if ("While".equals(sub.getLocalName())) {
             Element inv = firstChildElement(sub, "Invariant");
             if (inv != null) {
-                walkComprehensionSubtree(inv, r, types);
+                walkComprehensionSubtree(inv, r, types, machineName);
             }
             Element variant = firstChildElement(sub, "Variant");
             if (variant != null) {
-                walkComprehensionSubtree(variant, r, types);
+                walkComprehensionSubtree(variant, r, types, machineName);
             }
-            walkWhileLoopComprehensions(firstChildElement(sub, "Body"), r, types);
+            walkWhileLoopComprehensions(firstChildElement(sub, "Body"), r, types, machineName);
             return;
         }
         NodeList nl = sub.getChildNodes();
@@ -154,20 +171,20 @@ public final class BxmlComprehensionRegistry {
             if ("Attr".equals(ch.getLocalName())) {
                 continue;
             }
-            walkWhileLoopComprehensions(ch, r, types);
+            walkWhileLoopComprehensions(ch, r, types, machineName);
         }
     }
 
     private static void walkComprehensionSubtree(
-            Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types) {
-        registerComprehensionElement(e, r, types);
+            Element e, BxmlComprehensionRegistry r, BxmlTypeRegistry types, String machineName) {
+        registerComprehensionElement(e, r, types, machineName);
         NodeList nl = e.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
             Node n = nl.item(i);
             if (n.getNodeType() != Node.ELEMENT_NODE) {
                 continue;
             }
-            walkComprehensionSubtree((Element) n, r, types);
+            walkComprehensionSubtree((Element) n, r, types, machineName);
         }
     }
 
@@ -343,7 +360,9 @@ public final class BxmlComprehensionRegistry {
         if (idx == null) {
             return null;
         }
-        return comprehensionSetName(machineName, idx);
+        // Usa o nome do axiomatic raiz para garantir consistência com formatAxiomaticBlock.
+        String name = rootAxiomaticMachineName != null ? rootAxiomaticMachineName : machineName;
+        return comprehensionSetName(name, idx);
     }
 
     public int size() {
