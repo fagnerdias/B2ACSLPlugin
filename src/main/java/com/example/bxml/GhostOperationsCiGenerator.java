@@ -1752,9 +1752,29 @@ public final class GhostOperationsCiGenerator {
             if (!"Id".equals(e.getLocalName())) continue;
             String name = e.getAttribute("value");
             if (name == null || name.isBlank()) continue;
-            out.add(new Param("int *", sanitizeCIdent(name.trim())));
+            String cPtrType = cPointerTypeFromTypref(findAncestorMachine(operation), e);
+            out.add(new Param(cPtrType, sanitizeCIdent(name.trim())));
         }
         return out;
+    }
+
+    /**
+     * Tipo ponteiro C para um parâmetro de saída a partir do seu {@code typref}: BOOL → {@code _Bool *};
+     * qualquer outro escalar/conjunto → {@code int *}.
+     */
+    private static String cPointerTypeFromTypref(Element machine, Element paramId) {
+        if (machine == null) return "int *";
+        String tr = paramId.getAttribute("typref");
+        if (tr == null || tr.isBlank()) return "int *";
+        try {
+            int id = Integer.parseInt(tr.trim());
+            BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machine);
+            String raw = types.getRawType(id);
+            if ("BOOL".equals(raw != null ? raw.trim() : "")) {
+                return "_Bool *";
+            }
+        } catch (NumberFormatException ignored) {}
+        return "int *";
     }
 
     private static List<Param> listInputParameters(Element operation) {
