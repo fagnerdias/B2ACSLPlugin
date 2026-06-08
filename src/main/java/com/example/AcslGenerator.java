@@ -317,6 +317,27 @@ public final class AcslGenerator {
                                 useGhostAbstraction)
                         : List.of();
 
+        // Propaga invariantes das máquinas IMPORTADAS como ensures de todas as operações
+        if (importsGraph != null && isAbstraction && !operations.isEmpty()) {
+            List<String> importedInvNames =
+                    collectImportedInvariantNames(importsGraph.importedBy(baseName), bxmlDirectory);
+            if (!importedInvNames.isEmpty()) {
+                List<OperationAcsl> enriched = new ArrayList<>(operations.size());
+                for (OperationAcsl op : operations) {
+                    List<String> newRequires = new ArrayList<>(importedInvNames);
+                    newRequires.addAll(op.requires());
+                    List<String> newEnsures = new ArrayList<>(importedInvNames);
+                    newEnsures.addAll(op.ensures());
+                    enriched.add(new OperationAcsl(
+                            op.functionName(), newRequires, newEnsures, op.outputParameters(),
+                            op.ghostBehaviorSlug(), op.ghostBehaviorInputNames(),
+                            op.dummyGhostEnsureVarNames(), op.connectionConcreteAssigns(),
+                            op.loops()));
+                }
+                operations = enriched;
+            }
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append("/* ACSL gerado a partir de ").append(baseName).append(".bxml (BXML 1.0) */\n");
         sb.append(
@@ -751,6 +772,32 @@ public final class AcslGenerator {
                             importedEl, importedCtx));
             assignsOut.addAll(importedInit.assignsTargets());
         } catch (Exception ignored) {}
+    }
+
+    /** Coleta os nomes de predicados de invariante de cada máquina importada listada. */
+    private static List<String> collectImportedInvariantNames(
+            List<String> importedMachineNames, Path bxmlDirectory) {
+        List<String> out = new ArrayList<>();
+        if (importedMachineNames == null || bxmlDirectory == null) return out;
+        for (String imp : importedMachineNames) {
+            if (imp == null || imp.isBlank()) continue;
+            Path bxml = bxmlDirectory.resolve(imp.trim() + ".bxml");
+            if (!Files.isRegularFile(bxml)) continue;
+            try {
+                Element importedEl = parseMachineElement(bxml);
+                BxmlTranslateContext importedCtx =
+                        BxmlTranslateContext.forMachine(importedEl)
+                                .withEnumRenames(
+                                        BxmlSetsTranslator.buildEnumRenamesWithSees(
+                                                importedEl,
+                                                findImplementationElements(imp.trim(), bxmlDirectory),
+                                                bxmlDirectory));
+                out.addAll(
+                        com.example.bxml.BxmlInvariantTranslator.listInvariantPredicateNames(
+                                importedEl, importedCtx));
+            } catch (Exception ignored) {}
+        }
+        return out;
     }
 
     /** Encontra todos os BXMLs de implementação/refinamento que têm {@code machineName} como abstração. */
