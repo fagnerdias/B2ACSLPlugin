@@ -2,7 +2,7 @@
   "_meta": {
     "generator": "scripts/generate_acsl_symbol_dependency_map.py",
     "root": "src/main/resources/lib/B2ACSLLib",
-    "symbol_count": 53
+    "symbol_count": 54
   },
   "symbols": [
     "apply",
@@ -23,6 +23,7 @@
     "function_singleton",
     "function_to_list",
     "get",
+    "id",
     "iSeq",
     "inclusion",
     "integer_pow",
@@ -78,6 +79,7 @@
     "function_singleton": "function_functions/singleton.acsl",
     "function_to_list": "sequence_functions/function_to_list.acsl",
     "get": "sequence_functions/get.acsl",
+    "id": "function_functions/id.acsl",
     "iSeq": "sequence_functions/iseq.acsl",
     "inclusion": "set_functions/inclusion.acsl",
     "integer_pow": "math.acsl",
@@ -170,6 +172,10 @@
     ],
     "get": [
       "sequence_functions/get.acsl"
+    ],
+    "id": [
+      "function_functions/apply.acsl",
+      "function_functions/id.acsl"
     ],
     "iSeq": [
       "sequence_functions/iseq.acsl"
@@ -426,6 +432,12 @@
       "ran_witness",
       "set_union",
       "singleton"
+    ],
+    "id": [
+      "belongs",
+      "couple",
+      "dom",
+      "function_apply"
     ],
     "iSeq": [
       "belongs",

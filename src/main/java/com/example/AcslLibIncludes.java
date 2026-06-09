@@ -114,6 +114,7 @@ public final class AcslLibIncludes {
             "function_functions/is_partial.acsl",
             "function_functions/is_total.acsl",
             "function_functions/apply.acsl",
+            "function_functions/id.acsl",
             "function_functions/is_injective.acsl",
             "function_functions/is_surjective.acsl",
             "function_functions/is_bijective.acsl",
