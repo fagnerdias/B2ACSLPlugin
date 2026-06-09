@@ -74,6 +74,7 @@ public final class BxmlExpressionToAcsl {
             case "Binary_Exp" ->
                     isSetUnion(exp.getAttribute("op"))
                             || isSetIntersection(exp.getAttribute("op"))
+                            || isCartesianProduct(exp.getAttribute("op"))
                             || isIntervalBinaryExp(exp);
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
             default -> false;
@@ -247,7 +248,7 @@ public final class BxmlExpressionToAcsl {
         return "|->".equals(o) || "|-&gt;".equals(o);
     }
 
-    /** B diferença de conjuntos {@code s -s t} → {@code difference(s, t)} (ACSL_Lib/set_functions/difference.acsl). */
+    /** B diferença de conjuntos {@code s -s t} → {@code set_difference(s, t)} (ACSL_Lib/set_functions/difference.acsl). */
     private static boolean isSetDifferenceOp(String op) {
         if (op == null) return false;
         return "-s".equals(op.trim());
@@ -478,7 +479,7 @@ public final class BxmlExpressionToAcsl {
         String left = translate(pair[0], ctx);
         String right = translate(pair[1], ctx);
         if (isSetDifferenceOp(op)) {
-            return "difference(" + left + ", " + right + ")";
+            return "set_difference(" + left + ", " + right + ")";
         }
         if (isSetUnion(op)) {
             // B: \/ — união → set_union (ACSL_Lib/set_functions/union.acsl)
@@ -487,6 +488,10 @@ public final class BxmlExpressionToAcsl {
         if (isSetIntersection(op)) {
             // B: /\ — interseção → set_intersection (ACSL_Lib/set_functions/intersection.acsl)
             return "set_intersection(" + left + ", " + right + ")";
+        }
+        if (isCartesianProduct(op)) {
+            // B: *s — produto cartesiano → cartesian_product (ACSL_Lib/set_functions/cartesian_product.acsl)
+            return "cartesian_product(" + left + ", " + right + ")";
         }
         if ("..".equals(op == null ? "" : op.trim())) {
             String named = ctx.comprehensions().referenceName(ctx.machineName(), b);
@@ -570,6 +575,12 @@ public final class BxmlExpressionToAcsl {
         if (op == null || op.isEmpty()) return false;
         // BXML grava o operador de interseção como /\
         return "/\\".equals(op);
+    }
+
+    private static boolean isCartesianProduct(String op) {
+        if (op == null || op.isEmpty()) return false;
+        // BXML grava o produto cartesiano de conjuntos como *s
+        return "*s".equals(op.trim());
     }
 
     /** Usado também por {@link BxmlPredicateToAcsl} para {@code Exp_Comparison}. */
