@@ -154,6 +154,35 @@ public final class B2ACSLPipeline {
                             }));
         }
 
+        // Pre-step: Computar cDir e gerar ghost_operations.ci antes dos .acsl para que os
+        // símbolos ghost (ex. set_difference via dummy_set_difference) sejam detectados no
+        // scan de includes da lib.
+        String bdpStr = bdpPathToString(bdp);
+        int bdpIdx = bdpStr.lastIndexOf("bdp");
+        Path langPath = bdpIdx >= 0
+                ? Path.of(bdpStr.substring(0, bdpIdx) + "lang" + bdpStr.substring(bdpIdx + 3))
+                : bdp.getParent().resolve("lang");
+        Path cDir = langPath.resolve("c");
+        for (MachineFile mf : machines) {
+            Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
+            if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
+                continue;
+            }
+            String machineName = mf.machine().getMachineName();
+            List<Element> mergedEls = new ArrayList<>();
+            for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
+                mergedEls.add(AcslGenerator.parseMachineElement(mp));
+            }
+            GhostOperationsCiGenerator.write(
+                    cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
+        }
+        Path ghostCiPath = GhostOperationsCiGenerator.targetPath(cDir);
+        String ghostCiStripped =
+                Files.isRegularFile(ghostCiPath)
+                        ? GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
+                                Files.readString(ghostCiPath, java.nio.charset.StandardCharsets.UTF_8))
+                        : null;
+
         // Step 1.1: Gerar arquivos .acsl (temporários ou em dir fixo para inspeção)
         Path acslDir = KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank()
                 ? Path.of(KEEP_ACSL_DIR).toAbsolutePath().normalize()
@@ -205,7 +234,8 @@ public final class B2ACSLPipeline {
                                 seesGraph,
                                 importsGraph,
                                 libIncludeCarrierMachineName,
-                                libIncludeScanRootMachineName);
+                                libIncludeScanRootMachineName,
+                                ghostCiStripped);
                 acsl.ifPresent(acslFiles::add);
             }
             List<String> topLevelImportMachines =
@@ -221,27 +251,7 @@ public final class B2ACSLPipeline {
                 for (Path p : acslFiles) System.out.println("  - " + p);
             }
 
-            // Step 2: Obter arquivos .c em lang/c/ (mesmo path, trocando bdp por lang)
-            String bdpStr = bdpPathToString(bdp);
-            int idx = bdpStr.lastIndexOf("bdp");
-            Path langPath = idx >= 0
-                    ? Path.of(bdpStr.substring(0, idx) + "lang" + bdpStr.substring(idx + 3))
-                    : bdp.getParent().resolve("lang");
-            Path cDir = langPath.resolve("c");
-            for (MachineFile mf : machines) {
-                Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
-                if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
-                    continue;
-                }
-                String machineName = mf.machine().getMachineName();
-                List<Element> mergedEls = new ArrayList<>();
-                for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
-                    mergedEls.add(AcslGenerator.parseMachineElement(mp));
-                }
-                GhostOperationsCiGenerator.write(
-                        cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
-                break;
-            }
+            // Step 2: ghost_operations.ci já gerado no pre-step; cDir já calculado acima.
 
             // Step 2.1: Lista de tipos utilizados na especificação (.acsl + ghost_operations.ci + BXML)
             List<Element> abstractMachineRoots = new ArrayList<>();
@@ -1039,6 +1049,10 @@ public final class B2ACSLPipeline {
     private static void stripDummyPrefixFromMergedCode(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
         content = content.replaceAll("\\bdummy_", "");
+        // DSet<A>/DTuple<A,B> foram introduzidos no ghost_operations.ci; no merged_code.c
+        // os tipos reais Set<A>/Tuple<A,B> já estão disponíveis via ACSL imports.
+        content = content.replaceAll("\\bDSet<", "Set<");
+        content = content.replaceAll("\\bDTuple<", "Tuple<");
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 

@@ -416,6 +416,15 @@ public final class BxmlMachineVariables {
             String abstractMachineName,
             Element abstractMachineEl,
             List<Element> mergedMachineElements) {
+        return listLinkedConcreteAssignTargetsForInitialisation(
+                abstractMachineName, abstractMachineEl, mergedMachineElements, null);
+    }
+
+    public static List<String> listLinkedConcreteAssignTargetsForInitialisation(
+            String abstractMachineName,
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements,
+            BxmlTranslateContext ctx) {
         if (abstractMachineName == null
                 || abstractMachineName.isBlank()
                 || abstractMachineEl == null
@@ -430,7 +439,18 @@ public final class BxmlMachineVariables {
         if (assigned.isEmpty()) {
             return List.of();
         }
-        return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, assigned);
+        if (ctx == null) {
+            return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, assigned);
+        }
+        String prefix = abstractMachineName.trim() + "__";
+        List<String> out = new ArrayList<>();
+        for (String v : assigned) {
+            if (v == null || v.isBlank()) continue;
+            String base = prefix + v.trim();
+            String ranged = implementationAssignTargetWithRange(base, v.trim(), abstractMachineEl, ctx);
+            out.add(ranged == null ? base : ranged);
+        }
+        return out;
     }
 
     /**
@@ -442,6 +462,16 @@ public final class BxmlMachineVariables {
             Element abstractMachineEl,
             List<Element> mergedMachineElements,
             Set<String> assignedVariableNames) {
+        return listLinkedConcreteAssignTargetsForOperation(
+                abstractMachineName, abstractMachineEl, mergedMachineElements, assignedVariableNames, null);
+    }
+
+    public static List<String> listLinkedConcreteAssignTargetsForOperation(
+            String abstractMachineName,
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements,
+            Set<String> assignedVariableNames,
+            BxmlTranslateContext ctx) {
         if (abstractMachineName == null
                 || abstractMachineName.isBlank()
                 || abstractMachineEl == null
@@ -458,7 +488,17 @@ public final class BxmlMachineVariables {
                 filtered.add(v.trim());
             }
         }
-        return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, filtered);
+        if (ctx == null) {
+            return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, filtered);
+        }
+        String prefix = abstractMachineName.trim() + "__";
+        List<String> out = new ArrayList<>();
+        for (String v : filtered) {
+            String base = prefix + v;
+            String ranged = implementationAssignTargetWithRange(base, v, abstractMachineEl, ctx);
+            out.add(ranged == null ? base : ranged);
+        }
+        return out;
     }
 
     private static List<String> linkedConcreteAssignTargetsForVariableNames(
@@ -495,7 +535,7 @@ public final class BxmlMachineVariables {
             return fromImpl;
         }
         return listLinkedConcreteAssignTargetsForInitialisation(
-                abstractMachineName, abstractMachineEl, mergedMachineElements);
+                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx);
     }
 
     public static List<String> listImplementationAssignTargets(

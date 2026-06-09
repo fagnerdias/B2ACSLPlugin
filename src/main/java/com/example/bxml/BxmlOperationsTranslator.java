@@ -181,7 +181,7 @@ public final class BxmlOperationsTranslator {
                 ghostSlug = GhostOperationsCiGenerator.ghostOperationSlug(opName);
             }
             List<String> ghostBehaviorArgs = new ArrayList<>(inputParamNames);
-            if (bodyHasAnySub) {
+            if (bodyHasAnySub || assignsAbstract) {
                 ghostBehaviorArgs.addAll(GhostOperationsCiGenerator.listOutputParameterNames(child));
             }
             if (libScanGhostOperationBodies != null && !ghostSlug.isBlank()) {
@@ -235,7 +235,8 @@ public final class BxmlOperationsTranslator {
                                         rootAbstractMachineName,
                                         machineEl,
                                         mergedRefinementChain,
-                                        assignedAbs);
+                                        assignedAbs,
+                                        ctx);
                     }
                 }
             }

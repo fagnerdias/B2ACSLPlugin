@@ -188,6 +188,38 @@ public final class AcslGenerator {
             String libIncludeCarrierMachineName,
             String libIncludeScanRootMachineName)
             throws Exception {
+        return generateAcsl(
+                machine,
+                bxmlPath,
+                outputDir,
+                mergeBxmlPathsFromDescendants,
+                gluingSubstitutionsFromInvariants,
+                seenOnlyMachineNames,
+                seesGraph,
+                importsGraph,
+                libIncludeCarrierMachineName,
+                libIncludeScanRootMachineName,
+                null);
+    }
+
+    /**
+     * Como {@link #generateAcsl(Machine, Path, Path, List, Map, Set, BxmlSeesGraph, BxmlImportsGraph, String, String)},
+     * mas com texto extra para varredura de símbolos da lib (ex. conteúdo stripped do
+     * {@code ghost_operations.ci}, gerado antes dos {@code .acsl}).
+     */
+    public static Optional<Path> generateAcsl(
+            Machine machine,
+            Path bxmlPath,
+            Path outputDir,
+            List<Path> mergeBxmlPathsFromDescendants,
+            Map<String, String> gluingSubstitutionsFromInvariants,
+            Set<String> seenOnlyMachineNames,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            String libIncludeCarrierMachineName,
+            String libIncludeScanRootMachineName,
+            String extraLibScanText)
+            throws Exception {
         Document doc = parseXml(bxmlPath);
         Element machineEl = doc.getDocumentElement();
         if (referencesAbstractMachineViaAbstractionTag(machineEl)) {
@@ -539,7 +571,9 @@ public final class AcslGenerator {
                             machineEl, mergedMachineElements, bxmlDirectory, outputDir));
         }
         String combinedExtraScan =
-                joinNonBlank(extraLibSymbolScan, dependencyMachinesScan);
+                joinNonBlank(
+                        joinNonBlank(extraLibScanText, extraLibSymbolScan),
+                        dependencyMachinesScan);
         String libIncludes =
                 AcslLibIncludes.formatIncludeBlock(
                         bodyForLibScan, combinedExtraScan, dependencyLibIncludePaths);
