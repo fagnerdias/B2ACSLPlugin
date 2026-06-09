@@ -29,7 +29,7 @@ import javax.swing.border.EmptyBorder;
 public final class WpOptionsDialog {
 
     private static final String DEFAULT_WP_PROVER = "CVC5";
-    private static final int DEFAULT_WP_TIMEOUT_SECONDS = 100;
+    private static final int DEFAULT_WP_TIMEOUT_SECONDS = 10;
     private static final String DEFAULT_WP_OUTPUT = "status";
     private static final String DEFAULT_PROJECT_NAME = "Project";
 
@@ -142,9 +142,9 @@ public final class WpOptionsDialog {
             smokeTestsBox.setOpaque(false);
             content.add(smokeTestsBox, gbc);
 
-            gbc.gridy = 4;
-            loopSimplificationBox.setOpaque(false);
-            content.add(loopSimplificationBox, gbc);
+            //gbc.gridy = 4;
+            //loopSimplificationBox.setOpaque(false);
+            //content.add(loopSimplificationBox, gbc);
 
             // gbc.gridy = 5;
             // verifyPerOperationBox.setOpaque(false);
