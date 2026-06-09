@@ -30,8 +30,7 @@ import com.example.B2AcslLibraryPaths;
 final class DummyGhostAxiomaticBuilder {
 
     /** Nomes usados na especificação ghost que mapeiam para outro símbolo na biblioteca. */
-    static final Map<String, String> LIB_SYMBOL_ALIASES =
-            Map.of("difference", "set_difference");
+    static final Map<String, String> LIB_SYMBOL_ALIASES = Map.of();
 
     private static final Pattern DUMMY_LIB_CALL =
             Pattern.compile("\\bdummy_([A-Za-z][A-Za-z0-9_]*)\\b");
@@ -398,7 +397,7 @@ final class DummyGhostAxiomaticBuilder {
         return s;
     }
 
-    private static String prefixLibCallsInSignature(String sig) {
+    static String prefixLibCallsInSignature(String sig) {
         AcslLibSymbolDependencyMap map = AcslLibSymbolDependencyMap.instance();
         List<String> symbols = new ArrayList<>(map.allKnownSymbols());
         symbols.sort((a, b) -> Integer.compare(b.length(), a.length()));
@@ -413,17 +412,12 @@ final class DummyGhostAxiomaticBuilder {
             out =
                     out.replaceAll(
                             "(?<!dummy_)\\b" + Pattern.quote(alias.getKey()) + "\\b",
-                            "dummy_" + alias.getKey());
+                            "dummy_" + alias.getValue());
         }
         return out;
     }
 
     private static String ghostNameForLibSymbol(String libSymbol) {
-        for (Map.Entry<String, String> e : LIB_SYMBOL_ALIASES.entrySet()) {
-            if (e.getValue().equals(libSymbol)) {
-                return e.getKey();
-            }
-        }
         return libSymbol;
     }
 
