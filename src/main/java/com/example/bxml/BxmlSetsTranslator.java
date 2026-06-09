@@ -689,6 +689,38 @@ public final class BxmlSetsTranslator {
                 sb.append(body).append('\n');
             }
         }
+        NodeList opsNl = machineEl.getElementsByTagNameNS("*", "Operations");
+        if (opsNl.getLength() > 0) {
+            Element operationsEl = (Element) opsNl.item(0);
+            NodeList children = operationsEl.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                Node n = children.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element op = (Element) n;
+                if (!"Operation".equals(op.getLocalName())) continue;
+                Element pre = firstChildElement(op, "Precondition");
+                if (pre != null) {
+                    for (String clause : com.example.bxml.BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx)) {
+                        if (clause != null && !clause.isBlank()) {
+                            sb.append(clause).append('\n');
+                        }
+                    }
+                }
+                Element body = firstChildElement(op, "Body");
+                if (body != null) {
+                    List<String> ensures = new ArrayList<>();
+                    try {
+                        com.example.bxml.BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
+                    } catch (Exception ignored) {
+                    }
+                    for (String clause : ensures) {
+                        if (clause != null && !clause.isBlank()) {
+                            sb.append(clause).append('\n');
+                        }
+                    }
+                }
+            }
+        }
         return sb.toString();
     }
 
