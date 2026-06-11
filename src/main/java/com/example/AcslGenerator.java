@@ -292,23 +292,6 @@ public final class AcslGenerator {
         InitialisationAcsl initBare =
                 BxmlInitialisationTranslator.translate(
                         machineEl, implementationAssignTargets, ctx, knownIntegerConstants);
-        // Propaga ensures e assigns das máquinas IMPORTADAS (chamadas na INITIALISATION)
-        if (importsGraph != null && isAbstraction) {
-            List<String> importedEnsures = new ArrayList<>();
-            List<String> importedAssigns = new ArrayList<>();
-            for (String imp : importsGraph.importedBy(baseName)) {
-                collectImportedInitialisationContract(imp, bxmlDirectory, importedEnsures, importedAssigns);
-            }
-            if (!importedEnsures.isEmpty() || !importedAssigns.isEmpty()) {
-                importedEnsures.addAll(initBare.ensures());
-                List<String> mergedAssigns = new ArrayList<>(importedAssigns);
-                mergedAssigns.addAll(initBare.assignsTargets());
-                initBare = new InitialisationAcsl(
-                        initBare.functionName(), importedEnsures, mergedAssigns,
-                        initBare.includeGhostBehaviorAssert(), initBare.dummyGhostEnsureVarNames(),
-                        initBare.loopUnfoldSize());
-            }
-        }
         boolean initGhostAssert =
                 useGhostAbstraction
                         && GhostOperationsCiGenerator.initialisationAssignsAbstract(
@@ -352,27 +335,6 @@ public final class AcslGenerator {
                                 gluing,
                                 useGhostAbstraction)
                         : List.of();
-
-        // Propaga invariantes das máquinas IMPORTADAS como ensures de todas as operações
-        if (importsGraph != null && isAbstraction && !operations.isEmpty()) {
-            List<String> importedInvNames =
-                    collectImportedInvariantNames(importsGraph.importedBy(baseName), bxmlDirectory);
-            if (!importedInvNames.isEmpty()) {
-                List<OperationAcsl> enriched = new ArrayList<>(operations.size());
-                for (OperationAcsl op : operations) {
-                    List<String> newRequires = new ArrayList<>(importedInvNames);
-                    newRequires.addAll(op.requires());
-                    List<String> newEnsures = new ArrayList<>(importedInvNames);
-                    newEnsures.addAll(op.ensures());
-                    enriched.add(new OperationAcsl(
-                            op.functionName(), newRequires, newEnsures, op.outputParameters(),
-                            op.ghostBehaviorSlug(), op.ghostBehaviorInputNames(),
-                            op.dummyGhostEnsureVarNames(), op.connectionConcreteAssigns(),
-                            op.loops(), op.skipBody()));
-                }
-                operations = enriched;
-            }
-        }
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* ACSL gerado a partir de ").append(baseName).append(".bxml (BXML 1.0) */\n");
@@ -775,69 +737,7 @@ public final class AcslGenerator {
         }
     }
 
-    /**
-     * Coleta os {@code ensures} e {@code assigns} da INITIALISATION de uma máquina importada,
-     * carregando seu BXML e a(s) implementação(ões) encontradas no mesmo diretório.
-     */
-    private static void collectImportedInitialisationContract(
-            String importedMachineName,
-            Path bxmlDirectory,
-            List<String> ensuresOut,
-            List<String> assignsOut) {
-        if (importedMachineName == null || importedMachineName.isBlank() || bxmlDirectory == null) {
-            return;
-        }
-        Path bxml = bxmlDirectory.resolve(importedMachineName.trim() + ".bxml");
-        if (!Files.isRegularFile(bxml)) {
-            return;
-        }
-        try {
-            Element importedEl = parseMachineElement(bxml);
-            List<Element> implEls = findImplementationElements(importedMachineName.trim(), bxmlDirectory);
-            BxmlTranslateContext importedCtx =
-                    BxmlTranslateContext.forMachine(importedEl)
-                            .withEnumRenames(
-                                    BxmlSetsTranslator.buildEnumRenamesWithSees(
-                                            importedEl, implEls, bxmlDirectory));
-            List<String> assignTargets =
-                    BxmlMachineVariables.listInitialisationAssignTargets(
-                            importedMachineName.trim(), importedEl, implEls, importedCtx);
-            InitialisationAcsl importedInit =
-                    BxmlInitialisationTranslator.translate(importedEl, assignTargets, importedCtx);
-            ensuresOut.addAll(importedInit.ensures());
-            // Adiciona ensures de invariante (ex. main_fuel_invariant)
-            ensuresOut.addAll(
-                    com.example.bxml.BxmlInvariantTranslator.listInvariantPredicateNames(
-                            importedEl, importedCtx));
-            assignsOut.addAll(importedInit.assignsTargets());
-        } catch (Exception ignored) {}
-    }
 
-    /** Coleta os nomes de predicados de invariante de cada máquina importada listada. */
-    private static List<String> collectImportedInvariantNames(
-            List<String> importedMachineNames, Path bxmlDirectory) {
-        List<String> out = new ArrayList<>();
-        if (importedMachineNames == null || bxmlDirectory == null) return out;
-        for (String imp : importedMachineNames) {
-            if (imp == null || imp.isBlank()) continue;
-            Path bxml = bxmlDirectory.resolve(imp.trim() + ".bxml");
-            if (!Files.isRegularFile(bxml)) continue;
-            try {
-                Element importedEl = parseMachineElement(bxml);
-                BxmlTranslateContext importedCtx =
-                        BxmlTranslateContext.forMachine(importedEl)
-                                .withEnumRenames(
-                                        BxmlSetsTranslator.buildEnumRenamesWithSees(
-                                                importedEl,
-                                                findImplementationElements(imp.trim(), bxmlDirectory),
-                                                bxmlDirectory));
-                out.addAll(
-                        com.example.bxml.BxmlInvariantTranslator.listInvariantPredicateNames(
-                                importedEl, importedCtx));
-            } catch (Exception ignored) {}
-        }
-        return out;
-    }
 
     /** Encontra todos os BXMLs de implementação/refinamento que têm {@code machineName} como abstração. */
     private static List<Element> findImplementationElements(String machineName, Path bxmlDirectory) {
