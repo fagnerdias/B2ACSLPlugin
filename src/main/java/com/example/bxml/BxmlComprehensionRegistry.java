@@ -383,6 +383,7 @@ public final class BxmlComprehensionRegistry {
         for (int idx = 1; idx <= maxIdx; idx++) {
             Element qs = firstWithIndex(idx);
             if (qs == null) continue;
+            if (BxmlExpressionToAcsl.isIntervalBinaryExp(qs)) continue;
             BxmlTypeRegistry types = elementTypes.get(qs);
             if (types == null) continue;
             String setType = acslSetTypeForElement(qs, types);
@@ -391,6 +392,7 @@ public final class BxmlComprehensionRegistry {
             if (axioms.length() > 0) axioms.append("\n");
             appendComprehensionAxiom(axioms, qs, idx, machineName, types, translateCtx);
         }
+        if (logics.length() == 0 && axioms.length() == 0) return "";
 
         String blockName = machineName + "_comprehension_sets";
         StringBuilder sb = new StringBuilder();

@@ -207,7 +207,13 @@ public final class BxmlExpressionToAcsl {
         if (e == null) {
             return "/* null */";
         }
-        if (isIntervalBinaryExp(e) || "Quantified_Set".equals(e.getLocalName())) {
+        if (isIntervalBinaryExp(e)) {
+            Element[] pair = twoDirectExpChildren(e);
+            if (pair[0] != null && pair[1] != null) {
+                return "interval_set(" + translate(pair[0], ctx) + ", " + translate(pair[1], ctx) + ")";
+            }
+        }
+        if ("Quantified_Set".equals(e.getLocalName())) {
             String n = ctx.comprehensions().referenceName(ctx.machineName(), e);
             return n != null ? n : translate(e, ctx);
         }
@@ -494,8 +500,7 @@ public final class BxmlExpressionToAcsl {
             return "cartesian_product(" + left + ", " + right + ")";
         }
         if ("..".equals(op == null ? "" : op.trim())) {
-            String named = ctx.comprehensions().referenceName(ctx.machineName(), b);
-            return named != null ? named : "/* interval .. */";
+            return "interval_set(" + left + ", " + right + ")";
         }
         if (isSequenceAppendOp(op)) {
             return "(" + "\\concat(" + left + ", [|" + right + "|])" + ")";
