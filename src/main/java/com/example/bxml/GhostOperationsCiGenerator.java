@@ -164,7 +164,9 @@ public final class GhostOperationsCiGenerator {
                     .append(";\n\n");
         }
         if (initialisationAssignsAbstract(abstractMachineEl, abstractSet)) {
-            sb.append("    predicate ghost__initialisation;\n\n");
+            sb.append("    predicate ghost__")
+              .append(machineNamePrefix.toLowerCase())
+              .append("__initialisation;\n\n");
         }
         Element operationsEl = firstChildElement(abstractMachineEl, "Operations");
         if (operationsEl != null) {
@@ -333,7 +335,8 @@ public final class GhostOperationsCiGenerator {
                 ge = normalizeBooleanLiteralsForGhost(ge);
                 prefixedInitEnsures.add(ge);
             }
-            ops.add(new GhostOp("initialisation", List.of(), initAssigned, prefixedInitEnsures));
+            String initSlug = abstractMachineEl.getAttribute("name").toLowerCase() + "__initialisation";
+            ops.add(new GhostOp(initSlug, List.of(), initAssigned, prefixedInitEnsures));
         }
 
         Element operationsEl = firstChildElement(abstractMachineEl, "Operations");
@@ -361,6 +364,7 @@ public final class GhostOperationsCiGenerator {
                     forall =
                             rewriteAnySubEnsureForGhost(
                                     forall, abstractSet, concreteConstants, op, anySub, ctx);
+                    forall = rewriteBoolOutputPredicateTernary(forall);
                     forall = castScalarIntGhostParamsInEnsure(forall, params);
                     ops.add(
                             new GhostOp(
@@ -393,6 +397,7 @@ public final class GhostOperationsCiGenerator {
                     ge = stripBTypingCommentsForGhost(ge);
                     ge = normalizeBooleanLiteralsForGhost(ge);
                     ge = dereferenceScalarOutputParams(ge, op);
+                    ge = rewriteBoolOutputPredicateTernary(ge);
                     ge = castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
@@ -582,6 +587,19 @@ public final class GhostOperationsCiGenerator {
             return text;
         }
         return text.replaceAll("\\s*/\\*\\s*:[^*]*\\*/", "");
+    }
+
+    /**
+     * {@code *param == (pred ? \true : \false)} → {@code (*param != 0) <==> pred}.
+     *
+     * <p>Em ACSL, predicados ({@code dummy_equals}, {@code dummy_belongs}, etc.) não podem ser usados
+     * como condição de ternário (contexto de termo). Converte para bicondicional.
+     */
+    private static String rewriteBoolOutputPredicateTernary(String ensure) {
+        if (ensure == null || ensure.isEmpty() || !ensure.contains("\\true")) return ensure;
+        return ensure.replaceAll(
+                "(\\*\\w+)\\s*==\\s*\\((.+?)\\s*\\?\\s*\\\\true\\s*:\\s*\\\\false\\)",
+                "(($1 != 0) <==> $2)");
     }
 
     /** {@code TRUE}/{@code FALSE} B restantes → {@code \\true}/{@code \\false} no universo lógico ghost. */

@@ -302,6 +302,18 @@ public final class BxmlPredicateToAcsl {
             return "inclusion(" + left + ", " + right + ")";
         }
         if ("=".equals(op)) {
+            if ("Boolean_Exp".equals(rightEl.getLocalName())) {
+                Element predEl = firstNonAttrElementChild(rightEl);
+                if (predEl != null) {
+                    return "(" + left + " != 0) <==> " + translatePred(predEl, ctx);
+                }
+            }
+            if ("Boolean_Exp".equals(leftEl.getLocalName())) {
+                Element predEl = firstNonAttrElementChild(leftEl);
+                if (predEl != null) {
+                    return "(" + right + " != 0) <==> " + translatePred(predEl, ctx);
+                }
+            }
             if ("Id".equals(leftEl.getLocalName())
                     && "Boolean_Literal".equals(rightEl.getLocalName())) {
                 return "("
@@ -333,6 +345,12 @@ public final class BxmlPredicateToAcsl {
                 return "equals(" + left + ", " + right + ")";
             }
             return "(" + left + " == " + right + ")";
+        }
+        if ("!=".equals(op)) {
+            if (BxmlExpressionToAcsl.isSetValued(leftEl, ctx)
+                    && BxmlExpressionToAcsl.isSetValued(rightEl, ctx)) {
+                return "!equals(" + left + ", " + right + ")";
+            }
         }
         return "(" + left + " " + op + " " + right + ")";
     }
