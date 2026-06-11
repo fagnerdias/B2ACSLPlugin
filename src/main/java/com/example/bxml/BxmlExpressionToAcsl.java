@@ -61,21 +61,21 @@ public final class BxmlExpressionToAcsl {
             case "Id" -> isSetValuedId(exp, ctx);
             case "Unary_Exp" -> {
                 String op = exp.getAttribute("op");
-                if ("ran".equals(op)) {
-                    yield true;
-                }
-                if ("card".equals(op)) {
-                    yield false;
-                }
-                yield false;
+                yield "ran".equals(op) || "dom".equals(op) || "id".equals(op)
+                        || "closure".equals(op) || "closure1".equals(op);
             }
             case "EmptySet" -> true;
             case "Quantified_Set" -> true;
-            case "Binary_Exp" ->
-                    isSetUnion(exp.getAttribute("op"))
-                            || isSetIntersection(exp.getAttribute("op"))
-                            || isCartesianProduct(exp.getAttribute("op"))
-                            || isIntervalBinaryExp(exp);
+            case "Binary_Exp" -> {
+                String op = exp.getAttribute("op");
+                yield isSetUnion(op)
+                        || isSetIntersection(op)
+                        || isSetDifferenceOp(op)
+                        || isCartesianProduct(op)
+                        || isDomainRestrictionOp(op)
+                        || isRangeRestrictionOp(op)
+                        || isIntervalBinaryExp(exp);
+            }
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
             default -> false;
         };
