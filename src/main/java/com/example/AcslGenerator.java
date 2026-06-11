@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -287,9 +288,10 @@ public final class AcslGenerator {
             operationStateVariableNames.addAll(
                     BxmlMachineVariables.declaredVariableNames(machineEl));
         }
+        Map<String, Long> knownIntegerConstants = collectAllIntegerValuations(bxmlDirectory);
         InitialisationAcsl initBare =
                 BxmlInitialisationTranslator.translate(
-                        machineEl, implementationAssignTargets, ctx);
+                        machineEl, implementationAssignTargets, ctx, knownIntegerConstants);
         // Propaga ensures e assigns das máquinas IMPORTADAS (chamadas na INITIALISATION)
         if (importsGraph != null && isAbstraction) {
             List<String> importedEnsures = new ArrayList<>();
@@ -303,7 +305,8 @@ public final class AcslGenerator {
                 mergedAssigns.addAll(initBare.assignsTargets());
                 initBare = new InitialisationAcsl(
                         initBare.functionName(), importedEnsures, mergedAssigns,
-                        initBare.includeGhostBehaviorAssert(), initBare.dummyGhostEnsureVarNames());
+                        initBare.includeGhostBehaviorAssert(), initBare.dummyGhostEnsureVarNames(),
+                        initBare.loopUnfoldSize());
             }
         }
         boolean initGhostAssert =
@@ -322,7 +325,8 @@ public final class AcslGenerator {
                         initEnsuresForContract,
                         initBare.assignsTargets(),
                         initGhostAssert,
-                        dummyGhostVarsForInit);
+                        dummyGhostVarsForInit,
+                        initBare.loopUnfoldSize());
         InitialisationAcsl init =
                 isAbstraction
                         ? withInvariantEnsures(initMarked, allInvariantPredicateNames)
@@ -724,7 +728,8 @@ public final class AcslGenerator {
                 ensures,
                 init.assignsTargets(),
                 init.includeGhostBehaviorAssert(),
-                init.dummyGhostEnsureVarNames());
+                init.dummyGhostEnsureVarNames(),
+                init.loopUnfoldSize());
     }
 
     private static void appendAcslMachineIncludes(StringBuilder preamble, String includeBlock) {
@@ -849,5 +854,24 @@ public final class AcslGenerator {
             }
         } catch (Exception ignored) {}
         return out;
+    }
+
+    /**
+     * Varre todos os arquivos {@code *_i.bxml} no diretório e coleta valuations de constantes inteiras
+     * literais (ex. {@code NN = 10}), para uso em anotações que exigem expressão constante (loop unfold).
+     */
+    private static Map<String, Long> collectAllIntegerValuations(Path bxmlDirectory) {
+        Map<String, Long> result = new LinkedHashMap<>();
+        if (bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) return result;
+        try (var stream = Files.list(bxmlDirectory)) {
+            for (Path p : stream.filter(f -> f.getFileName().toString().endsWith("_i.bxml"))
+                    .sorted().toList()) {
+                try {
+                    Element el = parseMachineElement(p);
+                    result.putAll(BxmlConstantsAndProperties.extractLiteralIntegerValuations(el));
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
+        return result;
     }
 }

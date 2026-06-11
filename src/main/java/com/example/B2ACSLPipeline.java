@@ -1175,12 +1175,13 @@ public final class B2ACSLPipeline {
     private static final Pattern ACSL_OPERATION_CONTRACT_FUNCTION =
             Pattern.compile("(?m)^\\s*function\\s+([A-Za-z_]\\w*)\\s*:");
     private static final Pattern GHOST_INITIALISATION_BLOCK_IN_CI =
-            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
+            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+\\w+__initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
     private static final Pattern GHOST_INITIALISATION_BLOCK_IN_MERGED =
-            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/\\s*");
+            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+\\w+__initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/\\s*");
     private static final Pattern INITIALISATION_FUNCTION_DEFINITION =
             Pattern.compile("\\bvoid\\s+[A-Za-z_]\\w*__INITIALISATION\\s*\\([^;{}]*\\)\\s*\\{");
-    private static final String INITIALISATION_GHOST_CALL_MARKER = "/*@ ghost initialisation(); */";
+    private static final Pattern INITIALISATION_GHOST_CALL_PATTERN =
+            Pattern.compile("/\\*@\\s*ghost\\s+\\w+__initialisation\\s*\\(\\s*\\)\\s*;\\s*\\*/");
 
     /**
      * Novo passo pré-WP: move especificações ghost de operações para imediatamente acima da função C
@@ -1224,7 +1225,7 @@ public final class B2ACSLPipeline {
         for (int i = 0; i < opNames.size(); i++) {
             String opName = opNames.get(i);
             String ghostBlock = blocks.get(i);
-            if ("initialisation".equalsIgnoreCase(opName)) {
+            if (opName.toLowerCase().endsWith("__initialisation")) {
                 merged = placeInitialisationGhostAndContract(merged, ghostBlock);
             } else {
                 int insertAt = findFunctionStartForGhostSpec(merged, opName);
@@ -1319,7 +1320,7 @@ public final class B2ACSLPipeline {
             return -1;
         }
         List<Pattern> candidates = new ArrayList<>();
-        if ("initialisation".equalsIgnoreCase(opName)) {
+        if (opName.toLowerCase().endsWith("__initialisation")) {
             candidates.add(
                     Pattern.compile(
                             "\\bvoid\\s+[A-Za-z_]\\w*__INITIALISATION\\s*\\([^;{}]*\\)\\s*\\{"));
@@ -1496,10 +1497,11 @@ public final class B2ACSLPipeline {
      * recua até a definição de {@code __INITIALISATION}, ancorando acima da especificação contígua.
      */
     private static int findInitialisationAnchorFromGhostCall(String content) {
-        int callIdx = content.indexOf(INITIALISATION_GHOST_CALL_MARKER);
-        if (callIdx < 0) {
+        Matcher callMatcher = INITIALISATION_GHOST_CALL_PATTERN.matcher(content);
+        if (!callMatcher.find()) {
             return -1;
         }
+        int callIdx = callMatcher.start();
         Matcher def = INITIALISATION_FUNCTION_DEFINITION.matcher(content);
         int defStart = -1;
         while (def.find()) {
