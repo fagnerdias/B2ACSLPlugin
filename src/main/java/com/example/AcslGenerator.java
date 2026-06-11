@@ -368,7 +368,7 @@ public final class AcslGenerator {
                             op.functionName(), newRequires, newEnsures, op.outputParameters(),
                             op.ghostBehaviorSlug(), op.ghostBehaviorInputNames(),
                             op.dummyGhostEnsureVarNames(), op.connectionConcreteAssigns(),
-                            op.loops()));
+                            op.loops(), op.skipBody()));
                 }
                 operations = enriched;
             }

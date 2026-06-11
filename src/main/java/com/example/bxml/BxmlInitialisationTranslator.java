@@ -483,6 +483,12 @@ public final class BxmlInitialisationTranslator {
         }
 
         public String toContractText() {
+            boolean hasContent = !ensures.isEmpty()
+                    || !dummyGhostEnsureVarNames.isEmpty()
+                    || !assignsTargets.isEmpty()
+                    || (loopUnfoldSize != null && !loopUnfoldSize.isBlank())
+                    || includeGhostBehaviorAssert;
+            if (!hasContent) return "";
             StringBuilder sb = new StringBuilder();
             sb.append("function ").append(functionName).append(":\n");
             sb.append("contract:\n");

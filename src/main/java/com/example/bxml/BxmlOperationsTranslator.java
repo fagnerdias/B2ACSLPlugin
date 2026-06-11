@@ -249,6 +249,8 @@ public final class BxmlOperationsTranslator {
                 }
             }
 
+            boolean skipBody = isBodyPureSkip(body);
+
             out.add(
                     new OperationAcsl(
                             funcName,
@@ -259,7 +261,8 @@ public final class BxmlOperationsTranslator {
                             ghostBehaviorArgs,
                             dummyGhostEnsureVars,
                             connectionConcreteAssigns,
-                            loops));
+                            loops,
+                            skipBody));
         }
         return out;
     }
@@ -414,6 +417,27 @@ public final class BxmlOperationsTranslator {
         return null;
     }
 
+    private static boolean isBodyPureSkip(Element body) {
+        if (body == null) return false;
+        Element sub = firstNonAttrChild(body);
+        while (sub != null && "Bloc_Sub".equals(sub.getLocalName())) {
+            sub = firstNonAttrChild(sub);
+        }
+        return sub != null && "Skip".equals(sub.getLocalName());
+    }
+
+    private static Element firstNonAttrChild(Element parent) {
+        if (parent == null) return null;
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if (!"Attr".equals(e.getLocalName())) return e;
+        }
+        return null;
+    }
+
     /**
      * Parâmetros de saída em C são ponteiros: {@code ret : S} no B traduz-se para
      * {@code belongs(*ret, BOOL)} ou {@code belongs((integer)*ret, S)} nos {@code requires}.
@@ -564,7 +588,9 @@ public final class BxmlOperationsTranslator {
              * ghost altera a abstrata (omitidas se já redundantes).
              */
             List<String> connectionConcreteAssigns,
-            List<BxmlLoopTranslator.LoopContract> loops) {
+            List<BxmlLoopTranslator.LoopContract> loops,
+            /** Verdadeiro quando o corpo da operação é somente {@code skip}. */
+            boolean skipBody) {
 
         public OperationAcsl {
             dummyGhostEnsureVarNames =
@@ -592,11 +618,17 @@ public final class BxmlOperationsTranslator {
                     ghostBehaviorInputNames,
                     dummyGhostEnsureVarNames,
                     connectionConcreteAssigns,
-                    List.of());
+                    List.of(),
+                    false);
         }
 
         /** Mesmo esquema que {@link com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl#toContractText()}. */
         public String toContractSketch() {
+            if (skipBody) {
+                return "function " + functionName + ":\ncontract:    \n"
+                        + "    requires \\true;\n"
+                        + "    ensures \\true;\n";
+            }
             StringBuilder sb = new StringBuilder();
             sb.append("function ").append(functionName).append(":\n");
             sb.append("contract:    \n");
