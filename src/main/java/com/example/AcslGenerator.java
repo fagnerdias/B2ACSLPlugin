@@ -300,6 +300,7 @@ public final class AcslGenerator {
                 initGhostAssert
                         ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
                         : List.of();
+        boolean machineHasNoImports = machineHasNoImports(machineEl, mergedMachineElements);
         List<String> initEnsuresForContract =
                 initGhostAssert ? List.of() : new ArrayList<>(initBare.ensures());
         InitialisationAcsl initMarked =
@@ -309,7 +310,8 @@ public final class AcslGenerator {
                         initBare.assignsTargets(),
                         initGhostAssert,
                         dummyGhostVarsForInit,
-                        initBare.loopUnfoldSize());
+                        initBare.loopUnfoldSize(),
+                        machineHasNoImports);
         InitialisationAcsl init =
                 isAbstraction
                         ? withInvariantEnsures(initMarked, allInvariantPredicateNames)
@@ -691,7 +693,22 @@ public final class AcslGenerator {
                 init.assignsTargets(),
                 init.includeGhostBehaviorAssert(),
                 init.dummyGhostEnsureVarNames(),
-                init.loopUnfoldSize());
+                init.loopUnfoldSize(),
+                init.emitMinimalContract());
+    }
+
+    private static boolean machineHasNoImports(Element machineEl, List<Element> mergedMachineElements) {
+        if (!com.example.bxml.BxmlSetsTranslator.listImportedMachineNames(machineEl).isEmpty()) {
+            return false;
+        }
+        if (mergedMachineElements != null) {
+            for (Element mel : mergedMachineElements) {
+                if (!com.example.bxml.BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static void appendAcslMachineIncludes(StringBuilder preamble, String includeBlock) {

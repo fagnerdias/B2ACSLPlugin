@@ -58,7 +58,7 @@ public final class BxmlInitialisationTranslator {
 
         String functionName = machineName + "__INITIALISATION";
         return new InitialisationAcsl(
-                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopUnfoldSize);
+                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopUnfoldSize, false);
     }
 
     private static String detectCartesianProductUnfoldSize(
@@ -475,7 +475,12 @@ public final class BxmlInitialisationTranslator {
              * Expressão ACSL para o número de iterações de loop gerado por um produto cartesiano
              * {@code (a..b) * {v}}. Quando não-nulo, emite {@code at loop 1: loop unfold n;} no contrato.
              */
-            String loopUnfoldSize) {
+            String loopUnfoldSize,
+            /**
+             * {@code true} para máquinas que não importam outras máquinas: emite um contrato mínimo
+             * com {@code assigns \nothing;} mesmo que não haja outros conteúdos.
+             */
+            boolean emitMinimalContract) {
 
         public InitialisationAcsl {
             dummyGhostEnsureVarNames =
@@ -488,7 +493,7 @@ public final class BxmlInitialisationTranslator {
                     || !assignsTargets.isEmpty()
                     || (loopUnfoldSize != null && !loopUnfoldSize.isBlank())
                     || includeGhostBehaviorAssert;
-            if (!hasContent) return "";
+            if (!hasContent && !emitMinimalContract) return "";
             StringBuilder sb = new StringBuilder();
             sb.append("function ").append(functionName).append(":\n");
             sb.append("contract:\n");
