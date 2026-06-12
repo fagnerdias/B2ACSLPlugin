@@ -260,7 +260,9 @@ public final class GhostOperationsCiGenerator {
         Set<String> abstractSet = new LinkedHashSet<>(abstractVarNames);
         Map<String, String> varTypes =
                 BxmlMachineVariables.inferVariableLogicTypes(abstractMachineEl, ctx);
-        Set<String> concreteConstants = concreteConstantNames(abstractMachineEl);
+        Set<String> concreteConstants = new LinkedHashSet<>(concreteConstantNames(abstractMachineEl));
+        concreteConstants.addAll(
+                BxmlSetsTranslator.listSeenMachineConcreteConstantNames(abstractMachineEl, bxmlDirectory));
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* ghost_operations.ci — operações ghost não puras (gerado) — ")
@@ -331,6 +333,7 @@ public final class GhostOperationsCiGenerator {
                 ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
                 ge = prefixGlobalLogicSetsForGhost(ge);
                 ge = prefixSetComprehensionsForGhost(ge);
+                ge = ghostDummyConcreteRefs(ge, concreteConstants);
                 ge = stripBTypingCommentsForGhost(ge);
                 ge = normalizeBooleanLiteralsForGhost(ge);
                 prefixedInitEnsures.add(ge);
@@ -394,6 +397,7 @@ public final class GhostOperationsCiGenerator {
                     ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
                     ge = prefixGlobalLogicSetsForGhost(ge);
                     ge = prefixSetComprehensionsForGhost(ge);
+                    ge = ghostDummyConcreteRefs(ge, concreteConstants);
                     ge = stripBTypingCommentsForGhost(ge);
                     ge = normalizeBooleanLiteralsForGhost(ge);
                     ge = dereferenceScalarOutputParams(ge, op);

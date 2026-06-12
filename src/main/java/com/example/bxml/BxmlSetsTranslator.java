@@ -525,6 +525,51 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Nomes das constantes concretas ({@code Concrete_Constants}) declaradas nas máquinas em
+     * {@code SEES} da máquina {@code machineEl}.  Usado pelo gerador de {@code ghost_operations.ci}
+     * para emitir {@code logic integer <NAME>;} quando tais constantes aparecem bare nos contratos
+     * ghost (sem prefixo {@code dummy_}).
+     */
+    public static List<String> listSeenMachineConcreteConstantNames(
+            Element machineEl, Path bxmlDirectory) {
+        if (machineEl == null || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return List.of();
+        }
+        List<String> seenNames = listReferencedMachineNames(machineEl);
+        List<String> result = new ArrayList<>();
+        for (String seenName : seenNames) {
+            Path p = bxmlDirectory.resolve(seenName + ".bxml");
+            if (!Files.isRegularFile(p)) {
+                continue;
+            }
+            try {
+                Element seenEl = parseMachineElement(p);
+                Element block = firstChildElement(seenEl, "Concrete_Constants");
+                if (block == null) {
+                    continue;
+                }
+                NodeList ch = block.getChildNodes();
+                for (int i = 0; i < ch.getLength(); i++) {
+                    Node n = ch.item(i);
+                    if (n.getNodeType() != Node.ELEMENT_NODE) {
+                        continue;
+                    }
+                    Element e = (Element) n;
+                    if (!"Id".equals(e.getLocalName())) {
+                        continue;
+                    }
+                    String name = e.getAttribute("value");
+                    if (name != null && !name.isBlank()) {
+                        result.add(name.trim());
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return result;
+    }
+
+    /**
      * Texto das máquinas em {@code SEES} para deteção de includes da {@code B2ACSLLib} na máquina que
      * vê (corpo dos {@code .acsl} já gerados, sem repetir o preâmbulo de {@code include}).
      */

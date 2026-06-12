@@ -126,6 +126,8 @@ final class DummyGhostAxiomaticBuilder {
 
         appendDummyConcreteConstantDeclarations(sb, machineEl, ctx);
 
+        appendSeenConcreteConstantDeclarations(sb, ghostText, machineEl, bxmlDirectory);
+
         if (maxSetComprehensionIndex > 0) {
             String machineName = machineEl == null ? "" : machineEl.getAttribute("name");
             if (machineName == null) {
@@ -474,6 +476,30 @@ final class DummyGhostAxiomaticBuilder {
             case "bool", "boolean" -> "boolean";
             default -> "integer";
         };
+    }
+
+    /**
+     * Para cada constante concreta das máquinas em {@code SEES} que apareça como identificador bare
+     * (sem prefixo {@code dummy_}) no texto ghost, emite {@code logic integer <NAME>;} no bloco
+     * axiomatic.  Estas constantes são declaradas nos ficheiros {@code .acsl} das máquinas vistas
+     * (carregados via {@code -acsl-import}), pelo que não são abstraídas com {@code dummy_}.
+     */
+    private static void appendSeenConcreteConstantDeclarations(
+            StringBuilder sb, String ghostText, Element machineEl, Path bxmlDirectory) {
+        if (ghostText == null || ghostText.isBlank() || machineEl == null || bxmlDirectory == null) {
+            return;
+        }
+        List<String> seenConstants =
+                BxmlSetsTranslator.listSeenMachineConcreteConstantNames(machineEl, bxmlDirectory);
+        for (String name : seenConstants) {
+            // ghostDummyConcreteRefs already replaced bare <NAME> with dummy_<NAME>
+            Pattern pat =
+                    Pattern.compile(
+                            "(?<![A-Za-z0-9_])dummy_" + Pattern.quote(name) + "(?![A-Za-z0-9_])");
+            if (pat.matcher(ghostText).find()) {
+                sb.append("        logic integer dummy_").append(name).append(";\n\n");
+            }
+        }
     }
 
     private static void appendDummyConcreteConstantDeclarations(
