@@ -82,6 +82,7 @@
     "id": "function_functions/id.acsl",
     "iSeq": "sequence_functions/iseq.acsl",
     "inclusion": "set_functions/inclusion.acsl",
+    "interval_set": "set_functions/interval_set.acsl",
     "integer_pow": "math.acsl",
     "is_bijective": "function_functions/is_bijective.acsl",
     "is_finite": "set_functions/finite.acsl",
