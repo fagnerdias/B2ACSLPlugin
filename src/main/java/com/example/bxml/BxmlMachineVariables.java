@@ -1,5 +1,7 @@
 package com.example.bxml;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -576,6 +578,24 @@ public final class BxmlMachineVariables {
         return out;
     }
 
+    /**
+     * Qualifica um nome de variável para uso em {@code loop assigns}: se for uma variável declarada
+     * na máquina abstrata, retorna {@code machineName__varName} (com {@code [range]} para arrays);
+     * caso contrário (variável local {@code VAR_IN} ou parâmetro de saída), retorna o nome como-está.
+     */
+    public static String qualifyLoopAssignTarget(
+            String varName, String machineName, Element abstractMachineEl, BxmlTranslateContext ctx) {
+        if (varName == null || varName.isBlank() || machineName == null || abstractMachineEl == null) {
+            return varName;
+        }
+        if (!declaredVariableNames(abstractMachineEl).contains(varName)) {
+            return varName;
+        }
+        String base = machineName.trim() + "__" + varName;
+        String ranged = implementationAssignTargetWithRange(base, varName, abstractMachineEl, ctx);
+        return ranged != null ? ranged : base;
+    }
+
     private static String implementationAssignTargetWithRange(
             String baseTarget, String varName, Element implMachineEl, BxmlTranslateContext ctx) {
         if (baseTarget == null || varName == null || implMachineEl == null || ctx == null) {
@@ -918,5 +938,99 @@ public final class BxmlMachineVariables {
             }
         }
         return null;
+    }
+
+    /**
+     * Targets {@code assigns machineName__varName} for ALL concrete variables of each imported
+     * machine's implementation BXML ({@code name_i.bxml}).  Added to INITIALISATION assigns because
+     * Atelier B always calls imported-machine INITIALISATION in the generated C code.
+     */
+    public static List<String> listImportedMachineConcreteAssigns(
+            List<String> importedMachineNames, Path bxmlDirectory) {
+        if (importedMachineNames == null || importedMachineNames.isEmpty() || bxmlDirectory == null) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (String name : importedMachineNames) {
+            result.addAll(loadConcreteAssignsForImportedMachine(name, bxmlDirectory));
+        }
+        return result;
+    }
+
+    /**
+     * Map from each imported-machine operation local name to the concrete assign targets of that
+     * machine.  Used to union called-operation assigns into the caller's {@code assigns} clause.
+     */
+    public static Map<String, List<String>> buildImportedOperationAssignsMap(
+            List<String> importedMachineNames, Path bxmlDirectory) {
+        if (importedMachineNames == null || importedMachineNames.isEmpty() || bxmlDirectory == null) {
+            return Map.of();
+        }
+        LinkedHashMap<String, List<String>> result = new LinkedHashMap<>();
+        for (String machineName : importedMachineNames) {
+            List<String> machineAssigns = loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory);
+            if (machineAssigns.isEmpty()) continue;
+            for (String opName : loadOperationNamesForMachine(machineName, bxmlDirectory)) {
+                result.computeIfAbsent(opName, k -> new ArrayList<>()).addAll(machineAssigns);
+            }
+        }
+        return result;
+    }
+
+    private static List<String> loadConcreteAssignsForImportedMachine(String machineName, Path bxmlDirectory) {
+        Element abstractEl = null;
+        Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
+        if (Files.exists(abstractPath)) {
+            try { abstractEl = BxmlSetsTranslator.parseMachineElement(abstractPath); } catch (Exception ignored) {}
+        }
+
+        Element implEl = null;
+        for (String suffix : new String[]{"_i", "_imp"}) {
+            Path path = bxmlDirectory.resolve(machineName + suffix + ".bxml");
+            if (!Files.exists(path)) continue;
+            try {
+                Element el = BxmlSetsTranslator.parseMachineElement(path);
+                if (!"implementation".equalsIgnoreCase(el.getAttribute("type"))) continue;
+                implEl = el;
+                break;
+            } catch (Exception ignored) {}
+        }
+
+        if (implEl == null) return List.of();
+
+        List<String> result = new ArrayList<>(listImplementationAssignTargets(machineName, List.of(implEl), null));
+
+        if (abstractEl != null && needsGhostAbstraction(abstractEl, List.of(implEl))) {
+            for (String v : GhostOperationsCiGenerator.listAbstractVariableNames(abstractEl)) {
+                result.add("ghost_" + v);
+            }
+        }
+
+        return result;
+    }
+
+    private static List<String> loadOperationNamesForMachine(String machineName, Path bxmlDirectory) {
+        Path path = bxmlDirectory.resolve(machineName + ".bxml");
+        if (!Files.exists(path)) return List.of();
+        try {
+            Element machineEl = BxmlSetsTranslator.parseMachineElement(path);
+            List<String> names = new ArrayList<>();
+            NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
+            if (ops.getLength() == 0) return List.of();
+            Element operationsEl = (Element) ops.item(0);
+            NodeList children = operationsEl.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                Node n = children.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if ("Operation".equals(ch.getLocalName())) {
+                    String name = ch.getAttribute("name");
+                    if (name != null && !name.isBlank()) names.add(name.trim());
+                }
+            }
+            return names;
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 }

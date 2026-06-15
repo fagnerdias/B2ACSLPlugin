@@ -46,6 +46,15 @@ public final class BxmlLoopTranslator {
     /** Extrai os loops do {@code <Body>} de uma operação de implementação (ordem de descoberta). */
     public static List<LoopContract> translateLoopsFromImplementationOperation(
             Element implementationOperation, BxmlTranslateContext ctx) {
+        return translateLoopsFromImplementationOperation(implementationOperation, ctx, null);
+    }
+
+    /**
+     * @param abstractMachineEl máquina abstrata; quando fornecida, variáveis de máquina no
+     *     {@code loop assigns} são qualificadas com {@code machineName__varName} (e fatia de array).
+     */
+    public static List<LoopContract> translateLoopsFromImplementationOperation(
+            Element implementationOperation, BxmlTranslateContext ctx, Element abstractMachineEl) {
         if (implementationOperation == null || ctx == null) {
             return List.of();
         }
@@ -54,7 +63,7 @@ public final class BxmlLoopTranslator {
             return List.of();
         }
         List<LoopContract> loops = new ArrayList<>();
-        walkForWhileLoops(body, ctx, loops);
+        walkForWhileLoops(body, ctx, abstractMachineEl, loops);
         return List.copyOf(loops);
     }
 
@@ -78,13 +87,14 @@ public final class BxmlLoopTranslator {
         return null;
     }
 
-    private static void walkForWhileLoops(Element sub, BxmlTranslateContext ctx, List<LoopContract> out) {
+    private static void walkForWhileLoops(
+            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, List<LoopContract> out) {
         if (sub == null) {
             return;
         }
         if ("While".equals(sub.getLocalName())) {
-            out.add(translateWhile(sub, ctx, out.size() + 1));
-            walkForWhileLoops(firstChildElement(sub, "Body"), ctx, out);
+            out.add(translateWhile(sub, ctx, abstractMachineEl, out.size() + 1));
+            walkForWhileLoops(firstChildElement(sub, "Body"), ctx, abstractMachineEl, out);
             return;
         }
         NodeList nl = sub.getChildNodes();
@@ -97,11 +107,12 @@ public final class BxmlLoopTranslator {
             if ("Attr".equals(ch.getLocalName())) {
                 continue;
             }
-            walkForWhileLoops(ch, ctx, out);
+            walkForWhileLoops(ch, ctx, abstractMachineEl, out);
         }
     }
 
-    private static LoopContract translateWhile(Element whileEl, BxmlTranslateContext ctx, int index) {
+    private static LoopContract translateWhile(
+            Element whileEl, BxmlTranslateContext ctx, Element abstractMachineEl, int index) {
         Element invEl = firstChildElement(whileEl, "Invariant");
         String invariant = "";
         if (invEl != null) {
@@ -119,36 +130,51 @@ public final class BxmlLoopTranslator {
 
         LinkedHashSet<String> assigns = new LinkedHashSet<>();
         Element body = firstChildElement(whileEl, "Body");
-        collectLoopAssigns(body, assigns);
+        collectLoopAssigns(body, ctx, abstractMachineEl, assigns);
 
         return new LoopContract(index, invariant, variant, List.copyOf(assigns));
     }
 
-    private static void collectLoopAssigns(Element sub, Set<String> out) {
+    private static void collectLoopAssigns(
+            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, Set<String> out) {
         if (sub == null) {
             return;
         }
-        if ("Assignement_Sub".equals(sub.getLocalName())) {
+        if ("Assignement_Sub".equals(sub.getLocalName())
+                || "Becomes_In".equals(sub.getLocalName())
+                || "Becomes_Such_That".equals(sub.getLocalName())) {
             Element vars = firstChildElement(sub, "Variables");
             if (vars != null) {
-                for (Element id : directExpChildren(vars)) {
-                    if ("Id".equals(id.getLocalName())) {
-                        String name = id.getAttribute("value");
+                for (Element lhs : directExpChildren(vars)) {
+                    if ("Id".equals(lhs.getLocalName())) {
+                        // atribuição simples: x := ...
+                        String name = lhs.getAttribute("value");
                         if (name != null && !name.isBlank()) {
-                            out.add(name.trim());
+                            out.add(qualify(name.trim(), ctx, abstractMachineEl));
+                        }
+                    } else if ("Binary_Exp".equals(lhs.getLocalName())
+                            && "(".equals(lhs.getAttribute("op"))) {
+                        // atribuição funcional: f(idx) := val → extrai o nome base f
+                        List<Element> args = directExpChildren(lhs);
+                        if (!args.isEmpty() && "Id".equals(args.get(0).getLocalName())) {
+                            String name = args.get(0).getAttribute("value");
+                            if (name != null && !name.isBlank()) {
+                                out.add(qualify(name.trim(), ctx, abstractMachineEl));
+                            }
                         }
                     }
                 }
             }
             return;
         }
-        if ("Becomes_In".equals(sub.getLocalName()) || "Becomes_Such_That".equals(sub.getLocalName())) {
-            Element vars = firstChildElement(sub, "Variables");
-            if (vars != null) {
-                for (Element id : directExpChildren(vars)) {
+        if ("Operation_Call".equals(sub.getLocalName())) {
+            Element outParams = firstChildElement(sub, "Output_Parameters");
+            if (outParams != null) {
+                for (Element id : directExpChildren(outParams)) {
                     if ("Id".equals(id.getLocalName())) {
                         String name = id.getAttribute("value");
                         if (name != null && !name.isBlank()) {
+                            // parâmetros de saída são variáveis locais C — sem prefixo de máquina
                             out.add(name.trim());
                         }
                     }
@@ -166,8 +192,20 @@ public final class BxmlLoopTranslator {
             if ("Attr".equals(ch.getLocalName())) {
                 continue;
             }
-            collectLoopAssigns(ch, out);
+            collectLoopAssigns(ch, ctx, abstractMachineEl, out);
         }
+    }
+
+    /**
+     * Qualifica o nome de uma variável assignada no loop: variáveis de máquina recebem prefixo
+     * {@code machineName__} (e fatia de array se aplicável); variáveis locais ficam como-estão.
+     */
+    private static String qualify(String varName, BxmlTranslateContext ctx, Element abstractMachineEl) {
+        if (ctx == null || abstractMachineEl == null) {
+            return varName;
+        }
+        return BxmlMachineVariables.qualifyLoopAssignTarget(
+                varName, ctx.machineName(), abstractMachineEl, ctx);
     }
 
     private static Element firstChildElement(Element parent, String localName) {

@@ -277,9 +277,16 @@ public final class AcslGenerator {
 
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
-        List<String> implementationAssignTargets =
+        List<String> importedMachineNames =
+                com.example.bxml.BxmlSetsTranslator.listImportedMachineNamesFromChain(
+                        machineEl, mergedMachineElements);
+        List<String> implementationAssignTargets = new java.util.ArrayList<>(
                 BxmlMachineVariables.listInitialisationAssignTargets(
-                        baseName, machineEl, mergedMachineElements, ctx);
+                        baseName, machineEl, mergedMachineElements, ctx));
+        implementationAssignTargets.addAll(
+                BxmlMachineVariables.listImportedMachineConcreteAssigns(importedMachineNames, bxmlDirectory));
+        Map<String, List<String>> importedOpAssigns =
+                BxmlMachineVariables.buildImportedOperationAssignsMap(importedMachineNames, bxmlDirectory);
         boolean useGhostAbstraction =
                 BxmlMachineVariables.needsGhostAbstraction(machineEl, mergedMachineElements);
         Set<String> operationStateVariableNames =
@@ -310,7 +317,7 @@ public final class AcslGenerator {
                         initBare.assignsTargets(),
                         initGhostAssert,
                         dummyGhostVarsForInit,
-                        initBare.loopUnfoldSize(),
+                        initBare.loopSpec(),
                         machineHasNoImports);
         InitialisationAcsl init =
                 isAbstraction
@@ -335,7 +342,8 @@ public final class AcslGenerator {
                                 baseName,
                                 mergedMachineElements,
                                 gluing,
-                                useGhostAbstraction)
+                                useGhostAbstraction,
+                                importedOpAssigns)
                         : List.of();
 
         StringBuilder sb = new StringBuilder();
@@ -693,7 +701,7 @@ public final class AcslGenerator {
                 init.assignsTargets(),
                 init.includeGhostBehaviorAssert(),
                 init.dummyGhostEnsureVarNames(),
-                init.loopUnfoldSize(),
+                init.loopSpec(),
                 init.emitMinimalContract());
     }
 
