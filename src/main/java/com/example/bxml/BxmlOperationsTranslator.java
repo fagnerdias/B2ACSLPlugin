@@ -107,14 +107,10 @@ public final class BxmlOperationsTranslator {
                 rootAbstractMachineName,
                 mergedRefinementChain,
                 gluing,
-                useGhost);
+                useGhost,
+                null);
     }
 
-    /**
-     * @param useGhostAbstraction {@code false} quando a implementação usa as mesmas variáveis C
-     *        ({@link BxmlMachineVariables#usesDirectImplementationVariables}): contratos com
-     *        {@code ensures} do corpo e sem {@code assert ghost__…}
-     */
     public static List<OperationAcsl> translateOperations(
             Element machineEl,
             BxmlTranslateContext ctx,
@@ -125,6 +121,37 @@ public final class BxmlOperationsTranslator {
             List<Element> mergedRefinementChain,
             Map<String, String> gluing,
             boolean useGhostAbstraction) {
+        return translateOperations(
+                machineEl,
+                ctx,
+                invariantPredicateNames,
+                abstractVariableNames,
+                libScanGhostOperationBodies,
+                rootAbstractMachineName,
+                mergedRefinementChain,
+                gluing,
+                useGhostAbstraction,
+                null);
+    }
+
+    /**
+     * @param useGhostAbstraction {@code false} quando a implementação usa as mesmas variáveis C
+     *        ({@link BxmlMachineVariables#usesDirectImplementationVariables}): contratos com
+     *        {@code ensures} do corpo e sem {@code assert ghost__…}
+     * @param importedOpAssigns mapa de nome-local-de-operação → targets {@code assigns} da máquina
+     *        importada; quando não nulo, propaga assigns de {@code Operation_Call} na implementação
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction,
+            Map<String, List<String>> importedOpAssigns) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
 
@@ -242,10 +269,19 @@ public final class BxmlOperationsTranslator {
             }
 
             List<BxmlLoopTranslator.LoopContract> loops = List.of();
+            Element implOp = null;
             if (mergedRefinementChain != null && !mergedRefinementChain.isEmpty()) {
-                Element implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
+                implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
                 if (implOp != null) {
                     loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(implOp, ctx, machineEl);
+                }
+            }
+            if (importedOpAssigns != null && !importedOpAssigns.isEmpty() && implOp != null) {
+                List<String> calledAssigns = collectAssignsFromOperationCalls(implOp, importedOpAssigns);
+                if (!calledAssigns.isEmpty()) {
+                    LinkedHashSet<String> merged = new LinkedHashSet<>(connectionConcreteAssigns);
+                    merged.addAll(calledAssigns);
+                    connectionConcreteAssigns = new ArrayList<>(merged);
                 }
             }
 
@@ -436,6 +472,42 @@ public final class BxmlOperationsTranslator {
             if (!"Attr".equals(e.getLocalName())) return e;
         }
         return null;
+    }
+
+    private static List<String> collectAssignsFromOperationCalls(
+            Element implOp, Map<String, List<String>> importedOpAssigns) {
+        Element body = firstChildElement(implOp, "Body");
+        if (body == null) return List.of();
+        Set<String> calledOps = new LinkedHashSet<>();
+        collectOperationCallNames(body, calledOps);
+        List<String> result = new ArrayList<>();
+        for (String opName : calledOps) {
+            List<String> assigns = importedOpAssigns.get(opName);
+            if (assigns != null) result.addAll(assigns);
+        }
+        return result;
+    }
+
+    private static void collectOperationCallNames(Element sub, Set<String> out) {
+        if (sub == null) return;
+        if ("Operation_Call".equals(sub.getLocalName())) {
+            Element nameEl = firstChildElement(sub, "Name");
+            if (nameEl != null) {
+                Element idEl = firstChildElement(nameEl, "Id");
+                if (idEl != null) {
+                    String v = idEl.getAttribute("value");
+                    if (v != null && !v.isBlank()) out.add(v.trim());
+                }
+            }
+            return;
+        }
+        NodeList nl = sub.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element ch = (Element) n;
+            if (!"Attr".equals(ch.getLocalName())) collectOperationCallNames(ch, out);
+        }
     }
 
     /**
