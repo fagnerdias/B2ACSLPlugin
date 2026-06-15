@@ -75,9 +75,6 @@ public final class B2ACSLPipeline {
         } catch (Exception ignored) {}
         return true;
     }
-    /** Se definido, grava os .acsl neste diretório e não os remove (para inspeção) */
-    private static final String KEEP_ACSL_DIR = System.getProperty("b2acsl.keepAcsl");
-
     private B2ACSLPipeline() {}
 
     /**
@@ -163,6 +160,8 @@ public final class B2ACSLPipeline {
                 ? Path.of(bdpStr.substring(0, bdpIdx) + "lang" + bdpStr.substring(bdpIdx + 3))
                 : bdp.getParent().resolve("lang");
         Path cDir = langPath.resolve("c");
+        // Staging dos ficheiros da lib sob cDir (elimina cópias redundantes em target/)
+        System.setProperty("b2acsl.targetAcslDir", cDir.toAbsolutePath().normalize().toString());
         for (MachineFile mf : machines) {
             Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
             if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
@@ -183,11 +182,8 @@ public final class B2ACSLPipeline {
                                 Files.readString(ghostCiPath, java.nio.charset.StandardCharsets.UTF_8))
                         : null;
 
-        // Step 1.1: Gerar arquivos .acsl (temporários ou em dir fixo para inspeção)
-        Path acslDir = KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank()
-                ? Path.of(KEEP_ACSL_DIR).toAbsolutePath().normalize()
-                : Files.createTempDirectory("b2acsl_acsl_");
-        boolean keepFiles = KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank();
+        // Step 1.1: Gerar arquivos .acsl na pasta lang/c (junto aos ficheiros C)
+        Path acslDir = cDir;
         try {
             AcslLibIncludes.resetLibraryBundleUnderOutput(acslDir);
             List<Path> acslFiles = new ArrayList<>();
@@ -246,10 +242,8 @@ public final class B2ACSLPipeline {
                 System.out.println(
                         "[B2ACSL] Importação ACSL Frama-C (raiz SEES): " + topLevelImportMachines);
             }
-            if (keepFiles) {
-                System.out.println("[B2ACSL] ACSL gravados em: " + acslDir);
-                for (Path p : acslFiles) System.out.println("  - " + p);
-            }
+            System.out.println("[B2ACSL] ACSL gravados em: " + acslDir);
+            for (Path p : acslFiles) System.out.println("  - " + p);
 
             // Step 2: ghost_operations.ci já gerado no pre-step; cDir já calculado acima.
 
@@ -301,7 +295,6 @@ public final class B2ACSLPipeline {
             // Step 4: Retornar valor para Atelier B
             return framaResult;
         } finally {
-            if (!keepFiles) deleteRecursive(acslDir);
         }
     }
 
@@ -364,7 +357,7 @@ public final class B2ACSLPipeline {
 
     /**
      * Passo 2.1: identifica tipos ACSL e tipos B ({@code TypeInfos}) usados na especificação e grava
-     * {@link SpecificationTypesCollector#OUTPUT_FILE_NAME} em {@code acslDir} e em {@code cDir}.
+     * {@link SpecificationTypesCollector#OUTPUT_FILE_NAME} em {@code cDir}.
      */
     private static List<String> writeSpecificationTypesList(
             Path acslDir,
@@ -384,18 +377,8 @@ public final class B2ACSLPipeline {
         }
         List<String> types =
                 SpecificationTypesCollector.collectUsedTypes(specTexts, abstractMachineRoots);
-        Path typesInAcslDir = acslDir.resolve(SpecificationTypesCollector.OUTPUT_FILE_NAME);
-        SpecificationTypesCollector.writeTypesList(typesInAcslDir, types);
-        Path typesInCDir = cDir.resolve(SpecificationTypesCollector.OUTPUT_FILE_NAME);
-        if (!typesInCDir.toAbsolutePath().normalize().equals(typesInAcslDir.toAbsolutePath().normalize())) {
-            SpecificationTypesCollector.writeTypesList(typesInCDir, types);
-        }
-        if (KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank()) {
-            System.out.println("[B2ACSL] Tipos da especificação: " + typesInAcslDir);
-            if (!typesInAcslDir.equals(typesInCDir)) {
-                System.out.println("  (cópia em " + typesInCDir + ")");
-            }
-        }
+        Path typesFile = cDir.resolve(SpecificationTypesCollector.OUTPUT_FILE_NAME);
+        SpecificationTypesCollector.writeTypesList(typesFile, types);
         return types;
     }
 
