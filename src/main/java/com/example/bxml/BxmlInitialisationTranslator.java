@@ -51,22 +51,31 @@ public final class BxmlInitialisationTranslator {
         if (init != null) {
             walkSubstitution(firstSubChild(init), ensures, ctx);
         }
-        Map<String, Long> constants = knownIntegerConstants == null ? Map.of() : knownIntegerConstants;
-        String loopUnfoldSize = (init != null)
-                ? detectCartesianProductUnfoldSize(firstSubChild(init), ctx, constants)
+        CartesianProductLoopSpec loopSpec = (init != null)
+                ? detectCartesianProductLoopSpec(firstSubChild(init), ctx)
                 : null;
 
         String functionName = machineName + "__INITIALISATION";
         return new InitialisationAcsl(
-                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopUnfoldSize, false);
+                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopSpec, false);
     }
 
-    private static String detectCartesianProductUnfoldSize(
-            Element sub, BxmlTranslateContext ctx, Map<String, Long> constants) {
+    /**
+     * Descrição de um loop de inicialização gerado por uma atribuição do padrão
+     * {@code ARRAY := (LO..HI) * {VALUE}} em B — o compilador C emite um loop {@code for(i = LO; i <= HI; i++)}.
+     */
+    public record CartesianProductLoopSpec(
+            String counterVar,
+            String loExpr,
+            String hiExpr,
+            String cArrayName,
+            String valueExpr) {}
+
+    private static CartesianProductLoopSpec detectCartesianProductLoopSpec(
+            Element sub, BxmlTranslateContext ctx) {
         if (sub == null) return null;
-        String ln = sub.getLocalName();
-        return switch (ln) {
-            case "Assignement_Sub" -> cartesianProductSizeFromAssignment(sub, ctx, constants);
+        return switch (sub.getLocalName()) {
+            case "Assignement_Sub" -> cartesianProductLoopSpecFromAssignment(sub, ctx);
             case "Nary_Sub" -> {
                 NodeList children = sub.getChildNodes();
                 for (int i = 0; i < children.getLength(); i++) {
@@ -74,29 +83,41 @@ public final class BxmlInitialisationTranslator {
                     if (n.getNodeType() != Node.ELEMENT_NODE) continue;
                     Element ch = (Element) n;
                     if ("Attr".equals(ch.getLocalName())) continue;
-                    String result = detectCartesianProductUnfoldSize(ch, ctx, constants);
+                    CartesianProductLoopSpec result = detectCartesianProductLoopSpec(ch, ctx);
                     if (result != null) yield result;
                 }
                 yield null;
             }
-            case "Bloc_Sub" -> detectCartesianProductUnfoldSize(firstSubChild(sub), ctx, constants);
+            case "Bloc_Sub" -> detectCartesianProductLoopSpec(firstSubChild(sub), ctx);
             default -> null;
         };
     }
 
-    private static String cartesianProductSizeFromAssignment(
-            Element assign, BxmlTranslateContext ctx, Map<String, Long> constants) {
-        Element vals = firstChildElement(assign, "Values");
-        if (vals == null) return null;
-        for (Element rhsEl : directExpChildren(vals)) {
-            String size = intervalCartesianProductSize(rhsEl, ctx, constants);
-            if (size != null) return size;
+    private static CartesianProductLoopSpec cartesianProductLoopSpecFromAssignment(
+            Element assign, BxmlTranslateContext ctx) {
+        Element varsEl = firstChildElement(assign, "Variables");
+        if (varsEl == null) return null;
+        String arrayVarName = null;
+        for (Element ch : directExpChildren(varsEl)) {
+            if ("Id".equals(ch.getLocalName())) {
+                arrayVarName = ch.getAttribute("value");
+                break;
+            }
+        }
+        if (arrayVarName == null || arrayVarName.isBlank()) return null;
+        String cArrayName = ctx.machineName() + "__" + arrayVarName.trim();
+
+        Element valsEl = firstChildElement(assign, "Values");
+        if (valsEl == null) return null;
+        for (Element rhs : directExpChildren(valsEl)) {
+            CartesianProductLoopSpec spec = intervalCartesianProductLoopSpec(rhs, cArrayName, ctx);
+            if (spec != null) return spec;
         }
         return null;
     }
 
-    private static String intervalCartesianProductSize(
-            Element el, BxmlTranslateContext ctx, Map<String, Long> constants) {
+    private static CartesianProductLoopSpec intervalCartesianProductLoopSpec(
+            Element el, String cArrayName, BxmlTranslateContext ctx) {
         if (!"Binary_Exp".equals(el.getLocalName())) return null;
         if (!"*s".equals(el.getAttribute("op"))) return null;
         List<Element> children = directExpChildren(el);
@@ -107,35 +128,16 @@ public final class BxmlInitialisationTranslator {
         if (!"..".equals(intervalEl.getAttribute("op"))) return null;
         if (!"Nary_Exp".equals(singletonEl.getLocalName())) return null;
         if (!"{".equals(singletonEl.getAttribute("op"))) return null;
-        if (directExpChildren(singletonEl).size() != 1) return null;
+        List<Element> singletonChildren = directExpChildren(singletonEl);
+        if (singletonChildren.size() != 1) return null;
         List<Element> bounds = directExpChildren(intervalEl);
         if (bounds.size() < 2) return null;
-        Long lowerLit = resolveIntegerBound(bounds.get(0), constants);
-        Long upperLit = resolveIntegerBound(bounds.get(1), constants);
-        if (lowerLit != null && upperLit != null) {
-            return String.valueOf(upperLit - lowerLit + 1);
-        }
-        // Fallback: use ACSL expressions (only valid if they resolve to compile-time constants)
-        String lower = BxmlExpressionToAcsl.translate(bounds.get(0), ctx);
-        String upper = BxmlExpressionToAcsl.translate(bounds.get(1), ctx);
-        if (lower == null || upper == null) return null;
-        lower = lower.trim();
-        upper = upper.trim();
-        if ("0".equals(lower)) {
-            return "(" + upper + " + 1)";
-        }
-        return "(" + upper + " - " + lower + " + 1)";
-    }
 
-    private static Long resolveIntegerBound(Element boundEl, Map<String, Long> constants) {
-        if ("Integer_Literal".equals(boundEl.getLocalName())) {
-            String val = boundEl.getAttribute("value");
-            try { return Long.parseLong(val.trim()); } catch (NumberFormatException e) { return null; }
-        }
-        if ("Id".equals(boundEl.getLocalName())) {
-            return constants.get(boundEl.getAttribute("value"));
-        }
-        return null;
+        String lo = BxmlExpressionToAcsl.translate(bounds.get(0), ctx);
+        String hi = BxmlExpressionToAcsl.translate(bounds.get(1), ctx);
+        String value = BxmlExpressionToAcsl.translate(singletonChildren.get(0), ctx);
+        if (lo == null || hi == null || value == null) return null;
+        return new CartesianProductLoopSpec("i", lo.trim(), hi.trim(), cArrayName, value.trim());
     }
 
     private static void walkSubstitution(Element sub, List<String> ensures, BxmlTranslateContext ctx) {
@@ -472,10 +474,10 @@ public final class BxmlInitialisationTranslator {
              */
             List<String> dummyGhostEnsureVarNames,
             /**
-             * Expressão ACSL para o número de iterações de loop gerado por um produto cartesiano
-             * {@code (a..b) * {v}}. Quando não-nulo, emite {@code at loop 1: loop unfold n;} no contrato.
+             * Especificação do loop gerado por {@code ARRAY := (LO..HI) * {VALUE}}; quando não-nulo,
+             * emite o contrato completo com {@code loop invariant}, {@code loop assigns} e {@code loop variant}.
              */
-            String loopUnfoldSize,
+            CartesianProductLoopSpec loopSpec,
             /**
              * {@code true} para máquinas que não importam outras máquinas: emite um contrato mínimo
              * com {@code assigns \nothing;} mesmo que não haja outros conteúdos.
@@ -491,7 +493,7 @@ public final class BxmlInitialisationTranslator {
             boolean hasContent = !ensures.isEmpty()
                     || !dummyGhostEnsureVarNames.isEmpty()
                     || !assignsTargets.isEmpty()
-                    || (loopUnfoldSize != null && !loopUnfoldSize.isBlank())
+                    || loopSpec != null
                     || includeGhostBehaviorAssert;
             if (!hasContent && !emitMinimalContract) return "";
             StringBuilder sb = new StringBuilder();
@@ -510,8 +512,20 @@ public final class BxmlInitialisationTranslator {
                     sb.append("    assigns ").append(a).append(";\n");
                 }
             }
-            if (loopUnfoldSize != null && !loopUnfoldSize.isBlank()) {
-                sb.append("    at loop 1:\n        loop unfold ").append(loopUnfoldSize).append(";\n");
+            if (loopSpec != null) {
+                String lo  = loopSpec.loExpr();
+                String hi  = loopSpec.hiExpr();
+                String arr = loopSpec.cArrayName();
+                String val = loopSpec.valueExpr();
+                String v   = loopSpec.counterVar();
+                sb.append("    at loop 1:\n");
+                sb.append("        loop invariant ").append(lo).append(" <= ").append(v)
+                  .append(" <= ").append(hi).append(" + 1;\n");
+                sb.append("        loop invariant \\forall integer k; ").append(lo)
+                  .append(" <= k < ").append(v).append(" ==> ").append(arr).append("[k] == ").append(val).append(";\n");
+                sb.append("        loop assigns ").append(v).append(", ")
+                  .append(arr).append("[").append(lo).append(" .. ").append(hi).append("];\n");
+                sb.append("        loop variant ").append(hi).append(" + 1 - ").append(v).append(";\n");
             }
             if (includeGhostBehaviorAssert) {
                 String machinePart = functionName.toLowerCase().replace("__initialisation", "");

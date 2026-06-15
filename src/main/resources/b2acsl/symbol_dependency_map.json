@@ -1042,6 +1042,7 @@
     "set_axioms/finite_axioms.acsl": [
       "set_functions/empty.acsl",
       "set_functions/finite.acsl",
+      "set_functions/inclusion.acsl",
       "set_functions/singleton.acsl",
       "set_functions/union.acsl"
     ],

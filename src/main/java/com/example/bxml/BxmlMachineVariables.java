@@ -576,6 +576,24 @@ public final class BxmlMachineVariables {
         return out;
     }
 
+    /**
+     * Qualifica um nome de variável para uso em {@code loop assigns}: se for uma variável declarada
+     * na máquina abstrata, retorna {@code machineName__varName} (com {@code [range]} para arrays);
+     * caso contrário (variável local {@code VAR_IN} ou parâmetro de saída), retorna o nome como-está.
+     */
+    public static String qualifyLoopAssignTarget(
+            String varName, String machineName, Element abstractMachineEl, BxmlTranslateContext ctx) {
+        if (varName == null || varName.isBlank() || machineName == null || abstractMachineEl == null) {
+            return varName;
+        }
+        if (!declaredVariableNames(abstractMachineEl).contains(varName)) {
+            return varName;
+        }
+        String base = machineName.trim() + "__" + varName;
+        String ranged = implementationAssignTargetWithRange(base, varName, abstractMachineEl, ctx);
+        return ranged != null ? ranged : base;
+    }
+
     private static String implementationAssignTargetWithRange(
             String baseTarget, String varName, Element implMachineEl, BxmlTranslateContext ctx) {
         if (baseTarget == null || varName == null || implMachineEl == null || ctx == null) {

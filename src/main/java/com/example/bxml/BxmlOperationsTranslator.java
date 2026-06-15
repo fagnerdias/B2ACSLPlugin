@@ -245,7 +245,7 @@ public final class BxmlOperationsTranslator {
             if (mergedRefinementChain != null && !mergedRefinementChain.isEmpty()) {
                 Element implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
                 if (implOp != null) {
-                    loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(implOp, ctx);
+                    loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(implOp, ctx, machineEl);
                 }
             }
 
