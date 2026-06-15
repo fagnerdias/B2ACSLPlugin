@@ -1,7 +1,9 @@
 package com.example.bxml;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -130,6 +132,33 @@ public final class BxmlConstantsAndProperties {
         }
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /**
+     * Extrai valuations com valores inteiros literais de {@code <Values>}.
+     * Retorna mapa de nome → valor para uso em anotações que exigem constante literal (ex. {@code loop unfold}).
+     */
+    public static Map<String, Long> extractLiteralIntegerValuations(Element machineEl) {
+        Map<String, Long> result = new LinkedHashMap<>();
+        Element block = firstChildElement(machineEl, "Values");
+        if (block == null) return result;
+        NodeList ch = block.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if (!"Valuation".equals(e.getLocalName())) continue;
+            String ident = e.getAttribute("ident");
+            if (ident == null || ident.isBlank()) continue;
+            Element valueExp = firstValuationValueExpression(e);
+            if (valueExp == null || !"Integer_Literal".equals(valueExp.getLocalName())) continue;
+            String val = valueExp.getAttribute("value");
+            if (val == null || val.isBlank()) continue;
+            try {
+                result.put(ident, Long.parseLong(val.trim()));
+            } catch (NumberFormatException ignored) {}
+        }
+        return result;
     }
 
     private static Element firstValuationValueExpression(Element valuation) {

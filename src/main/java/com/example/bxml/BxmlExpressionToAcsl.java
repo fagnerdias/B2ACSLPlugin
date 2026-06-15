@@ -61,18 +61,21 @@ public final class BxmlExpressionToAcsl {
             case "Id" -> isSetValuedId(exp, ctx);
             case "Unary_Exp" -> {
                 String op = exp.getAttribute("op");
-                if ("ran".equals(op)) {
-                    yield true;
-                }
-                if ("card".equals(op)) {
-                    yield false;
-                }
-                yield false;
+                yield "ran".equals(op) || "dom".equals(op) || "id".equals(op)
+                        || "closure".equals(op) || "closure1".equals(op);
             }
             case "EmptySet" -> true;
             case "Quantified_Set" -> true;
-            case "Binary_Exp" ->
-                    isSetUnion(exp.getAttribute("op")) || isIntervalBinaryExp(exp);
+            case "Binary_Exp" -> {
+                String op = exp.getAttribute("op");
+                yield isSetUnion(op)
+                        || isSetIntersection(op)
+                        || isSetDifferenceOp(op)
+                        || isCartesianProduct(op)
+                        || isDomainRestrictionOp(op)
+                        || isRangeRestrictionOp(op)
+                        || isIntervalBinaryExp(exp);
+            }
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
             default -> false;
         };
@@ -204,8 +207,14 @@ public final class BxmlExpressionToAcsl {
         if (e == null) {
             return "/* null */";
         }
-        if (isIntervalBinaryExp(e) || "Quantified_Set".equals(e.getLocalName())) {
-            String n = ctx.comprehensions().referenceName(e);
+        if (isIntervalBinaryExp(e)) {
+            Element[] pair = twoDirectExpChildren(e);
+            if (pair[0] != null && pair[1] != null) {
+                return "interval_set(" + translate(pair[0], ctx) + ", " + translate(pair[1], ctx) + ")";
+            }
+        }
+        if ("Quantified_Set".equals(e.getLocalName())) {
+            String n = ctx.comprehensions().referenceName(ctx.machineName(), e);
             return n != null ? n : translate(e, ctx);
         }
         return translate(e, ctx);
@@ -245,7 +254,7 @@ public final class BxmlExpressionToAcsl {
         return "|->".equals(o) || "|-&gt;".equals(o);
     }
 
-    /** B diferença de conjuntos {@code s -s t} → {@code difference(s, t)} (ACSL_Lib/set_functions/difference.acsl). */
+    /** B diferença de conjuntos {@code s -s t} → {@code set_difference(s, t)} (ACSL_Lib/set_functions/difference.acsl). */
     private static boolean isSetDifferenceOp(String op) {
         if (op == null) return false;
         return "-s".equals(op.trim());
@@ -349,6 +358,9 @@ public final class BxmlExpressionToAcsl {
                 // Valores enumerados: usar o nome prefixado (ex. switch__normal)
                 String renamed = ctx.enumValueRenames().get(idVal);
                 if (renamed != null) yield renamed;
+                // Conjuntos enumerados: usar o nome prefixado (ex. ctx__ALARM_STATUS)
+                String setRenamed = ctx.enumeratedSetRenames().get(idVal);
+                if (setRenamed != null) yield setRenamed;
                 // Parâmetros/variáveis de tipo enum C: cast (integer) para compatibilidade com Set<integer>
                 if (!ctx.enumeratedSetNames().isEmpty()) {
                     String tr = exp.getAttribute("typref");
@@ -379,7 +391,7 @@ public final class BxmlExpressionToAcsl {
      * Conjunto em compreensão {@code { x | P }} — referência a {@code set_comprehension_k} do bloco axiomatic.
      */
     static String translateQuantifiedSet(Element qs, BxmlTranslateContext ctx) {
-        String named = ctx.comprehensions().referenceName(qs);
+        String named = ctx.comprehensions().referenceName(ctx.machineName(), qs);
         if (named != null) {
             return named;
         }
@@ -433,6 +445,7 @@ public final class BxmlExpressionToAcsl {
             case "size" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
             case "imax" -> "set_max(" + a + ")";
+            case "imin" -> "set_min(" + a + ")";
             case "~" -> "relation_inverse(" + a + ")";
             default -> opTrim + "(" + a + ")";
         };
@@ -472,15 +485,22 @@ public final class BxmlExpressionToAcsl {
         String left = translate(pair[0], ctx);
         String right = translate(pair[1], ctx);
         if (isSetDifferenceOp(op)) {
-            return "difference(" + left + ", " + right + ")";
+            return "set_difference(" + left + ", " + right + ")";
         }
         if (isSetUnion(op)) {
             // B: \/ — união → set_union (ACSL_Lib/set_functions/union.acsl)
             return "set_union(" + left + ", " + right + ")";
         }
+        if (isSetIntersection(op)) {
+            // B: /\ — interseção → set_intersection (ACSL_Lib/set_functions/intersection.acsl)
+            return "set_intersection(" + left + ", " + right + ")";
+        }
+        if (isCartesianProduct(op)) {
+            // B: *s — produto cartesiano → cartesian_product (ACSL_Lib/set_functions/cartesian_product.acsl)
+            return "cartesian_product(" + left + ", " + right + ")";
+        }
         if ("..".equals(op == null ? "" : op.trim())) {
-            String named = ctx.comprehensions().referenceName(b);
-            return named != null ? named : "/* interval .. */";
+            return "interval_set(" + left + ", " + right + ")";
         }
         if (isSequenceAppendOp(op)) {
             return "(" + "\\concat(" + left + ", [|" + right + "|])" + ")";
@@ -554,6 +574,18 @@ public final class BxmlExpressionToAcsl {
         if (op == null || op.isEmpty()) return false;
         // BXML grava o operador de união como \/
         return "\\/".equals(op) || "/".equals(op);
+    }
+
+    private static boolean isSetIntersection(String op) {
+        if (op == null || op.isEmpty()) return false;
+        // BXML grava o operador de interseção como /\
+        return "/\\".equals(op);
+    }
+
+    private static boolean isCartesianProduct(String op) {
+        if (op == null || op.isEmpty()) return false;
+        // BXML grava o produto cartesiano de conjuntos como *s
+        return "*s".equals(op.trim());
     }
 
     /** Usado também por {@link BxmlPredicateToAcsl} para {@code Exp_Comparison}. */

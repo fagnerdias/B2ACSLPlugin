@@ -16,39 +16,80 @@ public record BxmlTranslateContext(
         Map<String, String> variableLogicTypes,
         LambdaFunctionRegistry lambdaRegistry,
         Map<String, String> enumValueRenames,
-        Set<String> enumeratedSetNames) {
+        Map<String, String> enumeratedSetRenames,
+        Set<String> enumeratedSetNames,
+        String machineName) {
 
     /** Sem registo de lambdas nem renomeação de enumerados. */
     public BxmlTranslateContext(
             BxmlTypeRegistry types,
             BxmlComprehensionRegistry comprehensions,
             Map<String, String> variableLogicTypes) {
-        this(types, comprehensions, variableLogicTypes, null, Map.of(), Set.of());
+        this(types, comprehensions, variableLogicTypes, null, Map.of(), Map.of(), Set.of(), "");
     }
 
     public BxmlTranslateContext(BxmlTypeRegistry types, BxmlComprehensionRegistry comprehensions) {
-        this(types, comprehensions, Map.of(), null, Map.of(), Set.of());
+        this(types, comprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), "");
     }
 
     /** Retorna uma cópia deste contexto com o registo de lambdas substituído. */
     public BxmlTranslateContext withLambdaRegistry(LambdaFunctionRegistry registry) {
-        return new BxmlTranslateContext(types, comprehensions, variableLogicTypes, registry, enumValueRenames, enumeratedSetNames);
+        return new BxmlTranslateContext(
+                types,
+                comprehensions,
+                variableLogicTypes,
+                registry,
+                enumValueRenames,
+                enumeratedSetRenames,
+                enumeratedSetNames,
+                machineName);
     }
 
     /** Retorna uma cópia deste contexto com o mapa de renomeação de valores enumerados substituído. */
     public BxmlTranslateContext withEnumRenames(Map<String, String> renames) {
         return new BxmlTranslateContext(
-                types, comprehensions, variableLogicTypes, lambdaRegistry,
+                types,
+                comprehensions,
+                variableLogicTypes,
+                lambdaRegistry,
                 renames == null ? Map.of() : renames,
-                enumeratedSetNames);
+                enumeratedSetRenames,
+                enumeratedSetNames,
+                machineName);
+    }
+
+    /** Retorna uma cópia com renomeação de conjuntos enumerados (ex. {@code ALARM_STATUS} → {@code ctx__ALARM_STATUS}). */
+    public BxmlTranslateContext withEnumeratedSetRenames(Map<String, String> renames) {
+        return new BxmlTranslateContext(
+                types,
+                comprehensions,
+                variableLogicTypes,
+                lambdaRegistry,
+                enumValueRenames,
+                renames == null ? Map.of() : renames,
+                enumeratedSetNames,
+                machineName);
     }
 
     /** Retorna uma cópia deste contexto com os nomes de conjuntos enumerados substituídos. */
     public BxmlTranslateContext withEnumeratedSetNames(Set<String> setNames) {
         return new BxmlTranslateContext(
-                types, comprehensions, variableLogicTypes, lambdaRegistry,
+                types,
+                comprehensions,
+                variableLogicTypes,
+                lambdaRegistry,
                 enumValueRenames,
-                setNames == null ? Set.of() : setNames);
+                enumeratedSetRenames,
+                setNames == null ? Set.of() : setNames,
+                machineName);
+    }
+
+    private static String machineNameFrom(Element machineEl) {
+        if (machineEl == null) {
+            return "";
+        }
+        String name = machineEl.getAttribute("name");
+        return name == null ? "" : name.trim();
     }
 
     public static BxmlTranslateContext forMachine(Element machineEl) {
@@ -64,11 +105,13 @@ public record BxmlTranslateContext(
         Map<String, String> gl = gluingSubstitutions == null ? Map.of() : gluingSubstitutions;
         reg.setGluingSubstitutions(gl);
         reg.assignDedupIndices();
-        BxmlTranslateContext tmp = new BxmlTranslateContext(types, reg, Map.of());
+        String machineName = machineNameFrom(machineEl);
+        BxmlTranslateContext tmp =
+                new BxmlTranslateContext(types, reg, Map.of(), null, Map.of(), Map.of(), Set.of(), machineName);
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
-        return new BxmlTranslateContext(types, reg, merged, null, Map.of(), Set.of());
+        return new BxmlTranslateContext(types, reg, merged, null, Map.of(), Map.of(), Set.of(), machineName);
     }
 
     /**
@@ -99,19 +142,32 @@ public record BxmlTranslateContext(
         BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machineEl);
         Map<String, String> gl = gluingSubstitutions == null ? Map.of() : gluingSubstitutions;
         sharedComprehensions.setGluingSubstitutions(gl);
-        BxmlTranslateContext tmp = new BxmlTranslateContext(types, sharedComprehensions, Map.of());
+        String machineName = machineNameFrom(machineEl);
+        BxmlTranslateContext tmp =
+                new BxmlTranslateContext(
+                        types, sharedComprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), machineName);
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         if (abstractMachineElForSharedVariableTypes != null) {
             BxmlTypeRegistry absTypes =
                     BxmlTypeRegistry.fromMachine(abstractMachineElForSharedVariableTypes);
+            String absMachineName = machineNameFrom(abstractMachineElForSharedVariableTypes);
             BxmlTranslateContext tmpAbs =
-                    new BxmlTranslateContext(absTypes, sharedComprehensions, Map.of());
+                    new BxmlTranslateContext(
+                            absTypes,
+                            sharedComprehensions,
+                            Map.of(),
+                            null,
+                            Map.of(),
+                            Map.of(),
+                            Set.of(),
+                            absMachineName);
             merged.putAll(
                     BxmlMachineVariables.inferVariableLogicTypes(
                             abstractMachineElForSharedVariableTypes, tmpAbs));
         }
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
-        return new BxmlTranslateContext(types, sharedComprehensions, merged, null, Map.of(), Set.of());
+        return new BxmlTranslateContext(
+                types, sharedComprehensions, merged, null, Map.of(), Map.of(), Set.of(), machineName);
     }
 }

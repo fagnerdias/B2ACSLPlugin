@@ -164,7 +164,9 @@ public final class GhostOperationsCiGenerator {
                     .append(";\n\n");
         }
         if (initialisationAssignsAbstract(abstractMachineEl, abstractSet)) {
-            sb.append("    predicate ghost__initialisation;\n\n");
+            sb.append("    predicate ghost__")
+              .append(machineNamePrefix.toLowerCase())
+              .append("__initialisation;\n\n");
         }
         Element operationsEl = firstChildElement(abstractMachineEl, "Operations");
         if (operationsEl != null) {
@@ -180,7 +182,7 @@ public final class GhostOperationsCiGenerator {
                 String slug = ghostOperationSlug(opName);
                 sb.append("    predicate ghost__").append(slug);
                 List<Param> params = listInputParameters(op);
-                if (operationBodyHasAnySub(op)) {
+                if (operationBodyHasAnySub(op) || operationAssignsAbstract(op, abstractSet)) {
                     params = appendOutputParametersAsPointers(params, op);
                 }
                 if (params.isEmpty()) {
@@ -244,7 +246,10 @@ public final class GhostOperationsCiGenerator {
                 BxmlTranslateContext.forMachine(abstractMachineEl, gluing)
                         .withEnumRenames(
                                 BxmlSetsTranslator.buildEnumRenamesWithSees(
-                                        abstractMachineEl, bxmlDirectory))
+                                        abstractMachineEl, mergedMachineElements, bxmlDirectory))
+                        .withEnumeratedSetRenames(
+                                BxmlSetsTranslator.buildEnumeratedSetRenamesWithSees(
+                                        abstractMachineEl, mergedMachineElements, bxmlDirectory))
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
         List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
@@ -255,7 +260,9 @@ public final class GhostOperationsCiGenerator {
         Set<String> abstractSet = new LinkedHashSet<>(abstractVarNames);
         Map<String, String> varTypes =
                 BxmlMachineVariables.inferVariableLogicTypes(abstractMachineEl, ctx);
-        Set<String> concreteConstants = concreteConstantNames(abstractMachineEl);
+        Set<String> concreteConstants = new LinkedHashSet<>(concreteConstantNames(abstractMachineEl));
+        concreteConstants.addAll(
+                BxmlSetsTranslator.listSeenMachineConcreteConstantNames(abstractMachineEl, bxmlDirectory));
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* ghost_operations.ci — operações ghost não puras (gerado) — ")
@@ -269,7 +276,8 @@ public final class GhostOperationsCiGenerator {
         sb.append("\n");
 
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
-                BxmlSetsTranslator.listEnumeratedSetsWithSees(abstractMachineEl, bxmlDirectory);
+                BxmlSetsTranslator.listEnumeratedSetsWithSees(
+                        abstractMachineEl, mergedMachineElements, bxmlDirectory);
         List<GhostOp> ghostOps =
                 buildGhostOperations(
                         abstractMachineEl,
@@ -324,11 +332,14 @@ public final class GhostOperationsCiGenerator {
                 ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
                 ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
                 ge = prefixGlobalLogicSetsForGhost(ge);
+                ge = prefixSetComprehensionsForGhost(ge);
+                ge = ghostDummyConcreteRefs(ge, concreteConstants);
                 ge = stripBTypingCommentsForGhost(ge);
                 ge = normalizeBooleanLiteralsForGhost(ge);
                 prefixedInitEnsures.add(ge);
             }
-            ops.add(new GhostOp("initialisation", List.of(), initAssigned, prefixedInitEnsures));
+            String initSlug = abstractMachineEl.getAttribute("name").toLowerCase() + "__initialisation";
+            ops.add(new GhostOp(initSlug, List.of(), initAssigned, prefixedInitEnsures));
         }
 
         Element operationsEl = firstChildElement(abstractMachineEl, "Operations");
@@ -356,6 +367,7 @@ public final class GhostOperationsCiGenerator {
                     forall =
                             rewriteAnySubEnsureForGhost(
                                     forall, abstractSet, concreteConstants, op, anySub, ctx);
+                    forall = rewriteBoolOutputPredicateTernary(forall);
                     forall = castScalarIntGhostParamsInEnsure(forall, params);
                     ops.add(
                             new GhostOp(
@@ -368,7 +380,8 @@ public final class GhostOperationsCiGenerator {
 
                 if (assigned.isEmpty()) continue;
 
-                List<Param> params = listInputParameters(op);
+                List<Param> params =
+                        appendOutputParametersAsPointers(listInputParameters(op), op);
                 List<String> ensures = new ArrayList<>();
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
                 List<String> ghostEnsures = new ArrayList<>();
@@ -383,8 +396,12 @@ public final class GhostOperationsCiGenerator {
                     ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
                     ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
                     ge = prefixGlobalLogicSetsForGhost(ge);
+                    ge = prefixSetComprehensionsForGhost(ge);
+                    ge = ghostDummyConcreteRefs(ge, concreteConstants);
                     ge = stripBTypingCommentsForGhost(ge);
                     ge = normalizeBooleanLiteralsForGhost(ge);
+                    ge = dereferenceScalarOutputParams(ge, op);
+                    ge = rewriteBoolOutputPredicateTernary(ge);
                     ge = castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
@@ -406,11 +423,11 @@ public final class GhostOperationsCiGenerator {
 
     /** ACSL sem prefixo ghost; no {@code dummy_ghost} usam-se {@link #dummySetComprehensionRef}. */
     private static final Pattern SET_COMPREHENSION_INDEX_UNPREFIXED =
-            Pattern.compile("^set_comprehension_(\\d+)$");
+            Pattern.compile("^(?:\\w+__)?set_comprehension_(\\d+)$");
 
     /** Para contar índices em ensures completos (subexpressão). */
     private static final Pattern SET_COMPREHENSION_INDEX_IN_TEXT =
-            Pattern.compile("set_comprehension_(\\d+)");
+            Pattern.compile("(?:\\w+__)?set_comprehension_(\\d+)");
 
     /**
      * Após {@link #toGhostEnsure}: {@code \\old(dummy_seq)==domain_restriction(rel, S)} vindo de
@@ -488,7 +505,7 @@ public final class GhostOperationsCiGenerator {
         String s = domainRestrictionSecondArg.trim();
         Matcher um = SET_COMPREHENSION_INDEX_UNPREFIXED.matcher(s);
         if (um.matches()) {
-            return "dummy_set_comprehension_" + um.group(1);
+            return "dummy_" + s;
         }
         return s;
     }
@@ -574,6 +591,19 @@ public final class GhostOperationsCiGenerator {
             return text;
         }
         return text.replaceAll("\\s*/\\*\\s*:[^*]*\\*/", "");
+    }
+
+    /**
+     * {@code *param == (pred ? \true : \false)} → {@code (*param != 0) <==> pred}.
+     *
+     * <p>Em ACSL, predicados ({@code dummy_equals}, {@code dummy_belongs}, etc.) não podem ser usados
+     * como condição de ternário (contexto de termo). Converte para bicondicional.
+     */
+    private static String rewriteBoolOutputPredicateTernary(String ensure) {
+        if (ensure == null || ensure.isEmpty() || !ensure.contains("\\true")) return ensure;
+        return ensure.replaceAll(
+                "(\\*\\w+)\\s*==\\s*\\((.+?)\\s*\\?\\s*\\\\true\\s*:\\s*\\\\false\\)",
+                "(($1 != 0) <==> $2)");
     }
 
     /** {@code TRUE}/{@code FALSE} B restantes → {@code \\true}/{@code \\false} no universo lógico ghost. */
@@ -1231,7 +1261,11 @@ public final class GhostOperationsCiGenerator {
         if (text == null || text.isEmpty()) {
             return text;
         }
-        return text.replaceAll("(?<!dummy_)\\bFunction_(\\w+)\\b", "dummy_Function_$1");
+        String s = text.replaceAll("(?<!dummy_)\\bFunction_(\\w+)\\b", "dummy_Function_$1");
+        // Set<A> → DSet<A>, Tuple<A,B> → DTuple<A,B> no mundo ghost
+        s = s.replaceAll("(?<!D)\\bSet<", "DSet<");
+        s = s.replaceAll("(?<!D)\\bTuple<", "DTuple<");
+        return s;
     }
 
     /**
@@ -1243,7 +1277,7 @@ public final class GhostOperationsCiGenerator {
             return text;
         }
         return text.replaceAll(
-                "(?<!dummy_)\\bset_comprehension_(\\d+)\\b", "dummy_set_comprehension_$1");
+                "(?<!dummy_)\\b((?:\\w+__)?set_comprehension_\\d+)\\b", "dummy_$1");
     }
 
     /**
@@ -1420,36 +1454,7 @@ public final class GhostOperationsCiGenerator {
      * {@link DummyGhostAxiomaticBuilder}.
      */
     private static String prefixAcslLibFunctionsForGhost(String text) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        AcslLibSymbolDependencyMap map = AcslLibSymbolDependencyMap.instance();
-        List<String> symbols = new ArrayList<>(map.allKnownSymbols());
-        symbols.sort((a, b) -> Integer.compare(b.length(), a.length()));
-        String out = text;
-        for (String sym : symbols) {
-            String ghostName = ghostNameForLibSymbol(sym);
-            out =
-                    out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(sym) + "\\b",
-                            Matcher.quoteReplacement("dummy_" + ghostName));
-        }
-        for (String alias : DummyGhostAxiomaticBuilder.LIB_SYMBOL_ALIASES.keySet()) {
-            out =
-                    out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(alias) + "\\b",
-                            Matcher.quoteReplacement("dummy_" + alias));
-        }
-        return out;
-    }
-
-    private static String ghostNameForLibSymbol(String libSymbol) {
-        for (Map.Entry<String, String> e : DummyGhostAxiomaticBuilder.LIB_SYMBOL_ALIASES.entrySet()) {
-            if (e.getValue().equals(libSymbol)) {
-                return e.getKey();
-            }
-        }
-        return libSymbol;
+        return DummyGhostAxiomaticBuilder.prefixLibCallsInSignature(text);
     }
 
     /**
@@ -1512,9 +1517,15 @@ public final class GhostOperationsCiGenerator {
             if (sep < 0 || sep + 2 >= rest.length()) {
                 continue;
             }
-            out = out.replace(dummySet, rest.substring(sep + 2));
+            String stripped = rest.substring(sep + 2);
+            // set comprehension globals keep the machine__ prefix in ACSL (e.g. iter_services__set_comprehension_1)
+            out = out.replace(dummySet, stripped.contains("set_comprehension") ? rest : stripped);
         }
-        return out.replace("dummy_", "");
+        out = out.replace("dummy_", "");
+        // DSet<A>/DTuple<A,B> → Set<A>/Tuple<A,B> no contexto do merged_code.c
+        out = out.replaceAll("\\bDSet<", "Set<");
+        out = out.replaceAll("\\bDTuple<", "Tuple<");
+        return out;
     }
 
     /**
@@ -1575,7 +1586,7 @@ public final class GhostOperationsCiGenerator {
                     out.replaceAll(
                             "(?<!dummy_)\\b" + Pattern.quote(setName) + "\\b",
                             Matcher.quoteReplacement(dummySet));
-            String acslSetRef = set.machineName() + "__" + setName;
+            String acslSetRef = BxmlSetsTranslator.enumeratedSetAcslName(set.machineName(), setName);
             out =
                     out.replaceAll(
                             "(?<!dummy_)\\b" + Pattern.quote(acslSetRef) + "\\b",
@@ -1748,9 +1759,29 @@ public final class GhostOperationsCiGenerator {
             if (!"Id".equals(e.getLocalName())) continue;
             String name = e.getAttribute("value");
             if (name == null || name.isBlank()) continue;
-            out.add(new Param("int *", sanitizeCIdent(name.trim())));
+            String cPtrType = cPointerTypeFromTypref(findAncestorMachine(operation), e);
+            out.add(new Param(cPtrType, sanitizeCIdent(name.trim())));
         }
         return out;
+    }
+
+    /**
+     * Tipo ponteiro C para um parâmetro de saída a partir do seu {@code typref}: BOOL → {@code _Bool *};
+     * qualquer outro escalar/conjunto → {@code int *}.
+     */
+    private static String cPointerTypeFromTypref(Element machine, Element paramId) {
+        if (machine == null) return "int *";
+        String tr = paramId.getAttribute("typref");
+        if (tr == null || tr.isBlank()) return "int *";
+        try {
+            int id = Integer.parseInt(tr.trim());
+            BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machine);
+            String raw = types.getRawType(id);
+            if ("BOOL".equals(raw != null ? raw.trim() : "")) {
+                return "_Bool *";
+            }
+        } catch (NumberFormatException ignored) {}
+        return "int *";
     }
 
     private static List<Param> listInputParameters(Element operation) {

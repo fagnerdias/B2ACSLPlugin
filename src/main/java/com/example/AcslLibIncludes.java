@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -97,6 +98,7 @@ public final class AcslLibIncludes {
             "set_functions/inclusion.acsl",
             "set_functions/pow.acsl",            
             "set_functions/equals.acsl",
+            "set_functions/min.acsl",
             "set_functions/max.acsl",
             "set_functions/cartesian_product.acsl",
             "set_functions/disjoint.acsl",
@@ -112,6 +114,7 @@ public final class AcslLibIncludes {
             "function_functions/is_partial.acsl",
             "function_functions/is_total.acsl",
             "function_functions/apply.acsl",
+            "function_functions/id.acsl",
             "function_functions/is_injective.acsl",
             "function_functions/is_surjective.acsl",
             "function_functions/is_bijective.acsl",
@@ -377,34 +380,62 @@ public final class AcslLibIncludes {
     }
 
     /**
+     * Apaga a pasta da biblioteca espelhada ({@code import/} por defeito) sob o diretório de saída
+     * dos {@code .acsl}, para sincronização completa antes de nova cópia na mesma execução.
+     */
+    public static void resetLibraryBundleUnderOutput(Path outputDirectory) throws IOException {
+        deleteLibraryBundleRecursive(libraryBundleRootUnderOutput(outputDirectory));
+    }
+
+    private static void deleteLibraryBundleRecursive(Path bundleRoot) throws IOException {
+        if (bundleRoot == null || !Files.exists(bundleRoot)) {
+            return;
+        }
+        try (var stream = Files.walk(bundleRoot)) {
+            for (Path p : stream.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(p);
+            }
+        }
+    }
+
+    /**
      * Copia a biblioteca referenciada (fecho transitivo de {@code include}) para
      * {@code generatedAcslFile.getParent()/…} e espelha em {@link #resolveTargetAcslStagingRoot()}.
      */
     public static void copyReferencedLibraryFiles(String acslText, Path generatedAcslFile)
             throws IOException {
-        copyReferencedLibraryFiles(acslText, generatedAcslFile, null);
+        copyReferencedLibraryFiles(acslText, generatedAcslFile, null, null);
     }
 
     /**
      * @param extraTextForSymbolScan texto extra só para descobrir ficheiros da lib a copiar
      */
     public static void copyReferencedLibraryFiles(
-            String acslText, Path generatedAcslFile, String extraTextForSymbolScan) throws IOException {
-        String scan = acslText == null ? "" : acslText;
-        if (extraTextForSymbolScan != null && !extraTextForSymbolScan.isBlank()) {
-            scan = scan + "\n" + extraTextForSymbolScan;
+            String acslText, Path generatedAcslFile, String extraTextForSymbolScan)
+            throws IOException {
+        copyReferencedLibraryFiles(acslText, generatedAcslFile, extraTextForSymbolScan, null);
+    }
+
+    /**
+     * Copia para {@code import/} o fecho transitivo dos ficheiros declarados no preâmbulo do
+     * {@code .acsl} gerado (e suplementos de varredura), alinhado com {@link #formatIncludeBlock}.
+     *
+     * @param additionalLibRelPaths caminhos relativos extra (ex. de máquinas {@code SEES}/{@code IMPORTS})
+     */
+    public static void copyReferencedLibraryFiles(
+            String acslText,
+            Path generatedAcslFile,
+            String extraTextForSymbolScan,
+            java.util.Collection<String> additionalLibRelPaths)
+            throws IOException {
+        LinkedHashSet<String> toCopy =
+                collectLibRelativePathsToMaterialize(
+                        acslText, extraTextForSymbolScan, additionalLibRelPaths);
+        if (toCopy.isEmpty()) {
+            return;
         }
-        List<String> seeds = orderedLibRelativePaths(scan);
-        if (seeds.isEmpty()) return;
 
         Path diskRoot = resolveAcslLibRootOnDisk();
-        List<String> seedsWithTypes = new ArrayList<>(seeds.size() + 1);
-        seedsWithTypes.add(TYPES_LIB_REL);
-        seedsWithTypes.addAll(seeds);
-        List<String> allRel = transitiveAcslLibPaths(diskRoot, seedsWithTypes);
-        LinkedHashSet<String> toCopy = new LinkedHashSet<>();
-        toCopy.add(TYPES_LIB_REL);
-        toCopy.addAll(allRel);
         if (toCopy.stream().noneMatch(rel -> libFileExists(diskRoot, rel.replace('\\', '/')))) {
             return;
         }
@@ -432,6 +463,56 @@ public final class AcslLibIncludes {
             Path specDest = targetRoot.resolve(generatedAcslFile.getFileName());
             copyFileWithCpPreferred(generatedAcslFile, specDest);
         }
+    }
+
+    /**
+     * Conjunto de caminhos relativos na {@code B2ACSLLib} a materializar em {@code import/}:
+     * includes do preâmbulo do {@code .acsl}, varredura de símbolos e fecho transitivo interno
+     * (inclui {@code *_axioms/} referenciados pelos ficheiros copiados).
+     */
+    private static LinkedHashSet<String> collectLibRelativePathsToMaterialize(
+            String acslText,
+            String extraTextForSymbolScan,
+            java.util.Collection<String> additionalLibRelPaths)
+            throws IOException {
+        LinkedHashSet<String> fileSeeds = new LinkedHashSet<>();
+        fileSeeds.addAll(parseLibIncludeRelativePathsFromPreamble(acslText));
+
+        String scan = acslText == null ? "" : acslText;
+        if (extraTextForSymbolScan != null && !extraTextForSymbolScan.isBlank()) {
+            scan = scan + "\n" + extraTextForSymbolScan;
+        }
+        fileSeeds.addAll(orderedLibRelativePaths(scan));
+        if (additionalLibRelPaths != null) {
+            for (String rel : additionalLibRelPaths) {
+                if (rel != null && !rel.isBlank()) {
+                    fileSeeds.add(rel.replace('\\', '/').trim());
+                }
+            }
+        }
+        if (fileSeeds.isEmpty()) {
+            return new LinkedHashSet<>();
+        }
+
+        Path diskRoot = resolveAcslLibRootOnDisk();
+        fileSeeds.add(TYPES_LIB_REL);
+        fileSeeds.removeIf(rel -> !libFileExists(diskRoot, rel));
+
+        List<String> seedsWithTypes = new ArrayList<>(fileSeeds.size());
+        if (fileSeeds.contains(TYPES_LIB_REL)) {
+            seedsWithTypes.add(TYPES_LIB_REL);
+        }
+        for (String s : fileSeeds) {
+            if (!TYPES_LIB_REL.equals(s)) {
+                seedsWithTypes.add(s);
+            }
+        }
+
+        LinkedHashSet<String> toCopy = new LinkedHashSet<>();
+        toCopy.add(TYPES_LIB_REL);
+        toCopy.addAll(transitiveAcslLibPaths(diskRoot, seedsWithTypes));
+        toCopy.removeIf(rel -> !libFileExists(diskRoot, rel.replace('\\', '/')));
+        return toCopy;
     }
 
     static List<String> collectIncludeLines(String acslText) {

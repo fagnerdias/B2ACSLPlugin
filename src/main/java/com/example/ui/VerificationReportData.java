@@ -30,10 +30,17 @@ public final class VerificationReportData {
             Pattern.compile("(?i)^\\s*timeout\\s*:\\s*(\\d+)\\b");
     private static final Pattern SMOKE_TESTS_SUMMARY_PATTERN =
             Pattern.compile("(?i)^\\s*smoke tests\\s*:\\s*(\\d+)\\s*/\\s*(\\d+)\\b");
+    private static final Pattern FAILED_SUMMARY_PATTERN =
+            Pattern.compile("(?i)^\\s*failed\\s*:\\s*(\\d+)\\b");
+    private static final Pattern IS_SEPARATOR =
+            Pattern.compile("^-{20,}\\s*$");
+    private static final Pattern PROVER_FAILURE_DETAIL_LINE =
+            Pattern.compile("(?i)\\bProver\\b.*\\breturns\\s+(Failed|Unknown|Timeout)\\b");
 
     private int wpTotalGoals;
     private int wpProvedGoals;
     private int wpUnknownGoals;
+    private int wpFailedGoals;
     private int wpTimeoutGoals;
     private int wpSmokeTestsPassed;
     private int wpSmokeTestsTotal;
@@ -109,6 +116,14 @@ public final class VerificationReportData {
                 wpSummaryPresent = true;
                 continue;
             }
+            Matcher failedSummaryMatcher = FAILED_SUMMARY_PATTERN.matcher(line);
+            if (failedSummaryMatcher.find()) {
+                int failed = Integer.parseInt(failedSummaryMatcher.group(1));
+                wpFailedGoals += failed;
+                sourceSummary.unknownGoals += failed;
+                wpSummaryPresent = true;
+                continue;
+            }
             Matcher smokeMatcher = SMOKE_TESTS_SUMMARY_PATTERN.matcher(line);
             if (smokeMatcher.find()) {
                 int passed = Integer.parseInt(smokeMatcher.group(1));
@@ -129,16 +144,18 @@ public final class VerificationReportData {
                 details.add("[TIMEOUT] [" + sourceName + "] " + trimmed);
             }
         }
+        extractAndAddGoalBlocks(output, sourceName);
     }
 
     /**
-     * Linhas de detalhe para objetivos não provados; exclui o resumo {@code Unknown: N} e mensagens
-     * do provador {@code returns Unknown}.
+     * Linhas de detalhe para objetivos não provados; exclui o resumo {@code Unknown: N},
+     * {@code Failed: N} e mensagens do provador {@code returns Unknown}.
      */
     private static boolean isDetailFailureLine(String trimmed) {
         if (UNKNOWN_SUMMARY_PATTERN.matcher(trimmed).find()
                 || PROVED_GOALS_PATTERN.matcher(trimmed).find()
-                || SMOKE_TESTS_SUMMARY_PATTERN.matcher(trimmed).find()) {
+                || SMOKE_TESTS_SUMMARY_PATTERN.matcher(trimmed).find()
+                || FAILED_SUMMARY_PATTERN.matcher(trimmed).find()) {
             return false;
         }
         String lower = trimmed.toLowerCase(Locale.ROOT);
@@ -152,8 +169,55 @@ public final class VerificationReportData {
             return false;
         }
         return lower.contains("[wp] no proof")
+                || lower.contains("[failure]")
                 || lower.contains("failed")
                 || (lower.contains("[wp]") && lower.contains("unknown"));
+    }
+
+    /**
+     * Extrai do output completo do WP os blocos de detalhe de goal (delimitados por linhas {@code ---})
+     * que contêm resultado negativo do provador (Failed / Unknown / Timeout) e adiciona-os a
+     * {@link #details}.
+     */
+    private void extractAndAddGoalBlocks(String output, String sourceName) {
+        String[] lines = output.split("\\R", -1);
+        // state: 0=outside, 1=after_first_sep (header), 2=in_goal_content
+        int state = 0;
+        List<String> block = new ArrayList<>();
+        boolean hasProverFailure = false;
+
+        for (String line : lines) {
+            boolean isSep = IS_SEPARATOR.matcher(line).matches();
+            switch (state) {
+                case 0 -> {
+                    if (isSep) {
+                        state = 1;
+                        block.clear();
+                        block.add(line);
+                        hasProverFailure = false;
+                    }
+                }
+                case 1 -> {
+                    block.add(line);
+                    if (isSep) state = 2;
+                }
+                default -> {
+                    if (isSep) {
+                        block.add(line);
+                        if (hasProverFailure) {
+                            details.add(String.join("\n", block));
+                        }
+                        state = 0;
+                        block.clear();
+                    } else {
+                        block.add(line);
+                        if (PROVER_FAILURE_DETAIL_LINE.matcher(line).find()) {
+                            hasProverFailure = true;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     public void addFailure(String message) {
@@ -177,10 +241,10 @@ public final class VerificationReportData {
         return wpProvedGoals;
     }
 
-    /** Objetivos não provados ({@code Unknown: N} no resumo WP). */
+    /** Objetivos não provados ({@code Unknown: N} ou {@code Failed: N} no resumo WP). */
     public int failures() {
         if (wpSummaryPresent) {
-            return wpUnknownGoals + extraFailures;
+            return wpUnknownGoals + wpFailedGoals + extraFailures;
         }
         return extraFailures;
     }

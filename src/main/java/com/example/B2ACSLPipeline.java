@@ -21,6 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.example.bxml.BxmlGluingNormalizer;
+import com.example.bxml.BxmlImportsGraph;
 import com.example.bxml.BxmlSeesGraph;
 import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.model.Machine;
@@ -74,9 +75,6 @@ public final class B2ACSLPipeline {
         } catch (Exception ignored) {}
         return true;
     }
-    /** Se definido, grava os .acsl neste diretório e não os remove (para inspeção) */
-    private static final String KEEP_ACSL_DIR = System.getProperty("b2acsl.keepAcsl");
-
     private B2ACSLPipeline() {}
 
     /**
@@ -117,10 +115,13 @@ public final class B2ACSLPipeline {
         Map<String, String> invariantGluingSubstitutions = BxmlGluingNormalizer.collectFromAllBxmlFiles(bxmlFiles);
 
         BxmlSeesGraph seesGraph = BxmlSeesGraph.fromBxmlDirectory(bdp);
-        logSeesRelations(seesGraph);
 
         // Mapa máquina -> nome em <Abstraction> (refinamento / implementação)
         Map<String, String> abstractionParentByMachine = buildAbstractionParentMap(bxmlFiles);
+        BxmlImportsGraph importsGraph =
+                BxmlImportsGraph.fromBxmlDirectory(bdp, abstractionParentByMachine);
+        logSeesRelations(seesGraph);
+        logImportsRelations(importsGraph);
         // Ficheiros BXML de refinamento/implementação a fundir na máquina abstrata raiz
         Map<String, List<Path>> mergePathsByRootAbstract = new HashMap<>();
         for (Path f : bxmlFiles) {
@@ -150,16 +151,65 @@ public final class B2ACSLPipeline {
                             }));
         }
 
-        // Step 1.1: Gerar arquivos .acsl (temporários ou em dir fixo para inspeção)
-        Path acslDir = KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank()
-                ? Path.of(KEEP_ACSL_DIR).toAbsolutePath().normalize()
-                : Files.createTempDirectory("b2acsl_acsl_");
-        boolean keepFiles = KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank();
+        // Pre-step: Computar cDir e gerar ghost_operations.ci antes dos .acsl para que os
+        // símbolos ghost (ex. set_difference via dummy_set_difference) sejam detectados no
+        // scan de includes da lib.
+        String bdpStr = bdpPathToString(bdp);
+        int bdpIdx = bdpStr.lastIndexOf("bdp");
+        Path langPath = bdpIdx >= 0
+                ? Path.of(bdpStr.substring(0, bdpIdx) + "lang" + bdpStr.substring(bdpIdx + 3))
+                : bdp.getParent().resolve("lang");
+        Path cDir = langPath.resolve("c");
+        // Staging dos ficheiros da lib sob cDir (elimina cópias redundantes em target/)
+        System.setProperty("b2acsl.targetAcslDir", cDir.toAbsolutePath().normalize().toString());
+        for (MachineFile mf : machines) {
+            Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
+            if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
+                continue;
+            }
+            String machineName = mf.machine().getMachineName();
+            List<Element> mergedEls = new ArrayList<>();
+            for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
+                mergedEls.add(AcslGenerator.parseMachineElement(mp));
+            }
+            GhostOperationsCiGenerator.write(
+                    cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
+        }
+        Path ghostCiPath = GhostOperationsCiGenerator.targetPath(cDir);
+        String ghostCiStripped =
+                Files.isRegularFile(ghostCiPath)
+                        ? GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
+                                Files.readString(ghostCiPath, java.nio.charset.StandardCharsets.UTF_8))
+                        : null;
+
+        // Step 1.1: Gerar arquivos .acsl na pasta lang/c (junto aos ficheiros C)
+        Path acslDir = cDir;
         try {
+            AcslLibIncludes.resetLibraryBundleUnderOutput(acslDir);
             List<Path> acslFiles = new ArrayList<>();
             Set<String> abstractMachineNames = new LinkedHashSet<>();
+            Set<String> dependencyOnlyMachineNames =
+                    dependencyOnlyMachineNames(seesGraph, importsGraph);
             List<MachineFile> machinesForAcsl =
-                    orderMachinesForAcslGeneration(machines, seesGraph);
+                    orderMachinesForAcslGeneration(machines, dependencyOnlyMachineNames);
+            List<String> topLevelImportMachinesPreview = new ArrayList<>();
+            for (MachineFile mf : machinesForAcsl) {
+                Element machineRoot = AcslGenerator.parseMachineElement(mf.bxmlPath());
+                if (AcslGenerator.getAbstractionReferenceName(machineRoot).isPresent()) {
+                    continue;
+                }
+                String machineName = mf.machine().getMachineName();
+                if (!dependencyOnlyMachineNames.contains(machineName)) {
+                    topLevelImportMachinesPreview.add(machineName);
+                }
+            }
+            String libIncludeScanRootMachineName =
+                    topLevelImportMachinesPreview.isEmpty()
+                            ? ""
+                            : topLevelImportMachinesPreview.get(0);
+            String libIncludeCarrierMachineName =
+                    resolveLibIncludeCarrierMachineName(
+                            libIncludeScanRootMachineName, seesGraph, importsGraph);
             for (MachineFile mf : machinesForAcsl) {
                 Element machineRoot = AcslGenerator.parseMachineElement(mf.bxmlPath());
                 if (AcslGenerator.getAbstractionReferenceName(machineRoot).isPresent()) {
@@ -176,43 +226,26 @@ public final class B2ACSLPipeline {
                                 acslDir,
                                 mergePaths,
                                 invariantGluingSubstitutions,
-                                seesGraph.seenOnlyMachineNames());
+                                dependencyOnlyMachineNames,
+                                seesGraph,
+                                importsGraph,
+                                libIncludeCarrierMachineName,
+                                libIncludeScanRootMachineName,
+                                ghostCiStripped);
                 acsl.ifPresent(acslFiles::add);
             }
             List<String> topLevelImportMachines =
-                    seesGraph.topLevelImportMachineNames(abstractMachineNames);
+                    topLevelImportMachineNames(abstractMachineNames, dependencyOnlyMachineNames);
             List<Path> topLevelAcslFiles =
                     filterAcslFilesByMachineNames(acslFiles, topLevelImportMachines);
             if (!topLevelImportMachines.isEmpty()) {
                 System.out.println(
                         "[B2ACSL] Importação ACSL Frama-C (raiz SEES): " + topLevelImportMachines);
             }
-            if (keepFiles) {
-                System.out.println("[B2ACSL] ACSL gravados em: " + acslDir);
-                for (Path p : acslFiles) System.out.println("  - " + p);
-            }
+            System.out.println("[B2ACSL] ACSL gravados em: " + acslDir);
+            for (Path p : acslFiles) System.out.println("  - " + p);
 
-            // Step 2: Obter arquivos .c em lang/c/ (mesmo path, trocando bdp por lang)
-            String bdpStr = bdpPathToString(bdp);
-            int idx = bdpStr.lastIndexOf("bdp");
-            Path langPath = idx >= 0
-                    ? Path.of(bdpStr.substring(0, idx) + "lang" + bdpStr.substring(idx + 3))
-                    : bdp.getParent().resolve("lang");
-            Path cDir = langPath.resolve("c");
-            for (MachineFile mf : machines) {
-                Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
-                if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
-                    continue;
-                }
-                String machineName = mf.machine().getMachineName();
-                List<Element> mergedEls = new ArrayList<>();
-                for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
-                    mergedEls.add(AcslGenerator.parseMachineElement(mp));
-                }
-                GhostOperationsCiGenerator.write(
-                        cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
-                break;
-            }
+            // Step 2: ghost_operations.ci já gerado no pre-step; cDir já calculado acima.
 
             // Step 2.1: Lista de tipos utilizados na especificação (.acsl + ghost_operations.ci + BXML)
             List<Element> abstractMachineRoots = new ArrayList<>();
@@ -251,6 +284,7 @@ public final class B2ACSLPipeline {
                                 acslFiles,
                                 acslDir,
                                 seesGraph,
+                                importsGraph,
                                 cFiles,
                                 cDir,
                                 specificationUsedTypes,
@@ -261,7 +295,6 @@ public final class B2ACSLPipeline {
             // Step 4: Retornar valor para Atelier B
             return framaResult;
         } finally {
-            if (!keepFiles) deleteRecursive(acslDir);
         }
     }
 
@@ -324,7 +357,7 @@ public final class B2ACSLPipeline {
 
     /**
      * Passo 2.1: identifica tipos ACSL e tipos B ({@code TypeInfos}) usados na especificação e grava
-     * {@link SpecificationTypesCollector#OUTPUT_FILE_NAME} em {@code acslDir} e em {@code cDir}.
+     * {@link SpecificationTypesCollector#OUTPUT_FILE_NAME} em {@code cDir}.
      */
     private static List<String> writeSpecificationTypesList(
             Path acslDir,
@@ -344,18 +377,8 @@ public final class B2ACSLPipeline {
         }
         List<String> types =
                 SpecificationTypesCollector.collectUsedTypes(specTexts, abstractMachineRoots);
-        Path typesInAcslDir = acslDir.resolve(SpecificationTypesCollector.OUTPUT_FILE_NAME);
-        SpecificationTypesCollector.writeTypesList(typesInAcslDir, types);
-        Path typesInCDir = cDir.resolve(SpecificationTypesCollector.OUTPUT_FILE_NAME);
-        if (!typesInCDir.toAbsolutePath().normalize().equals(typesInAcslDir.toAbsolutePath().normalize())) {
-            SpecificationTypesCollector.writeTypesList(typesInCDir, types);
-        }
-        if (KEEP_ACSL_DIR != null && !KEEP_ACSL_DIR.isBlank()) {
-            System.out.println("[B2ACSL] Tipos da especificação: " + typesInAcslDir);
-            if (!typesInAcslDir.equals(typesInCDir)) {
-                System.out.println("  (cópia em " + typesInCDir + ")");
-            }
-        }
+        Path typesFile = cDir.resolve(SpecificationTypesCollector.OUTPUT_FILE_NAME);
+        SpecificationTypesCollector.writeTypesList(typesFile, types);
         return types;
     }
 
@@ -382,17 +405,17 @@ public final class B2ACSLPipeline {
     }
 
     /**
-     * Gera primeiro os {@code .acsl} das máquinas só vistas em {@code SEES}, para a máquina que vê
-     * poder fundir os respetivos {@code include} da biblioteca.
+     * Gera primeiro os {@code .acsl} das máquinas só vistas em {@code SEES} ou importadas em {@code
+     * IMPORTS}, para a máquina que vê/importa poder fundir os respetivos {@code include} da biblioteca.
      */
     private static List<MachineFile> orderMachinesForAcslGeneration(
-            List<MachineFile> machines, BxmlSeesGraph seesGraph) {
+            List<MachineFile> machines, Set<String> dependencyOnlyMachineNames) {
         if (machines == null || machines.isEmpty()) {
             return List.of();
         }
-        Set<String> seenOnly =
-                seesGraph == null ? Set.of() : seesGraph.seenOnlyMachineNames();
-        List<MachineFile> seenFirst = new ArrayList<>();
+        Set<String> dependencyOnly =
+                dependencyOnlyMachineNames == null ? Set.of() : dependencyOnlyMachineNames;
+        List<MachineFile> dependencyFirst = new ArrayList<>();
         List<MachineFile> rest = new ArrayList<>();
         List<MachineFile> refinements = new ArrayList<>();
         for (MachineFile mf : machines) {
@@ -403,8 +426,8 @@ public final class B2ACSLPipeline {
                     continue;
                 }
                 String name = mf.machine().getMachineName();
-                if (seenOnly.contains(name)) {
-                    seenFirst.add(mf);
+                if (dependencyOnly.contains(name)) {
+                    dependencyFirst.add(mf);
                 } else {
                     rest.add(mf);
                 }
@@ -412,11 +435,62 @@ public final class B2ACSLPipeline {
                 rest.add(mf);
             }
         }
-        List<MachineFile> ordered = new ArrayList<>(seenFirst.size() + rest.size() + refinements.size());
-        ordered.addAll(seenFirst);
+        List<MachineFile> ordered =
+                new ArrayList<>(dependencyFirst.size() + rest.size() + refinements.size());
+        ordered.addAll(dependencyFirst);
         ordered.addAll(rest);
         ordered.addAll(refinements);
         return ordered;
+    }
+
+    private static Set<String> dependencyOnlyMachineNames(
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        if (seesGraph != null) {
+            names.addAll(seesGraph.seenOnlyMachineNames());
+        }
+        if (importsGraph != null) {
+            names.addAll(importsGraph.importedOnlyMachineNames());
+        }
+        return Set.copyOf(names);
+    }
+
+    /**
+     * Portador único dos includes da {@code B2ACSLLib} na importação Frama-C multi-ficheiro: primeira
+     * dependência transitiva da raiz, ou a própria raiz se não houver dependências.
+     */
+    private static String resolveLibIncludeCarrierMachineName(
+            String rootMachineName, BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        if (rootMachineName == null || rootMachineName.isBlank()) {
+            return "";
+        }
+        List<String> deps =
+                com.example.bxml.BxmlSetsTranslator.transitiveDependencyMachineNames(
+                        rootMachineName.trim(), seesGraph, importsGraph);
+        if (!deps.isEmpty()) {
+            return deps.get(0);
+        }
+        return rootMachineName.trim();
+    }
+
+    private static List<String> topLevelImportMachineNames(
+            Set<String> abstractMachineNames, Set<String> dependencyOnlyMachineNames) {
+        if (abstractMachineNames == null || abstractMachineNames.isEmpty()) {
+            return List.of();
+        }
+        Set<String> dependencyOnly =
+                dependencyOnlyMachineNames == null ? Set.of() : dependencyOnlyMachineNames;
+        List<String> out = new ArrayList<>();
+        for (String name : abstractMachineNames) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            String n = name.trim();
+            if (!dependencyOnly.contains(n)) {
+                out.add(n);
+            }
+        }
+        return List.copyOf(out);
     }
 
     private static void logSeesRelations(BxmlSeesGraph seesGraph) {
@@ -425,6 +499,15 @@ public final class B2ACSLPipeline {
         }
         for (BxmlSeesGraph.SeesRelation r : seesGraph.relations()) {
             System.out.println("[B2ACSL] SEES: " + r.viewer() + " → " + r.seen());
+        }
+    }
+
+    private static void logImportsRelations(BxmlImportsGraph importsGraph) {
+        if (importsGraph == null) {
+            return;
+        }
+        for (BxmlImportsGraph.ImportsRelation r : importsGraph.relations()) {
+            System.out.println("[B2ACSL] IMPORTS: " + r.importer() + " → " + r.imported());
         }
     }
 
@@ -472,36 +555,66 @@ public final class B2ACSLPipeline {
             List<Path> cFiles,
             Path acslDir,
             BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
             List<Path> topLevelAcslFiles,
             List<Path> allAcslFiles)
             throws IOException {
         if (topLevelAcslFiles != null && !topLevelAcslFiles.isEmpty()) {
-            return List.copyOf(topLevelAcslFiles);
+            LinkedHashSet<Path> ordered = new LinkedHashSet<>();
+            for (Path rootAcsl : topLevelAcslFiles) {
+                if (rootAcsl == null || !Files.isRegularFile(rootAcsl)) {
+                    continue;
+                }
+                String fileName = rootAcsl.getFileName().toString();
+                if (!fileName.endsWith(".acsl")) {
+                    ordered.add(rootAcsl);
+                    continue;
+                }
+                String rootName = fileName.substring(0, fileName.length() - ".acsl".length());
+                for (String dep :
+                        com.example.bxml.BxmlSetsTranslator.transitiveDependencyMachineNames(
+                                rootName, seesGraph, importsGraph)) {
+                    Path depAcsl = acslDir.resolve(dep + ".acsl");
+                    if (Files.isRegularFile(depAcsl)) {
+                        ordered.add(depAcsl);
+                    }
+                }
+                ordered.add(rootAcsl);
+            }
+            if (!ordered.isEmpty()) {
+                return List.copyOf(ordered);
+            }
         }
         LinkedHashSet<Path> ordered = new LinkedHashSet<>();
         for (Path cFile : cFiles) {
             ordered.addAll(
                     resolveAcslImportForCFile(
-                            cFile, acslDir, seesGraph, topLevelAcslFiles, allAcslFiles));
+                            cFile,
+                            acslDir,
+                            seesGraph,
+                            importsGraph,
+                            topLevelAcslFiles,
+                            allAcslFiles));
         }
         return List.copyOf(ordered);
     }
 
     /**
      * {@code .acsl} para {@code -acsl-import}: o da máquina do {@code .c}, se existir; senão raízes
-     * SEES ({@code topLevelAcslFiles}).
+     * SEES/IMPORTS ({@code topLevelAcslFiles}).
      */
     private static List<Path> resolveAcslImportForCFile(
             Path cFile,
             Path acslDir,
             BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
             List<Path> topLevelAcslFiles,
             List<Path> allAcslFiles)
             throws IOException {
         String machine = abstractMachineNameFromCFile(cFile);
         Path own = acslDir.resolve(machine + ".acsl");
         if (Files.isRegularFile(own)) {
-            if (seesGraph != null && seesGraph.isReferencedBySees(machine)) {
+            if (isDependencyOnlyMachine(machine, seesGraph, importsGraph)) {
                 Optional<Path> libSidecar =
                         AcslGenerator.writeLibIncludesSidecarForSeenMachine(machine, acslDir);
                 if (libSidecar.isPresent()) {
@@ -516,11 +629,18 @@ public final class B2ACSLPipeline {
         return allAcslFiles == null ? List.of() : allAcslFiles;
     }
 
+    private static boolean isDependencyOnlyMachine(
+            String machine, BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        return (seesGraph != null && seesGraph.isReferencedBySees(machine))
+                || (importsGraph != null && importsGraph.isReferencedByImports(machine));
+    }
+
     private static int runFramaC(
             List<Path> topLevelAcslFiles,
             List<Path> allAcslFiles,
             Path acslDir,
             BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
             List<Path> cFiles,
             Path cDir,
             List<String> specificationUsedTypes,
@@ -552,19 +672,23 @@ public final class B2ACSLPipeline {
 
         List<Path> acslImportFiles =
                 resolveAcslImportForAllCFiles(
-                        cFiles, acslDir, seesGraph, topLevelAcslFiles, allAcslFiles);
+                        cFiles,
+                        acslDir,
+                        seesGraph,
+                        importsGraph,
+                        topLevelAcslFiles,
+                        allAcslFiles);
         if (acslImportFiles.isEmpty()) {
             System.err.println("[B2ACSL] Nenhum .acsl para importar.");
             return 4;
         }
 
-        // frama-c -acsl-import <acsl>… [ghost_operations.ci] <c>… -print -no-unicode
+        // frama-c -acsl-import="f1,f2,…" [ghost_operations.ci] <c>… -print -no-unicode
         List<String> importCmd = new ArrayList<>();
         importCmd.add(FRAMA_C);
-        importCmd.add("-acsl-import");
-        for (Path acslImport : acslImportFiles) {
-            importCmd.add(acslImport.toString());
-        }
+        String acslImportList =
+                acslImportFiles.stream().map(Path::toString).collect(java.util.stream.Collectors.joining(","));
+        importCmd.add("-acsl-import=" + acslImportList);
         if (Files.isRegularFile(ghostCi)) {
             importCmd.add(ghostCi.toString());
         }
@@ -695,7 +819,13 @@ public final class B2ACSLPipeline {
         if (wpOptions.smokeTests()) {
             wpCmd.add("-wp-smoke-tests");
         }
+        if (wpOptions.counterExamples()) {
+            wpCmd.add("-wp-counter-examples");
+        }
         wpCmd.add("-wp-rte");
+        if (wpOptions.splitGoals()) {
+            wpCmd.add("-wp-split");
+        }
         wpCmd.add("-wp-timeout");
         wpCmd.add(Integer.toString(wpOptions.timeoutSeconds()));
         wpCmd.add(wpOptions.outputFlag());
@@ -908,6 +1038,10 @@ public final class B2ACSLPipeline {
     private static void stripDummyPrefixFromMergedCode(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
         content = content.replaceAll("\\bdummy_", "");
+        // DSet<A>/DTuple<A,B> foram introduzidos no ghost_operations.ci; no merged_code.c
+        // os tipos reais Set<A>/Tuple<A,B> já estão disponíveis via ACSL imports.
+        content = content.replaceAll("\\bDSet<", "Set<");
+        content = content.replaceAll("\\bDTuple<", "Tuple<");
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -1028,12 +1162,13 @@ public final class B2ACSLPipeline {
     private static final Pattern ACSL_OPERATION_CONTRACT_FUNCTION =
             Pattern.compile("(?m)^\\s*function\\s+([A-Za-z_]\\w*)\\s*:");
     private static final Pattern GHOST_INITIALISATION_BLOCK_IN_CI =
-            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
+            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+\\w+__initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
     private static final Pattern GHOST_INITIALISATION_BLOCK_IN_MERGED =
-            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/\\s*");
+            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+\\w+__initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/\\s*");
     private static final Pattern INITIALISATION_FUNCTION_DEFINITION =
             Pattern.compile("\\bvoid\\s+[A-Za-z_]\\w*__INITIALISATION\\s*\\([^;{}]*\\)\\s*\\{");
-    private static final String INITIALISATION_GHOST_CALL_MARKER = "/*@ ghost initialisation(); */";
+    private static final Pattern INITIALISATION_GHOST_CALL_PATTERN =
+            Pattern.compile("/\\*@\\s*ghost\\s+\\w+__initialisation\\s*\\(\\s*\\)\\s*;\\s*\\*/");
 
     /**
      * Novo passo pré-WP: move especificações ghost de operações para imediatamente acima da função C
@@ -1077,7 +1212,7 @@ public final class B2ACSLPipeline {
         for (int i = 0; i < opNames.size(); i++) {
             String opName = opNames.get(i);
             String ghostBlock = blocks.get(i);
-            if ("initialisation".equalsIgnoreCase(opName)) {
+            if (opName.toLowerCase().endsWith("__initialisation")) {
                 merged = placeInitialisationGhostAndContract(merged, ghostBlock);
             } else {
                 int insertAt = findFunctionStartForGhostSpec(merged, opName);
@@ -1172,7 +1307,7 @@ public final class B2ACSLPipeline {
             return -1;
         }
         List<Pattern> candidates = new ArrayList<>();
-        if ("initialisation".equalsIgnoreCase(opName)) {
+        if (opName.toLowerCase().endsWith("__initialisation")) {
             candidates.add(
                     Pattern.compile(
                             "\\bvoid\\s+[A-Za-z_]\\w*__INITIALISATION\\s*\\([^;{}]*\\)\\s*\\{"));
@@ -1349,10 +1484,11 @@ public final class B2ACSLPipeline {
      * recua até a definição de {@code __INITIALISATION}, ancorando acima da especificação contígua.
      */
     private static int findInitialisationAnchorFromGhostCall(String content) {
-        int callIdx = content.indexOf(INITIALISATION_GHOST_CALL_MARKER);
-        if (callIdx < 0) {
+        Matcher callMatcher = INITIALISATION_GHOST_CALL_PATTERN.matcher(content);
+        if (!callMatcher.find()) {
             return -1;
         }
+        int callIdx = callMatcher.start();
         Matcher def = INITIALISATION_FUNCTION_DEFINITION.matcher(content);
         int defStart = -1;
         while (def.find()) {

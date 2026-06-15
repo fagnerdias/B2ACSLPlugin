@@ -2,6 +2,7 @@ package com.example.bxml;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -37,6 +38,12 @@ public final class BxmlInitialisationTranslator {
      */
     public static InitialisationAcsl translate(
             Element machineEl, List<String> additionalAssignTargets, BxmlTranslateContext ctx) {
+        return translate(machineEl, additionalAssignTargets, ctx, Map.of());
+    }
+
+    public static InitialisationAcsl translate(
+            Element machineEl, List<String> additionalAssignTargets, BxmlTranslateContext ctx,
+            Map<String, Long> knownIntegerConstants) {
         String machineName = machineEl.getAttribute("name");
 
         List<String> ensures = new ArrayList<>();
@@ -44,10 +51,91 @@ public final class BxmlInitialisationTranslator {
         if (init != null) {
             walkSubstitution(firstSubChild(init), ensures, ctx);
         }
+        Map<String, Long> constants = knownIntegerConstants == null ? Map.of() : knownIntegerConstants;
+        String loopUnfoldSize = (init != null)
+                ? detectCartesianProductUnfoldSize(firstSubChild(init), ctx, constants)
+                : null;
 
         String functionName = machineName + "__INITIALISATION";
         return new InitialisationAcsl(
-                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of());
+                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopUnfoldSize, false);
+    }
+
+    private static String detectCartesianProductUnfoldSize(
+            Element sub, BxmlTranslateContext ctx, Map<String, Long> constants) {
+        if (sub == null) return null;
+        String ln = sub.getLocalName();
+        return switch (ln) {
+            case "Assignement_Sub" -> cartesianProductSizeFromAssignment(sub, ctx, constants);
+            case "Nary_Sub" -> {
+                NodeList children = sub.getChildNodes();
+                for (int i = 0; i < children.getLength(); i++) {
+                    Node n = children.item(i);
+                    if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                    Element ch = (Element) n;
+                    if ("Attr".equals(ch.getLocalName())) continue;
+                    String result = detectCartesianProductUnfoldSize(ch, ctx, constants);
+                    if (result != null) yield result;
+                }
+                yield null;
+            }
+            case "Bloc_Sub" -> detectCartesianProductUnfoldSize(firstSubChild(sub), ctx, constants);
+            default -> null;
+        };
+    }
+
+    private static String cartesianProductSizeFromAssignment(
+            Element assign, BxmlTranslateContext ctx, Map<String, Long> constants) {
+        Element vals = firstChildElement(assign, "Values");
+        if (vals == null) return null;
+        for (Element rhsEl : directExpChildren(vals)) {
+            String size = intervalCartesianProductSize(rhsEl, ctx, constants);
+            if (size != null) return size;
+        }
+        return null;
+    }
+
+    private static String intervalCartesianProductSize(
+            Element el, BxmlTranslateContext ctx, Map<String, Long> constants) {
+        if (!"Binary_Exp".equals(el.getLocalName())) return null;
+        if (!"*s".equals(el.getAttribute("op"))) return null;
+        List<Element> children = directExpChildren(el);
+        if (children.size() < 2) return null;
+        Element intervalEl = children.get(0);
+        Element singletonEl = children.get(1);
+        if (!"Binary_Exp".equals(intervalEl.getLocalName())) return null;
+        if (!"..".equals(intervalEl.getAttribute("op"))) return null;
+        if (!"Nary_Exp".equals(singletonEl.getLocalName())) return null;
+        if (!"{".equals(singletonEl.getAttribute("op"))) return null;
+        if (directExpChildren(singletonEl).size() != 1) return null;
+        List<Element> bounds = directExpChildren(intervalEl);
+        if (bounds.size() < 2) return null;
+        Long lowerLit = resolveIntegerBound(bounds.get(0), constants);
+        Long upperLit = resolveIntegerBound(bounds.get(1), constants);
+        if (lowerLit != null && upperLit != null) {
+            return String.valueOf(upperLit - lowerLit + 1);
+        }
+        // Fallback: use ACSL expressions (only valid if they resolve to compile-time constants)
+        String lower = BxmlExpressionToAcsl.translate(bounds.get(0), ctx);
+        String upper = BxmlExpressionToAcsl.translate(bounds.get(1), ctx);
+        if (lower == null || upper == null) return null;
+        lower = lower.trim();
+        upper = upper.trim();
+        if ("0".equals(lower)) {
+            return "(" + upper + " + 1)";
+        }
+        return "(" + upper + " - " + lower + " + 1)";
+    }
+
+    private static Long resolveIntegerBound(Element boundEl, Map<String, Long> constants) {
+        if ("Integer_Literal".equals(boundEl.getLocalName())) {
+            String val = boundEl.getAttribute("value");
+            try { return Long.parseLong(val.trim()); } catch (NumberFormatException e) { return null; }
+        }
+        if ("Id".equals(boundEl.getLocalName())) {
+            return constants.get(boundEl.getAttribute("value"));
+        }
+        return null;
     }
 
     private static void walkSubstitution(Element sub, List<String> ensures, BxmlTranslateContext ctx) {
@@ -382,7 +470,17 @@ public final class BxmlInitialisationTranslator {
              * Sufixos de variável abstrata (ex. {@code ss}) para cláusulas {@code ensures dummy_ghost_<v>;}
              * em inicialização não pura face ao modelo ghost.
              */
-            List<String> dummyGhostEnsureVarNames) {
+            List<String> dummyGhostEnsureVarNames,
+            /**
+             * Expressão ACSL para o número de iterações de loop gerado por um produto cartesiano
+             * {@code (a..b) * {v}}. Quando não-nulo, emite {@code at loop 1: loop unfold n;} no contrato.
+             */
+            String loopUnfoldSize,
+            /**
+             * {@code true} para máquinas que não importam outras máquinas: emite um contrato mínimo
+             * com {@code assigns \nothing;} mesmo que não haja outros conteúdos.
+             */
+            boolean emitMinimalContract) {
 
         public InitialisationAcsl {
             dummyGhostEnsureVarNames =
@@ -390,6 +488,12 @@ public final class BxmlInitialisationTranslator {
         }
 
         public String toContractText() {
+            boolean hasContent = !ensures.isEmpty()
+                    || !dummyGhostEnsureVarNames.isEmpty()
+                    || !assignsTargets.isEmpty()
+                    || (loopUnfoldSize != null && !loopUnfoldSize.isBlank())
+                    || includeGhostBehaviorAssert;
+            if (!hasContent && !emitMinimalContract) return "";
             StringBuilder sb = new StringBuilder();
             sb.append("function ").append(functionName).append(":\n");
             sb.append("contract:\n");
@@ -406,8 +510,12 @@ public final class BxmlInitialisationTranslator {
                     sb.append("    assigns ").append(a).append(";\n");
                 }
             }
+            if (loopUnfoldSize != null && !loopUnfoldSize.isBlank()) {
+                sb.append("    at loop 1:\n        loop unfold ").append(loopUnfoldSize).append(";\n");
+            }
             if (includeGhostBehaviorAssert) {
-                sb.append("    at 1: assert ghost__initialisation;\n");
+                String machinePart = functionName.toLowerCase().replace("__initialisation", "");
+                sb.append("    at 1: assert ghost__").append(machinePart).append("__initialisation;\n");
             }
             return sb.toString();
         }

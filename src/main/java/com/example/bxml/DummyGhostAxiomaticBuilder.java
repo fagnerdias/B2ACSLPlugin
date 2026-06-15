@@ -30,8 +30,7 @@ import com.example.B2AcslLibraryPaths;
 final class DummyGhostAxiomaticBuilder {
 
     /** Nomes usados na especificação ghost que mapeiam para outro símbolo na biblioteca. */
-    static final Map<String, String> LIB_SYMBOL_ALIASES =
-            Map.of("difference", "set_difference");
+    static final Map<String, String> LIB_SYMBOL_ALIASES = Map.of();
 
     private static final Pattern DUMMY_LIB_CALL =
             Pattern.compile("\\bdummy_([A-Za-z][A-Za-z0-9_]*)\\b");
@@ -127,9 +126,19 @@ final class DummyGhostAxiomaticBuilder {
 
         appendDummyConcreteConstantDeclarations(sb, machineEl, ctx);
 
+        appendSeenConcreteConstantDeclarations(sb, ghostText, machineEl, bxmlDirectory);
+
         if (maxSetComprehensionIndex > 0) {
+            String machineName = machineEl == null ? "" : machineEl.getAttribute("name");
+            if (machineName == null) {
+                machineName = "";
+            } else {
+                machineName = machineName.trim();
+            }
             for (int k = 1; k <= maxSetComprehensionIndex; k++) {
-                sb.append("        logic DSet<integer> dummy_set_comprehension_").append(k).append(";\n\n");
+                sb.append("        logic DSet<integer> dummy_")
+                        .append(BxmlComprehensionRegistry.comprehensionSetName(machineName, k))
+                        .append(";\n\n");
             }
         }
 
@@ -218,7 +227,7 @@ final class DummyGhostAxiomaticBuilder {
             if (ghostName.startsWith("Function_")) {
                 continue;
             }
-            if (ghostName.startsWith("set_comprehension_")) {
+            if (ghostName.contains("set_comprehension_")) {
                 continue;
             }
             if ("NAT".equals(ghostName)) {
@@ -274,8 +283,14 @@ final class DummyGhostAxiomaticBuilder {
             out.add(set.setName());
             out.addAll(set.valueNames());
         }
+        String machineName = machineEl == null ? "" : machineEl.getAttribute("name");
+        if (machineName == null) {
+            machineName = "";
+        } else {
+            machineName = machineName.trim();
+        }
         for (int k = 1; k <= maxSetComp; k++) {
-            out.add("set_comprehension_" + k);
+            out.add(BxmlComprehensionRegistry.comprehensionSetName(machineName, k));
         }
         return out;
     }
@@ -384,7 +399,7 @@ final class DummyGhostAxiomaticBuilder {
         return s;
     }
 
-    private static String prefixLibCallsInSignature(String sig) {
+    static String prefixLibCallsInSignature(String sig) {
         AcslLibSymbolDependencyMap map = AcslLibSymbolDependencyMap.instance();
         List<String> symbols = new ArrayList<>(map.allKnownSymbols());
         symbols.sort((a, b) -> Integer.compare(b.length(), a.length()));
@@ -399,17 +414,12 @@ final class DummyGhostAxiomaticBuilder {
             out =
                     out.replaceAll(
                             "(?<!dummy_)\\b" + Pattern.quote(alias.getKey()) + "\\b",
-                            "dummy_" + alias.getKey());
+                            "dummy_" + alias.getValue());
         }
         return out;
     }
 
     private static String ghostNameForLibSymbol(String libSymbol) {
-        for (Map.Entry<String, String> e : LIB_SYMBOL_ALIASES.entrySet()) {
-            if (e.getValue().equals(libSymbol)) {
-                return e.getKey();
-            }
-        }
         return libSymbol;
     }
 
@@ -466,6 +476,30 @@ final class DummyGhostAxiomaticBuilder {
             case "bool", "boolean" -> "boolean";
             default -> "integer";
         };
+    }
+
+    /**
+     * Para cada constante concreta das máquinas em {@code SEES} que apareça como identificador bare
+     * (sem prefixo {@code dummy_}) no texto ghost, emite {@code logic integer <NAME>;} no bloco
+     * axiomatic.  Estas constantes são declaradas nos ficheiros {@code .acsl} das máquinas vistas
+     * (carregados via {@code -acsl-import}), pelo que não são abstraídas com {@code dummy_}.
+     */
+    private static void appendSeenConcreteConstantDeclarations(
+            StringBuilder sb, String ghostText, Element machineEl, Path bxmlDirectory) {
+        if (ghostText == null || ghostText.isBlank() || machineEl == null || bxmlDirectory == null) {
+            return;
+        }
+        List<String> seenConstants =
+                BxmlSetsTranslator.listSeenMachineConcreteConstantNames(machineEl, bxmlDirectory);
+        for (String name : seenConstants) {
+            // ghostDummyConcreteRefs already replaced bare <NAME> with dummy_<NAME>
+            Pattern pat =
+                    Pattern.compile(
+                            "(?<![A-Za-z0-9_])dummy_" + Pattern.quote(name) + "(?![A-Za-z0-9_])");
+            if (pat.matcher(ghostText).find()) {
+                sb.append("        logic integer dummy_").append(name).append(";\n\n");
+            }
+        }
     }
 
     private static void appendDummyConcreteConstantDeclarations(
