@@ -42,7 +42,9 @@ public final class WpOptionsDialog {
             String outputFlag,
             boolean loopSimplification,
             boolean smokeTests,
-            boolean verifyPerOperation) {
+            boolean verifyPerOperation,
+            boolean counterExamples,
+            boolean splitGoals) {
 
         /** Primeiro provedor (compatibilidade). */
         public String prover() {
@@ -89,7 +91,9 @@ public final class WpOptionsDialog {
             outputCombo.setSelectedItem(DEFAULT_WP_OUTPUT);
 
             JCheckBox loopSimplificationBox = new JCheckBox("Enable Loop Simplification", false);
-            JCheckBox smokeTestsBox = new JCheckBox("Enable Smoke Tests", true);
+            JCheckBox smokeTestsBox = new JCheckBox("Enable Smoke Tests (-wp-smoke-tests)", true);
+            JCheckBox counterExamplesBox = new JCheckBox("Counter Examples (-wp-counter-examples)", true);
+            JCheckBox splitGoalsBox = new JCheckBox("Split Goals (-wp-split)", true);
             JCheckBox verifyPerOperationBox =
                     new JCheckBox("Verify each operation separately (-wp-fct)", true);
 
@@ -142,13 +146,13 @@ public final class WpOptionsDialog {
             smokeTestsBox.setOpaque(false);
             content.add(smokeTestsBox, gbc);
 
-            //gbc.gridy = 4;
-            //loopSimplificationBox.setOpaque(false);
-            //content.add(loopSimplificationBox, gbc);
+            gbc.gridy = 4;
+            counterExamplesBox.setOpaque(false);
+            content.add(counterExamplesBox, gbc);
 
-            // gbc.gridy = 5;
-            // verifyPerOperationBox.setOpaque(false);
-            // content.add(verifyPerOperationBox, gbc);
+            gbc.gridy = 5;
+            splitGoalsBox.setOpaque(false);
+            content.add(splitGoalsBox, gbc);
 
             root.add(content, BorderLayout.CENTER);
 
@@ -188,7 +192,9 @@ public final class WpOptionsDialog {
                         output,
                         loopSimplificationBox.isSelected(),
                         smokeTestsBox.isSelected(),
-                        verifyPerOperationBox.isSelected());
+                        verifyPerOperationBox.isSelected(),
+                        counterExamplesBox.isSelected(),
+                        splitGoalsBox.isSelected());
             }
         } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
             System.err.println(
@@ -263,6 +269,10 @@ public final class WpOptionsDialog {
                 Boolean.parseBoolean(System.getProperty("b2acsl.wp.smokeTests", "true"));
         boolean verifyPerOperation =
                 Boolean.parseBoolean(System.getProperty("b2acsl.wp.verifyPerOperation", "false"));
+        boolean counterExamples =
+                Boolean.parseBoolean(System.getProperty("b2acsl.wp.counterExamples", "true"));
+        boolean splitGoals =
+                Boolean.parseBoolean(System.getProperty("b2acsl.wp.splitGoals", "true"));
         return buildWpOptions(
                 projectName,
                 provers,
@@ -270,7 +280,9 @@ public final class WpOptionsDialog {
                 output,
                 loopSimplification,
                 smokeTests,
-                verifyPerOperation);
+                verifyPerOperation,
+                counterExamples,
+                splitGoals);
     }
 
     private static List<String> parseProverList(String raw) {
@@ -322,7 +334,9 @@ public final class WpOptionsDialog {
             String outputMode,
             boolean loopSimplification,
             boolean smokeTests,
-            boolean verifyPerOperation) {
+            boolean verifyPerOperation,
+            boolean counterExamples,
+            boolean splitGoals) {
         String normalizedProjectName = projectName == null ? "" : projectName.trim();
         if (normalizedProjectName.isBlank()) {
             normalizedProjectName = DEFAULT_PROJECT_NAME;
@@ -352,7 +366,9 @@ public final class WpOptionsDialog {
                 normalizedOutput,
                 loopSimplification,
                 smokeTests,
-                verifyPerOperation);
+                verifyPerOperation,
+                counterExamples,
+                splitGoals);
     }
 
     private static String normalizeProverName(String prover) {
