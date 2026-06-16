@@ -301,6 +301,15 @@ public final class BxmlPredicateToAcsl {
         if ("<:".equals(op)) {
             return "inclusion(" + left + ", " + right + ")";
         }
+        if ("/<:".equals(op)) {
+            return "not_inclusion(" + left + ", " + right + ")";
+        }
+        if ("<<:".equals(op)) {
+            return "strict_inclusion(" + left + ", " + right + ")";
+        }
+        if ("/<<:".equals(op)) {
+            return "not_strict_inclusion(" + left + ", " + right + ")";
+        }
         if ("=".equals(op)) {
             if ("Boolean_Exp".equals(rightEl.getLocalName())) {
                 Element predEl = firstNonAttrElementChild(rightEl);
@@ -363,6 +372,9 @@ public final class BxmlPredicateToAcsl {
         String o = raw.trim();
         return switch (o) {
             case "&lt;:" -> "<:";
+            case "/&lt;:", "/<:" -> "/<:";
+            case "&lt;&lt;:" -> "<<:";
+            case "/&lt;&lt;:", "/<<:" -> "/<<:";
             case "&lt;=i", "<=i" -> "<=";
             case "&lt;i", "<i" -> "<";
             case "&gt;=i", ">=i" -> ">=";

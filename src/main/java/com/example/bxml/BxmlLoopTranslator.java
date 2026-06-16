@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -113,10 +114,15 @@ public final class BxmlLoopTranslator {
 
     private static LoopContract translateWhile(
             Element whileEl, BxmlTranslateContext ctx, Element abstractMachineEl, int index) {
+        List<String> abstractVarNames = abstractMachineEl != null
+                ? GhostOperationsCiGenerator.listAbstractVariableNames(abstractMachineEl)
+                : List.of();
+
         Element invEl = firstChildElement(whileEl, "Invariant");
         String invariant = "";
         if (invEl != null) {
             invariant = BxmlPredicateToAcsl.translateInvariantContent(invEl, ctx).trim();
+            invariant = prefixAbstractVars(invariant, abstractVarNames);
         }
 
         Element varEl = firstChildElement(whileEl, "Variant");
@@ -125,6 +131,7 @@ public final class BxmlLoopTranslator {
             Element exp = firstExpressionChild(varEl);
             if (exp != null) {
                 variant = BxmlExpressionToAcsl.translate(exp, ctx).trim();
+                variant = prefixAbstractVars(variant, abstractVarNames);
             }
         }
 
@@ -182,6 +189,26 @@ public final class BxmlLoopTranslator {
             }
             return;
         }
+        if ("VAR_IN".equals(sub.getLocalName())) {
+            Set<String> localNames = new LinkedHashSet<>();
+            Element vars = firstChildElement(sub, "Variables");
+            if (vars != null) {
+                for (Element id : directExpChildren(vars)) {
+                    if ("Id".equals(id.getLocalName())) {
+                        String v = id.getAttribute("value");
+                        if (v != null && !v.isBlank()) localNames.add(v.trim());
+                    }
+                }
+            }
+            Set<String> inner = new LinkedHashSet<>();
+            Element bodyEl = firstChildElement(sub, "Body");
+            if (bodyEl != null) {
+                collectLoopAssigns(bodyEl, ctx, abstractMachineEl, inner);
+            }
+            inner.removeIf(v -> localNames.stream().anyMatch(loc -> v.equals(loc) || v.startsWith(loc + "[")));
+            out.addAll(inner);
+            return;
+        }
         NodeList nl = sub.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
             Node n = nl.item(i);
@@ -206,6 +233,17 @@ public final class BxmlLoopTranslator {
         }
         return BxmlMachineVariables.qualifyLoopAssignTarget(
                 varName, ctx.machineName(), abstractMachineEl, ctx);
+    }
+
+    private static String prefixAbstractVars(String text, List<String> abstractVarNames) {
+        if (text == null || text.isBlank() || abstractVarNames.isEmpty()) return text;
+        String result = text;
+        for (String v : abstractVarNames) {
+            result = result.replaceAll(
+                    "\\b" + Pattern.quote(v) + "\\b",
+                    "dummy_ghost_" + v);
+        }
+        return result;
     }
 
     private static Element firstChildElement(Element parent, String localName) {

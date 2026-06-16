@@ -105,7 +105,7 @@
     "list_to_function": "sequence_functions/list_to_function.acsl",
     "not_belongs": "set_functions/belongs.acsl",
     "not_inclusion": "set_functions/inclusion.acsl",
-    "not_strict_inclusion": "set_functions/inclusion.acsl",
+    "not_strict_inclusion": "set_functions/strict_inclusion.acsl",
     "pair": "set_functions/pair.acsl",
     "pred": "set_axioms/NAT_succ_axioms.acsl",
     "ran": "relation_functions/range.acsl",
@@ -122,7 +122,7 @@
     "set_min": "set_functions/min.acsl",
     "set_union": "set_functions/union.acsl",
     "singleton": "set_functions/singleton.acsl",
-    "strict_inclusion": "set_functions/inclusion.acsl",
+    "strict_inclusion": "set_functions/strict_inclusion.acsl",
     "succ": "set_axioms/NAT_succ_axioms.acsl",
     "tail": "sequence_functions/tail.acsl"
   },
@@ -247,7 +247,7 @@
       "set_functions/inclusion.acsl"
     ],
     "not_strict_inclusion": [
-      "set_functions/inclusion.acsl"
+      "set_functions/strict_inclusion.acsl"
     ],
     "pair": [
       "set_functions/pair.acsl"
@@ -299,7 +299,7 @@
       "set_functions/singleton.acsl"
     ],
     "strict_inclusion": [
-      "set_functions/inclusion.acsl"
+      "set_functions/strict_inclusion.acsl"
     ],
     "succ": [
       "set_axioms/NAT_succ_axioms.acsl"
@@ -1229,6 +1229,10 @@
     "set_functions/inclusion.acsl": [
       "set_axioms/inclusion_axioms.acsl",
       "set_functions/belongs.acsl"
+    ],
+    "set_functions/strict_inclusion.acsl": [
+      "set_functions/equals.acsl",
+      "set_functions/inclusion.acsl"
     ],
     "set_functions/intersection.acsl": [
       "set_axioms/intersection_axioms.acsl"

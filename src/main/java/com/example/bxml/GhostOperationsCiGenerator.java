@@ -236,7 +236,6 @@ public final class GhostOperationsCiGenerator {
         if (cDir == null || abstractMachineEl == null) return;
         Path target = cDir.resolve(GHOST_FILE);
         if (!BxmlMachineVariables.needsGhostAbstraction(abstractMachineEl, mergedMachineElements)) {
-            Files.deleteIfExists(target);
             return;
         }
         String machineName = abstractMachineEl.getAttribute("name");
@@ -254,7 +253,6 @@ public final class GhostOperationsCiGenerator {
                                 BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
         List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
         if (abstractVarNames.isEmpty()) {
-            Files.deleteIfExists(cDir.resolve(GHOST_FILE));
             return;
         }
         Set<String> abstractSet = new LinkedHashSet<>(abstractVarNames);

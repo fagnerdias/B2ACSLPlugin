@@ -162,6 +162,7 @@ public final class B2ACSLPipeline {
         Path cDir = langPath.resolve("c");
         // Staging dos ficheiros da lib sob cDir (elimina cópias redundantes em target/)
         System.setProperty("b2acsl.targetAcslDir", cDir.toAbsolutePath().normalize().toString());
+        Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
         for (MachineFile mf : machines) {
             Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
             if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {

@@ -32,6 +32,18 @@ public final class BxmlInitialisationTranslator {
     }
 
     /**
+     * Retorna {@code true} quando o bloco {@code <Initialisation>} está ausente ou contém apenas
+     * {@code Skip_Sub} (sem atribuições efetivas). Usado para suprimir {@code assigns} derivados de
+     * imports quando a inicialização não faz nada.
+     */
+    public static boolean isBodyEmpty(Element machineEl) {
+        Element init = firstChildElement(machineEl, "Initialisation");
+        if (init == null) return true;
+        Element sub = firstSubChild(init);
+        return sub == null || "Skip_Sub".equals(sub.getLocalName());
+    }
+
+    /**
      * @param machineEl elemento raiz {@code <Machine>}
      * @param additionalAssignTargets nomes para {@code assigns} (ex.: {@code NomeAbstrata__v} a partir
      *        de {@code Concrete_Variables} das máquinas de implementação fundidas)

@@ -191,6 +191,7 @@ public final class BxmlOperationsTranslator {
             }
             applyStarPrefixToEnsures(ensures, outputParams);
             rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, ctx);
+            rewriteEnsuresForArrayBackedFunctionParams(ensures, child, ctx);
             List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
             for (String inv : invariantPredicateNames) {
                 ensures.add(inv);
@@ -274,6 +275,7 @@ public final class BxmlOperationsTranslator {
                 implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
                 if (implOp != null) {
                     loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(implOp, ctx, machineEl);
+                    loops = rewriteLoopsForArrayBackedFunctionParams(loops, child, ctx);
                 }
             }
             if (importedOpAssigns != null && !importedOpAssigns.isEmpty() && implOp != null) {
@@ -550,31 +552,54 @@ public final class BxmlOperationsTranslator {
      */
     private static void rewriteRequiresForArrayBackedFunctionParams(
             List<String> requires, Element operation, BxmlTranslateContext ctx) {
-        if (requires == null || requires.isEmpty() || operation == null || ctx == null) {
-            return;
-        }
+        rewriteListForArrayBackedFunctionParams(requires, operation, ctx);
+    }
+
+    private static void rewriteEnsuresForArrayBackedFunctionParams(
+            List<String> ensures, Element operation, BxmlTranslateContext ctx) {
+        rewriteListForArrayBackedFunctionParams(ensures, operation, ctx);
+    }
+
+    private static List<BxmlLoopTranslator.LoopContract> rewriteLoopsForArrayBackedFunctionParams(
+            List<BxmlLoopTranslator.LoopContract> loops, Element operation, BxmlTranslateContext ctx) {
+        if (loops == null || loops.isEmpty() || operation == null || ctx == null) return loops;
         Map<String, String> lensByParam = inferArrayFunctionParamLengths(operation, ctx);
-        if (lensByParam.isEmpty()) {
-            return;
+        if (lensByParam.isEmpty()) return loops;
+        List<BxmlLoopTranslator.LoopContract> result = new ArrayList<>(loops.size());
+        for (BxmlLoopTranslator.LoopContract lc : loops) {
+            String inv = rewriteStringForArrayParams(lc.invariant(), lensByParam);
+            result.add(new BxmlLoopTranslator.LoopContract(lc.index(), inv, lc.variant(), lc.assigns()));
         }
-        for (int i = 0; i < requires.size(); i++) {
-            String req = requires.get(i);
-            if (req == null || req.isBlank()) {
-                continue;
+        return result;
+    }
+
+    private static void rewriteListForArrayBackedFunctionParams(
+            List<String> clauses, Element operation, BxmlTranslateContext ctx) {
+        if (clauses == null || clauses.isEmpty() || operation == null || ctx == null) return;
+        Map<String, String> lensByParam = inferArrayFunctionParamLengths(operation, ctx);
+        if (lensByParam.isEmpty()) return;
+        clauses.replaceAll(clause -> rewriteStringForArrayParams(clause, lensByParam));
+    }
+
+    private static final List<String> ARRAY_SET_FUNCTIONS = List.of(
+            "ran", "dom", "card", "is_total_function", "is_partial_function",
+            "is_function_of", "function_apply", "inclusion", "not_inclusion",
+            "strict_inclusion", "not_strict_inclusion", "equals");
+
+    private static String rewriteStringForArrayParams(String text, Map<String, String> lensByParam) {
+        if (text == null || text.isBlank() || lensByParam.isEmpty()) return text;
+        String result = text;
+        for (Map.Entry<String, String> e : lensByParam.entrySet()) {
+            String p = e.getKey();
+            String len = e.getValue();
+            String wrapped = "array_to_function(" + p + ", " + len + ")";
+            for (String func : ARRAY_SET_FUNCTIONS) {
+                result = result.replaceAll(
+                        "\\b" + func + "\\s*\\(\\s*" + Pattern.quote(p) + "\\b",
+                        Matcher.quoteReplacement(func + "(" + wrapped));
             }
-            String rewritten = req;
-            for (Map.Entry<String, String> e : lensByParam.entrySet()) {
-                String p = e.getKey();
-                String len = e.getValue();
-                rewritten =
-                        rewritten.replaceAll(
-                                "\\bis_total_function\\s*\\(\\s*"
-                                        + Pattern.quote(p)
-                                        + "\\b",
-                                "is_total_function(array_to_function(" + p + ", " + len + ")");
-            }
-            requires.set(i, rewritten);
         }
+        return result;
     }
 
     private static Map<String, String> inferArrayFunctionParamLengths(
