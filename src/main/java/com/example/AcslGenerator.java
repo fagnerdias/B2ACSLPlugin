@@ -280,6 +280,9 @@ public final class AcslGenerator {
         List<String> importedMachineNames =
                 com.example.bxml.BxmlSetsTranslator.listImportedMachineNamesFromChain(
                         machineEl, mergedMachineElements);
+        List<String> importedInvariantPredicateNames =
+                BxmlInvariantTranslator.listImportedMachineInvariantPredicateNames(
+                        importedMachineNames, bxmlDirectory);
         List<String> implementationAssignTargets = new java.util.ArrayList<>(
                 BxmlMachineVariables.listInitialisationAssignTargets(
                         baseName, machineEl, mergedMachineElements, ctx));
@@ -298,7 +301,8 @@ public final class AcslGenerator {
         Map<String, Long> knownIntegerConstants = collectAllIntegerValuations(bxmlDirectory);
         InitialisationAcsl initBare =
                 BxmlInitialisationTranslator.translate(
-                        machineEl, implementationAssignTargets, ctx, knownIntegerConstants);
+                        machineEl, implementationAssignTargets, ctx, knownIntegerConstants,
+                        mergedMachineElements);
         boolean initGhostAssert =
                 useGhostAbstraction
                         && GhostOperationsCiGenerator.initialisationAssignsAbstract(
@@ -343,7 +347,8 @@ public final class AcslGenerator {
                                 mergedMachineElements,
                                 gluing,
                                 useGhostAbstraction,
-                                importedOpAssigns)
+                                importedOpAssigns,
+                                importedInvariantPredicateNames)
                         : List.of();
 
         StringBuilder sb = new StringBuilder();

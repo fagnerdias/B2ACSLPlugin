@@ -44,7 +44,7 @@ public final class BxmlOperationsTranslator {
 
     /**
      * @param abstractVariableNames se não nulo, operações que atribuem a estas variáveis recebem
-     *        {@code at 1: assert ghost__<op>(p1, …);} no contrato (parâmetros de entrada) e, nesse caso,
+     *        {@code at return: assert ghost__<op>(p1, …);} no contrato (parâmetros de entrada) e, nesse caso,
      *        removem-se os {@code ensures} vindos do {@code Body} — mantêm-se só os que repetem o
      *        invariante (nomes em {@code invariantPredicateNames}).
      */
@@ -152,12 +152,36 @@ public final class BxmlOperationsTranslator {
             Map<String, String> gluing,
             boolean useGhostAbstraction,
             Map<String, List<String>> importedOpAssigns) {
+        return translateOperations(machineEl, ctx, invariantPredicateNames, abstractVariableNames,
+                libScanGhostOperationBodies, rootAbstractMachineName, mergedRefinementChain,
+                gluing, useGhostAbstraction, importedOpAssigns, List.of());
+    }
+
+    /**
+     * @param requiresOnlyPredicateNames predicados de invariante de máquinas importadas —
+     *        adicionados apenas ao {@code requires}, não ao {@code ensures}.
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction,
+            Map<String, List<String>> importedOpAssigns,
+            List<String> requiresOnlyPredicateNames) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
 
         NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
         if (ops.getLength() == 0) return out;
         Element operationsEl = (Element) ops.item(0);
+
+        Set<String> promotedOpNames = listPromotedOperationNames(mergedRefinementChain);
+
         NodeList children = operationsEl.getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
             Node n = children.item(i);
@@ -166,11 +190,17 @@ public final class BxmlOperationsTranslator {
             if (!"Operation".equals(child.getLocalName())) continue;
 
             String opName = child.getAttribute("name");
+
+            // Operações promovidas viram macro #define no header C — sem função C real.
+            if (promotedOpNames.contains(opName)) continue;
             String funcName = machineName + "__" + sanitize(opName);
 
             List<String> requires = new ArrayList<>();
             for (String inv : invariantPredicateNames) {
                 requires.add(inv);
+            }
+            if (requiresOnlyPredicateNames != null) {
+                requires.addAll(requiresOnlyPredicateNames);
             }
             Element pre = firstChildElement(child, "Precondition");
             List<String> outputParams = parseOutputParameterNames(child);
@@ -273,7 +303,8 @@ public final class BxmlOperationsTranslator {
             if (mergedRefinementChain != null && !mergedRefinementChain.isEmpty()) {
                 implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
                 if (implOp != null) {
-                    loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(implOp, ctx, machineEl);
+                    loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(
+                            implOp, ctx, machineEl, importedOpAssigns);
                 }
             }
             if (importedOpAssigns != null && !importedOpAssigns.isEmpty() && implOp != null) {
@@ -299,6 +330,24 @@ public final class BxmlOperationsTranslator {
                             connectionConcreteAssigns,
                             loops,
                             skipBody));
+        }
+        return out;
+    }
+
+    /** Nomes de operações promovidas via {@code <Promotes>} em qualquer elemento da cadeia de refinamento. */
+    private static Set<String> listPromotedOperationNames(List<Element> chain) {
+        Set<String> out = new HashSet<>();
+        if (chain == null || chain.isEmpty()) return out;
+        for (Element el : chain) {
+            NodeList promotes = el.getElementsByTagNameNS("*", "Promotes");
+            for (int p = 0; p < promotes.getLength(); p++) {
+                NodeList promoted = ((Element) promotes.item(p))
+                        .getElementsByTagNameNS("*", "Promoted_Operation");
+                for (int q = 0; q < promoted.getLength(); q++) {
+                    String name = promoted.item(q).getTextContent();
+                    if (name != null && !name.isBlank()) out.add(name.trim());
+                }
+            }
         }
         return out;
     }
@@ -737,7 +786,7 @@ public final class BxmlOperationsTranslator {
                 sb.append("    assigns \\nothing;\n");
             }
             if (ghostBehaviorSlug != null && !ghostBehaviorSlug.isBlank()) {
-                sb.append("    at 1: assert ghost__").append(ghostBehaviorSlug);
+                sb.append("    at return: assert ghost__").append(ghostBehaviorSlug);
                 if (ghostBehaviorInputNames != null && !ghostBehaviorInputNames.isEmpty()) {
                     sb.append("(").append(String.join(", ", ghostBehaviorInputNames)).append(")");
                 }

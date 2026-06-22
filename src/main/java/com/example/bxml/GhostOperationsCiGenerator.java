@@ -94,7 +94,7 @@ public final class GhostOperationsCiGenerator {
     /**
      * Nomes dos {@code Output_Parameters} (na ordem do BXML); usado pelos geradores ghost que
      * precisam construir a assinatura {@code void op(... outputs ...)} ou listar argumentos para
-     * {@code at 1: assert ghost__op(... outputs ...)}.
+     * {@code at return: assert ghost__op(... outputs ...)}.
      */
     public static List<String> listOutputParameterNames(Element operation) {
         List<String> out = new ArrayList<>();
@@ -648,7 +648,7 @@ public final class GhostOperationsCiGenerator {
                 String lhs = simpleEq.group(1);
                 String rhs = simpleEq.group(2).trim();
                 if (abstractVars.contains(lhs)) {
-                    return "dummy_" + lhs + " == " + rhs;
+                    return "dummy_" + lhs + " == " + prefixAbstractVarsForGhost(rhs, abstractVars);
                 }
             }
             return rewriteAbstractIdsWithOld(s, abstractVars);
@@ -2077,6 +2077,31 @@ public final class GhostOperationsCiGenerator {
             case "real" -> "double";
             default -> "int";
         };
+    }
+
+    /**
+     * Gera bloco {@code axiomatic MachineName_abstract_vars} com declarações
+     * {@code logic TYPE v reads dummy_ghost_v;} para cada variável abstrata.
+     * Necessário em {@code ghost_operations.ci} para que as variáveis lógicas
+     * fiquem em escopo ao analisar os contratos das funções ghost.
+     */
+    private static String formatAbstractVarsAxiomaticBlock(
+            String machineName, List<String> abstractVarNames, Map<String, String> varTypes) {
+        if (abstractVarNames == null || abstractVarNames.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append("/*@\n");
+        sb.append("    axiomatic ").append(machineName).append("_abstract_vars {\n");
+        for (String v : abstractVarNames) {
+            // Use ghost_v (C ghost variable declared in this file) as reads dependency,
+            // since dummy_ghost_v (from Mult.acsl) is not in scope here.
+            sb.append("        logic ")
+              .append(ghostLogicTypeFromInferred(varTypes.get(v)))
+              .append(" ").append(v)
+              .append(" reads ghost_").append(v).append(";\n");
+        }
+        sb.append("    }\n");
+        sb.append("*/\n");
+        return sb.toString();
     }
 
     /** Tipo {@code logic} ACSL para {@code dummy_ghost_<v>} / variáveis ghost. */

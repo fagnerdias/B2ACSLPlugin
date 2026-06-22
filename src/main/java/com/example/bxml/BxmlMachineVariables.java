@@ -148,6 +148,14 @@ public final class BxmlMachineVariables {
                                 rootAbstractForImplRhs.trim(), var, refinementChild, ctx);
             }
             sb.append("    logic ").append(logicType).append(" ").append(var);
+            // reads dummy_ghost_v só quando a variável não tem definição concreta (= rhs):
+            // as duas cláusulas são mutuamente exclusivas em ACSL.
+            boolean hasConcreteRhs = rootAbstractForImplRhs != null;
+            if (!hasConcreteRhs
+                    && ghostDummyReadsForAbstractVars != null
+                    && ghostDummyReadsForAbstractVars.contains(var)) {
+                sb.append(" reads dummy_ghost_").append(var);
+            }
             if (rootAbstractForImplRhs != null) {
                 String rhs =
                         implRhs != null
@@ -160,10 +168,6 @@ public final class BxmlMachineVariables {
                                 refinementParent, refinementChild, var, gluing);
                 abs.ifPresent(
                         a -> sb.append(" = return_valid_").append(var).append("(").append(a).append(")"));
-            }
-            if (ghostDummyReadsForAbstractVars != null
-                    && ghostDummyReadsForAbstractVars.contains(var)) {
-                sb.append(" reads dummy_ghost_").append(var);
             }
             sb.append(";\n");
         }
@@ -248,6 +252,11 @@ public final class BxmlMachineVariables {
         }
         for (Element mel : mergedMachineElements) {
             if (!isImplementationMachine(mel)) {
+                continue;
+            }
+            // Se a implementação importa outras máquinas, o estado pode estar delegado
+            // a elas — não existem variáveis C machineName__v para as variáveis abstratas.
+            if (!BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
                 continue;
             }
             if (declaredVariableNames(mel).isEmpty()) {

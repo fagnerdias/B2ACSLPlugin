@@ -3,6 +3,7 @@ package com.example.bxml;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.w3c.dom.Element;
@@ -55,6 +56,18 @@ public final class BxmlLoopTranslator {
      */
     public static List<LoopContract> translateLoopsFromImplementationOperation(
             Element implementationOperation, BxmlTranslateContext ctx, Element abstractMachineEl) {
+        return translateLoopsFromImplementationOperation(
+                implementationOperation, ctx, abstractMachineEl, null);
+    }
+
+    /**
+     * @param importedOpAssigns mapa de nome-local-de-operação → assigns concretos da máquina importada;
+     *     usado para incluir no {@code loop assigns} os alvos modificados por {@code Operation_Call}
+     *     dentro do corpo do loop.
+     */
+    public static List<LoopContract> translateLoopsFromImplementationOperation(
+            Element implementationOperation, BxmlTranslateContext ctx, Element abstractMachineEl,
+            Map<String, List<String>> importedOpAssigns) {
         if (implementationOperation == null || ctx == null) {
             return List.of();
         }
@@ -63,7 +76,7 @@ public final class BxmlLoopTranslator {
             return List.of();
         }
         List<LoopContract> loops = new ArrayList<>();
-        walkForWhileLoops(body, ctx, abstractMachineEl, loops);
+        walkForWhileLoops(body, ctx, abstractMachineEl, loops, importedOpAssigns);
         return List.copyOf(loops);
     }
 
@@ -88,13 +101,14 @@ public final class BxmlLoopTranslator {
     }
 
     private static void walkForWhileLoops(
-            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, List<LoopContract> out) {
+            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, List<LoopContract> out,
+            Map<String, List<String>> importedOpAssigns) {
         if (sub == null) {
             return;
         }
         if ("While".equals(sub.getLocalName())) {
-            out.add(translateWhile(sub, ctx, abstractMachineEl, out.size() + 1));
-            walkForWhileLoops(firstChildElement(sub, "Body"), ctx, abstractMachineEl, out);
+            out.add(translateWhile(sub, ctx, abstractMachineEl, out.size() + 1, importedOpAssigns));
+            walkForWhileLoops(firstChildElement(sub, "Body"), ctx, abstractMachineEl, out, importedOpAssigns);
             return;
         }
         NodeList nl = sub.getChildNodes();
@@ -107,12 +121,13 @@ public final class BxmlLoopTranslator {
             if ("Attr".equals(ch.getLocalName())) {
                 continue;
             }
-            walkForWhileLoops(ch, ctx, abstractMachineEl, out);
+            walkForWhileLoops(ch, ctx, abstractMachineEl, out, importedOpAssigns);
         }
     }
 
     private static LoopContract translateWhile(
-            Element whileEl, BxmlTranslateContext ctx, Element abstractMachineEl, int index) {
+            Element whileEl, BxmlTranslateContext ctx, Element abstractMachineEl, int index,
+            Map<String, List<String>> importedOpAssigns) {
         Element invEl = firstChildElement(whileEl, "Invariant");
         String invariant = "";
         if (invEl != null) {
@@ -130,13 +145,14 @@ public final class BxmlLoopTranslator {
 
         LinkedHashSet<String> assigns = new LinkedHashSet<>();
         Element body = firstChildElement(whileEl, "Body");
-        collectLoopAssigns(body, ctx, abstractMachineEl, assigns);
+        collectLoopAssigns(body, ctx, abstractMachineEl, assigns, importedOpAssigns);
 
         return new LoopContract(index, invariant, variant, List.copyOf(assigns));
     }
 
     private static void collectLoopAssigns(
-            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, Set<String> out) {
+            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, Set<String> out,
+            Map<String, List<String>> importedOpAssigns) {
         if (sub == null) {
             return;
         }
@@ -168,15 +184,25 @@ public final class BxmlLoopTranslator {
             return;
         }
         if ("Operation_Call".equals(sub.getLocalName())) {
+            // Parâmetros de saída: variáveis locais C modificadas pela chamada.
             Element outParams = firstChildElement(sub, "Output_Parameters");
             if (outParams != null) {
                 for (Element id : directExpChildren(outParams)) {
                     if ("Id".equals(id.getLocalName())) {
                         String name = id.getAttribute("value");
                         if (name != null && !name.isBlank()) {
-                            // parâmetros de saída são variáveis locais C — sem prefixo de máquina
                             out.add(name.trim());
                         }
+                    }
+                }
+            }
+            // Assigns concretos da operação importada chamada (ex.: Body__loopnn para body(rr,ii,&ii)).
+            if (importedOpAssigns != null && !importedOpAssigns.isEmpty()) {
+                String calledName = extractOperationCallName(sub);
+                if (calledName != null) {
+                    List<String> calledAssigns = importedOpAssigns.get(calledName);
+                    if (calledAssigns != null) {
+                        out.addAll(calledAssigns);
                     }
                 }
             }
@@ -192,8 +218,25 @@ public final class BxmlLoopTranslator {
             if ("Attr".equals(ch.getLocalName())) {
                 continue;
             }
-            collectLoopAssigns(ch, ctx, abstractMachineEl, out);
+            collectLoopAssigns(ch, ctx, abstractMachineEl, out, importedOpAssigns);
         }
+    }
+
+    /** Nome da operação em {@code <Operation_Call><Name><Id value="..."/></Name>}. */
+    private static String extractOperationCallName(Element opCall) {
+        Element nameEl = firstChildElement(opCall, "Name");
+        if (nameEl == null) return null;
+        NodeList nl = nameEl.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Id".equals(e.getLocalName())) {
+                String v = e.getAttribute("value");
+                if (v != null && !v.isBlank()) return v.trim();
+            }
+        }
+        return null;
     }
 
     /**

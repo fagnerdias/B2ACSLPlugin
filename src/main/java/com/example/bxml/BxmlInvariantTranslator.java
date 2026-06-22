@@ -1,7 +1,12 @@
 package com.example.bxml;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -74,5 +79,50 @@ public final class BxmlInvariantTranslator {
             sb.append("\n");
         }
         return sb.toString().replaceAll("\\n+$", "\n");
+    }
+
+    /**
+     * Coleta os nomes dos predicados de invariante de todas as máquinas importadas
+     * (abstrata + implementação), para adicionar como {@code requires} nas operações
+     * da máquina que as importa.
+     */
+    public static List<String> listImportedMachineInvariantPredicateNames(
+            List<String> importedMachineNames, Path bxmlDirectory) {
+        if (importedMachineNames == null || importedMachineNames.isEmpty() || bxmlDirectory == null) {
+            return List.of();
+        }
+        Set<String> result = new LinkedHashSet<>();
+        for (String machineName : importedMachineNames) {
+            result.addAll(loadInvariantPredicateNamesForMachine(machineName, bxmlDirectory));
+        }
+        return List.copyOf(result);
+    }
+
+    private static List<String> loadInvariantPredicateNamesForMachine(
+            String machineName, Path bxmlDirectory) {
+        List<String> result = new ArrayList<>();
+
+        Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
+        if (Files.exists(abstractPath)) {
+            try {
+                Element abstractEl = BxmlSetsTranslator.parseMachineElement(abstractPath);
+                BxmlTranslateContext ctx = BxmlTranslateContext.forMachine(abstractEl, Map.of());
+                result.addAll(listInvariantPredicateNames(abstractEl, ctx));
+            } catch (Exception ignored) {}
+        }
+
+        for (String suffix : new String[]{"_i", "_imp"}) {
+            Path implPath = bxmlDirectory.resolve(machineName + suffix + ".bxml");
+            if (!Files.exists(implPath)) continue;
+            try {
+                Element implEl = BxmlSetsTranslator.parseMachineElement(implPath);
+                if (!"implementation".equalsIgnoreCase(implEl.getAttribute("type"))) continue;
+                BxmlTranslateContext ctx = BxmlTranslateContext.forMachine(implEl, Map.of());
+                result.addAll(listInvariantPredicateNames(implEl, ctx));
+                break;
+            } catch (Exception ignored) {}
+        }
+
+        return result;
     }
 }

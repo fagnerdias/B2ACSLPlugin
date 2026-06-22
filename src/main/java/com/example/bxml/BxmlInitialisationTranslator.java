@@ -1,8 +1,12 @@
 package com.example.bxml;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -44,15 +48,42 @@ public final class BxmlInitialisationTranslator {
     public static InitialisationAcsl translate(
             Element machineEl, List<String> additionalAssignTargets, BxmlTranslateContext ctx,
             Map<String, Long> knownIntegerConstants) {
+        return translate(machineEl, additionalAssignTargets, ctx, knownIntegerConstants, List.of());
+    }
+
+    /**
+     * @param mergedMachineElements cadeia de refinamentos/implementações — o {@code Initialisation}
+     *        da implementação é preferido ao da abstrata, pois o código C deriva dela.
+     */
+    public static InitialisationAcsl translate(
+            Element machineEl, List<String> additionalAssignTargets, BxmlTranslateContext ctx,
+            Map<String, Long> knownIntegerConstants, List<Element> mergedMachineElements) {
         String machineName = machineEl.getAttribute("name");
 
-        List<String> ensures = new ArrayList<>();
-        Element init = firstChildElement(machineEl, "Initialisation");
-        if (init != null) {
-            walkSubstitution(firstSubChild(init), ensures, ctx);
+        // Preferir o Initialisation da implementação (código C vem dela), se disponível.
+        Element initSource = null;
+        if (mergedMachineElements != null) {
+            for (Element mel : mergedMachineElements) {
+                if ("implementation".equals(mel.getAttribute("type"))) {
+                    Element implInit = firstChildElement(mel, "Initialisation");
+                    if (implInit != null && firstSubChild(implInit) != null
+                            && !"Skip".equals(firstSubChild(implInit).getLocalName())) {
+                        initSource = implInit;
+                        break;
+                    }
+                }
+            }
         }
-        CartesianProductLoopSpec loopSpec = (init != null)
-                ? detectCartesianProductLoopSpec(firstSubChild(init), ctx)
+        if (initSource == null) {
+            initSource = firstChildElement(machineEl, "Initialisation");
+        }
+
+        List<String> ensures = new ArrayList<>();
+        if (initSource != null) {
+            walkSubstitution(firstSubChild(initSource), ensures, ctx);
+        }
+        CartesianProductLoopSpec loopSpec = (initSource != null)
+                ? detectCartesianProductLoopSpec(firstSubChild(initSource), ctx)
                 : null;
 
         String functionName = machineName + "__INITIALISATION";
@@ -233,15 +264,34 @@ public final class BxmlInitialisationTranslator {
     }
 
     private static void parseSimultaneous(Element narySub, List<String> ensures, BxmlTranslateContext ctx) {
-        // Cada filho Sub é uma substituição paralela
         NodeList children = narySub.getChildNodes();
+
+        // Em substituição paralela (||), todas as RHS usam o pré-estado de TODAS as variáveis LHS.
+        Set<String> allLhsNames = new LinkedHashSet<>();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element ch = (Element) n;
+            if ("Attr".equals(ch.getLocalName()) || !"Assignement_Sub".equals(ch.getLocalName())) continue;
+            Element vars = firstChildElement(ch, "Variables");
+            if (vars == null) continue;
+            for (Element l : directExpChildren(vars)) {
+                if ("Id".equals(l.getLocalName())) {
+                    String v = l.getAttribute("value");
+                    if (v != null && !v.isBlank()) {
+                        allLhsNames.add(BxmlExpressionToAcsl.translateBNamedConstant(v.trim()));
+                    }
+                }
+            }
+        }
+
         for (int i = 0; i < children.getLength(); i++) {
             Node n = children.item(i);
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Element ch = (Element) n;
             if ("Attr".equals(ch.getLocalName())) continue;
             if ("Assignement_Sub".equals(ch.getLocalName())) {
-                parseAssignementSub(ch, ensures, ctx);
+                parseAssignementSub(ch, ensures, ctx, allLhsNames);
             } else if ("Becomes_In".equals(ch.getLocalName())) {
                 parseBecomesInSub(ch, ensures, ctx);
             } else if ("Becomes_Such_That".equals(ch.getLocalName())) {
@@ -413,15 +463,91 @@ public final class BxmlInitialisationTranslator {
     }
 
     private static void parseAssignementSub(Element assign, List<String> ensures, BxmlTranslateContext ctx) {
+        parseAssignementSub(assign, ensures, ctx, Set.of());
+    }
+
+    /**
+     * @param extraLhsVarNames nomes adicionais de variáveis sendo atribuídas simultaneamente
+     *        (substituição paralela {@code ||}) — também precisam de {@code \old} nas RHS.
+     */
+    private static void parseAssignementSub(
+            Element assign, List<String> ensures, BxmlTranslateContext ctx,
+            Set<String> extraLhsVarNames) {
         Element vars = firstChildElement(assign, "Variables");
         Element vals = firstChildElement(assign, "Values");
         if (vars == null || vals == null) return;
         List<Element> lhs = directExpChildren(vars);
         List<Element> rhs = directExpChildren(vals);
+
+        // Nomes das variáveis LHS desta atribuição (em ACSL) — a RHS as usa em pré-estado.
+        Set<String> lhsNames = new LinkedHashSet<>();
+        for (Element l : lhs) {
+            if ("Id".equals(l.getLocalName())) {
+                String v = l.getAttribute("value");
+                if (v != null && !v.isBlank()) {
+                    lhsNames.add(BxmlExpressionToAcsl.translateBNamedConstant(v.trim()));
+                }
+            }
+        }
+        lhsNames.addAll(extraLhsVarNames);
+
         int n = Math.min(lhs.size(), rhs.size());
         for (int i = 0; i < n; i++) {
-            ensures.add(BxmlExpressionToAcsl.formatEquality(lhs.get(i), rhs.get(i), ctx));
+            String e = BxmlExpressionToAcsl.formatEquality(lhs.get(i), rhs.get(i), ctx);
+            if (!lhsNames.isEmpty()) {
+                e = wrapLhsVarsInRhsWithOld(e, lhsNames);
+            }
+            ensures.add(e);
         }
+    }
+
+    /**
+     * Reescreve a RHS de um ensures ({@code l == r} ou {@code equals(l, r)}) substituindo
+     * ocorrências de variáveis LHS por {@code \old(v)}, pois em ACSL a RHS usa o pré-estado.
+     */
+    private static String wrapLhsVarsInRhsWithOld(String ensure, Set<String> lhsVarNames) {
+        int eqIdx = ensure.indexOf(" == ");
+        if (eqIdx >= 0) {
+            String lhsPart = ensure.substring(0, eqIdx);
+            String rhsPart = ensure.substring(eqIdx + 4);
+            return lhsPart + " == " + applyOldWrapping(rhsPart, lhsVarNames);
+        }
+        if (ensure.startsWith("equals(")) {
+            int comma = topLevelCommaIndex(ensure, 7);
+            if (comma >= 0) {
+                String lhsPart = ensure.substring(0, comma);
+                String rhsPart = ensure.substring(comma + 1, ensure.length() - 1);
+                return lhsPart + ", " + applyOldWrapping(rhsPart, lhsVarNames) + ")";
+            }
+        }
+        return ensure;
+    }
+
+    private static String applyOldWrapping(String expr, Set<String> varNames) {
+        List<String> sorted = new ArrayList<>(varNames);
+        sorted.sort((a, b) -> Integer.compare(b.length(), a.length()));
+        String out = expr;
+        for (String v : sorted) {
+            Matcher m = Pattern.compile("\\b" + Pattern.quote(v) + "\\b").matcher(out);
+            StringBuffer sb = new StringBuffer();
+            while (m.find()) {
+                m.appendReplacement(sb, Matcher.quoteReplacement("\\old(" + v + ")"));
+            }
+            m.appendTail(sb);
+            out = sb.toString();
+        }
+        return out;
+    }
+
+    private static int topLevelCommaIndex(String s, int start) {
+        int depth = 0;
+        for (int i = start; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') { if (depth == 0) return -1; depth--; }
+            else if (c == ',' && depth == 0) return i;
+        }
+        return -1;
     }
 
     private static List<Element> directExpChildren(Element parent) {
@@ -529,7 +655,7 @@ public final class BxmlInitialisationTranslator {
             }
             if (includeGhostBehaviorAssert) {
                 String machinePart = functionName.toLowerCase().replace("__initialisation", "");
-                sb.append("    at 1: assert ghost__").append(machinePart).append("__initialisation;\n");
+                sb.append("    at return: assert ghost__").append(machinePart).append("__initialisation;\n");
             }
             return sb.toString();
         }
