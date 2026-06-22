@@ -316,6 +316,17 @@ public final class BxmlOperationsTranslator {
                 }
             }
 
+            // Becomes_In (v :: S) compila para rand() → Frama-C exige __fc_random_counter no assigns.
+            boolean hasBecomesIn = bodyHasBecomesIn(body);
+            if (!hasBecomesIn && implOp != null) {
+                hasBecomesIn = bodyHasBecomesIn(firstChildElement(implOp, "Body"));
+            }
+            if (hasBecomesIn) {
+                LinkedHashSet<String> withRandom = new LinkedHashSet<>(connectionConcreteAssigns);
+                withRandom.add("__fc_random_counter");
+                connectionConcreteAssigns = new ArrayList<>(withRandom);
+            }
+
             boolean skipBody = isBodyPureSkip(body);
 
             out.add(
@@ -557,6 +568,19 @@ public final class BxmlOperationsTranslator {
             Element ch = (Element) n;
             if (!"Attr".equals(ch.getLocalName())) collectOperationCallNames(ch, out);
         }
+    }
+
+    /** Verifica recursivamente se {@code el} contém algum {@code Becomes_In} (B: {@code v :: S}). */
+    private static boolean bodyHasBecomesIn(Element el) {
+        if (el == null) return false;
+        if ("Becomes_In".equals(el.getLocalName())) return true;
+        NodeList nl = el.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            if (bodyHasBecomesIn((Element) n)) return true;
+        }
+        return false;
     }
 
     /**

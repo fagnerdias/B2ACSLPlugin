@@ -84,11 +84,14 @@ public final class BxmlExpressionToAcsl {
     /**
      * Variável de outra máquina (ex. {@code ss} no invariante de refinamento) não entra em
      * {@link BxmlTranslateContext#variableLogicTypes()}; usa-se então o {@code typref} do {@code Id} no BXML.
+     * Se a variável já está no mapa, usa-se apenas esse tipo (o typref do elemento BXML pode vir de
+     * uma implementação com numeração diferente da máquina abstrata usada no ctx).
      */
     private static boolean isSetValuedId(Element idEl, BxmlTranslateContext ctx) {
         String name = idEl.getAttribute("value");
-        if (isSetLikeVariableType(ctx.variableLogicTypes().get(name))) {
-            return true;
+        String knownType = ctx.variableLogicTypes().get(name);
+        if (knownType != null) {
+            return isSetLikeVariableType(knownType);
         }
         String trAttr = idEl.getAttribute("typref");
         if (trAttr == null || trAttr.isBlank()) {
@@ -355,9 +358,10 @@ public final class BxmlExpressionToAcsl {
         return switch (ln) {
             case "Id" -> {
                 String idVal = exp.getAttribute("value");
-                // Valores enumerados: usar o nome prefixado (ex. switch__normal)
+                // Valores enumerados: usar o nome prefixado com cast (ex. (integer)switch__normal).
+                // Constantes C de enumeração têm tipo unsigned int; o cast evita erros de tipo em ACSL.
                 String renamed = ctx.enumValueRenames().get(idVal);
-                if (renamed != null) yield renamed;
+                if (renamed != null) yield "(integer)" + renamed;
                 // Conjuntos enumerados: usar o nome prefixado (ex. ctx__ALARM_STATUS)
                 String setRenamed = ctx.enumeratedSetRenames().get(idVal);
                 if (setRenamed != null) yield setRenamed;
