@@ -978,12 +978,139 @@ public final class BxmlMachineVariables {
         LinkedHashMap<String, List<String>> result = new LinkedHashMap<>();
         for (String machineName : importedMachineNames) {
             List<String> machineAssigns = loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory);
-            if (machineAssigns.isEmpty()) continue;
+            Set<String> opsWithDirectRand = loadOperationNamesWithBecomesIn(machineName, bxmlDirectory);
+            Set<String> opsWithTransitiveRand = loadOperationNamesCallingRandOps(machineName, bxmlDirectory);
+            if (machineAssigns.isEmpty() && opsWithDirectRand.isEmpty() && opsWithTransitiveRand.isEmpty()) continue;
             for (String opName : loadOperationNamesForMachine(machineName, bxmlDirectory)) {
-                result.computeIfAbsent(opName, k -> new ArrayList<>()).addAll(machineAssigns);
+                List<String> opAssigns = new ArrayList<>(machineAssigns);
+                if (opsWithDirectRand.contains(opName) || opsWithTransitiveRand.contains(opName)) {
+                    opAssigns.add("__fc_random_counter");
+                }
+                if (!opAssigns.isEmpty()) {
+                    result.computeIfAbsent(opName, k -> new ArrayList<>()).addAll(opAssigns);
+                }
             }
         }
         return result;
+    }
+
+    /**
+     * Operações da máquina cujo corpo de implementação chama alguma operação de máquina importada
+     * que usa {@code Becomes_In} (ex.: {@code measure_level} com {@code v :: S}).
+     * Permite propagar {@code __fc_random_counter} para chamadores de uma máquina intermediária.
+     */
+    private static Set<String> loadOperationNamesCallingRandOps(
+            String machineName, Path bxmlDirectory) {
+        // Carregar implementação
+        Element implEl = null;
+        for (String suffix : new String[]{"_i", "_imp"}) {
+            Path path = bxmlDirectory.resolve(machineName + suffix + ".bxml");
+            if (!Files.exists(path)) continue;
+            try {
+                Element el = BxmlSetsTranslator.parseMachineElement(path);
+                if (!"implementation".equalsIgnoreCase(el.getAttribute("type"))) continue;
+                implEl = el;
+                break;
+            } catch (Exception ignored) {}
+        }
+        if (implEl == null) return Set.of();
+
+        // Operações rand das máquinas importadas pela implementação
+        Set<String> randOpNames = new LinkedHashSet<>();
+        for (String imported : BxmlSetsTranslator.listImportedMachineNames(implEl)) {
+            randOpNames.addAll(loadOperationNamesWithBecomesIn(imported, bxmlDirectory));
+        }
+        if (randOpNames.isEmpty()) return Set.of();
+
+        // Para cada operação da máquina abstrata, checar se a implementação chama alguma rand op
+        Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
+        if (!Files.exists(abstractPath)) return Set.of();
+        try {
+            Element abstractEl = BxmlSetsTranslator.parseMachineElement(abstractPath);
+            Set<String> result = new LinkedHashSet<>();
+            NodeList ops = abstractEl.getElementsByTagNameNS("*", "Operations");
+            if (ops.getLength() == 0) return Set.of();
+            Element operationsEl = (Element) ops.item(0);
+            NodeList children = operationsEl.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                Node n = children.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element op = (Element) n;
+                if (!"Operation".equals(op.getLocalName())) continue;
+                String opName = op.getAttribute("name");
+                Element implOp = BxmlLoopTranslator.findImplementationOperation(
+                        List.of(implEl), opName);
+                if (implOp == null) continue;
+                Element implBody = firstChildElement(implOp, "Body");
+                if (implBody != null && elementCallsAnyOf(implBody, randOpNames)) {
+                    result.add(opName);
+                }
+            }
+            return result;
+        } catch (Exception ignored) {
+            return Set.of();
+        }
+    }
+
+    private static boolean elementCallsAnyOf(Element el, Set<String> opNames) {
+        if (el == null) return false;
+        if ("Operation_Call".equals(el.getLocalName())) {
+            Element nameEl = firstChildElement(el, "Name");
+            if (nameEl != null) {
+                Element idEl = firstChildElement(nameEl, "Id");
+                if (idEl != null) {
+                    String v = idEl.getAttribute("value");
+                    if (v != null && opNames.contains(v.trim())) return true;
+                }
+            }
+        }
+        NodeList nl = el.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            if (elementCallsAnyOf((Element) n, opNames)) return true;
+        }
+        return false;
+    }
+
+    /** Nomes das operações da máquina abstrata cujo corpo contém {@code Becomes_In} ({@code v :: S}). */
+    private static Set<String> loadOperationNamesWithBecomesIn(String machineName, Path bxmlDirectory) {
+        Path path = bxmlDirectory.resolve(machineName + ".bxml");
+        if (!Files.exists(path)) return Set.of();
+        try {
+            Element machineEl = BxmlSetsTranslator.parseMachineElement(path);
+            Set<String> result = new LinkedHashSet<>();
+            NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
+            if (ops.getLength() == 0) return Set.of();
+            Element operationsEl = (Element) ops.item(0);
+            NodeList children = operationsEl.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                Node n = children.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element op = (Element) n;
+                if (!"Operation".equals(op.getLocalName())) continue;
+                String opName = op.getAttribute("name");
+                Element body = firstChildElement(op, "Body");
+                if (body != null && elementContainsBecomesIn(body)) {
+                    result.add(opName);
+                }
+            }
+            return result;
+        } catch (Exception ignored) {
+            return Set.of();
+        }
+    }
+
+    private static boolean elementContainsBecomesIn(Element el) {
+        if (el == null) return false;
+        if ("Becomes_In".equals(el.getLocalName())) return true;
+        NodeList nl = el.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            if (elementContainsBecomesIn((Element) n)) return true;
+        }
+        return false;
     }
 
     private static List<String> loadConcreteAssignsForImportedMachine(String machineName, Path bxmlDirectory) {
