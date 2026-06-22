@@ -358,6 +358,7 @@ public final class BxmlExpressionToAcsl {
         return switch (ln) {
             case "Id" -> {
                 String idVal = exp.getAttribute("value");
+                boolean isPreState = "0".equals(exp.getAttribute("suffix"));
                 // Valores enumerados: usar o nome prefixado com cast (ex. (integer)switch__normal).
                 // Constantes C de enumeração têm tipo unsigned int; o cast evita erros de tipo em ACSL.
                 String renamed = ctx.enumValueRenames().get(idVal);
@@ -366,16 +367,19 @@ public final class BxmlExpressionToAcsl {
                 String setRenamed = ctx.enumeratedSetRenames().get(idVal);
                 if (setRenamed != null) yield setRenamed;
                 // Parâmetros/variáveis de tipo enum C: cast (integer) para compatibilidade com Set<integer>
+                String base;
                 if (!ctx.enumeratedSetNames().isEmpty()) {
                     String tr = exp.getAttribute("typref");
                     if (!tr.isBlank()) {
                         String bTypeName = ctx.types().getRawType(Integer.parseInt(tr.trim()));
                         if (ctx.enumeratedSetNames().contains(bTypeName)) {
-                            yield "(integer)" + translateBNamedConstant(idVal);
+                            base = "(integer)" + translateBNamedConstant(idVal);
+                            yield isPreState ? "\\old(" + base + ")" : base;
                         }
                     }
                 }
-                yield translateBNamedConstant(idVal);
+                base = translateBNamedConstant(idVal);
+                yield isPreState ? "\\old(" + base + ")" : base;
             }
             case "Integer_Literal" -> exp.getAttribute("value");
             case "Boolean_Literal" -> translateBooleanLiteral(exp.getAttribute("value"));
