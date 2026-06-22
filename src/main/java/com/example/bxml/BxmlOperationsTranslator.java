@@ -328,6 +328,14 @@ public final class BxmlOperationsTranslator {
             }
 
             boolean skipBody = isBodyPureSkip(body);
+            // Se a abstrata tem Skip mas a implementação tem corpo real (ex.: Operation_Call),
+            // gerar contrato completo em vez do esqueleto requires \true / ensures \true.
+            if (skipBody && implOp != null) {
+                Element implBody = firstChildElement(implOp, "Body");
+                if (implBody != null && !isBodyPureSkip(implBody)) {
+                    skipBody = false;
+                }
+            }
 
             out.add(
                     new OperationAcsl(
