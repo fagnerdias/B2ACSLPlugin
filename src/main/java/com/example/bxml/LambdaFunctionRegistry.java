@@ -48,14 +48,27 @@ public final class LambdaFunctionRegistry {
         return entries.isEmpty();
     }
 
+    public int size() {
+        return entries.size();
+    }
+
     /**
      * Formata o bloco {@code axiomatic lambda_functions { … }} com todos os predicados registados.
      */
     public String formatAxiomaticBlock() {
-        if (entries.isEmpty()) return "";
+        return formatAxiomaticBlockFrom(0);
+    }
+
+    /**
+     * Formata o bloco incluindo apenas as entradas a partir de {@code fromIndex} (exclusive das
+     * anteriores, já emitidas). Retorna {@code ""} se não houver entradas novas.
+     */
+    public String formatAxiomaticBlockFrom(int fromIndex) {
+        List<LambdaEntry> slice = entries.subList(fromIndex, entries.size());
+        if (slice.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic lambda_functions {\n");
-        for (LambdaEntry e : entries) {
+        for (LambdaEntry e : slice) {
             sb.append("  predicate ").append(e.name()).append("(");
             List<String> params = new ArrayList<>();
             for (String v : e.freeVarNames()) params.add("integer " + v);

@@ -370,13 +370,28 @@ public final class AcslGenerator {
         }
 
         // 1) Constantes e propriedades (só máquina abstrata raiz deste ficheiro)
+        String abstractConstants = BxmlConstantsAndProperties.formatAbstractConstantsBlock(machineEl, ctx);
+        if (!abstractConstants.isBlank()) {
+            sb.append(abstractConstants);
+            if (!abstractConstants.endsWith("\n")) sb.append("\n");
+            sb.append("\n");
+        }
         String concreteConstants = BxmlConstantsAndProperties.formatConcreteConstantsBlock(machineEl, ctx);
         if (!concreteConstants.isBlank()) {
             sb.append(concreteConstants);
             if (!concreteConstants.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
+        // Traduz properties primeiro para popular o lambdaRegistry; emite lambda_functions antes
+        // de properties para que os predicados lambda estejam declarados quando properties os referencia.
         String propertiesBlock = BxmlConstantsAndProperties.formatPropertiesBlock(machineEl, ctx);
+        LambdaFunctionRegistry lambdaRegistryEarly = ctx.lambdaRegistry();
+        int lambdaEmittedUpTo = 0;
+        if (lambdaRegistryEarly != null && !lambdaRegistryEarly.isEmpty()) {
+            sb.append(lambdaRegistryEarly.formatAxiomaticBlock());
+            sb.append("\n");
+            lambdaEmittedUpTo = lambdaRegistryEarly.size();
+        }
         if (!propertiesBlock.isBlank()) {
             sb.append(propertiesBlock);
             if (!propertiesBlock.endsWith("\n")) sb.append("\n");
@@ -494,11 +509,11 @@ public final class AcslGenerator {
         appendMergedInvariantPredicatesOnly(
                 sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl);
 
-        // 2b) Bloco axiomatic das funções lambda extraídas durante a tradução
+        // 2b) Lambdas registados após a emissão antecipada (ex.: lambdas de operações)
         LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
-        if (lambdaRegistry != null && !lambdaRegistry.isEmpty()) {
+        if (lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo) {
             sb.append("\n");
-            sb.append(lambdaRegistry.formatAxiomaticBlock());
+            sb.append(lambdaRegistry.formatAxiomaticBlockFrom(lambdaEmittedUpTo));
             sb.append("\n");
         }
 
