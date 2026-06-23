@@ -407,7 +407,7 @@ final class DummyGhostAxiomaticBuilder {
         for (String sym : symbols) {
             out =
                     out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(sym) + "\\b",
+                            "(?<!dummy_)(?<!\\\\)\\b" + Pattern.quote(sym) + "\\b",
                             "dummy_" + ghostNameForLibSymbol(sym));
         }
         for (Map.Entry<String, String> alias : LIB_SYMBOL_ALIASES.entrySet()) {

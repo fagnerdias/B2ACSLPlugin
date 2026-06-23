@@ -283,9 +283,12 @@ public final class AcslGenerator {
         List<String> importedInvariantPredicateNames =
                 BxmlInvariantTranslator.listImportedMachineInvariantPredicateNames(
                         importedMachineNames, bxmlDirectory);
+        Map<String, String> varRhsOverrides =
+                BxmlMachineVariables.buildAbstractVarRhsOverrides(
+                        machineEl, mergedMachineElements, importedMachineNames, bxmlDirectory);
         List<String> implementationAssignTargets = new java.util.ArrayList<>(
                 BxmlMachineVariables.listInitialisationAssignTargets(
-                        baseName, machineEl, mergedMachineElements, ctx));
+                        baseName, machineEl, mergedMachineElements, ctx, varRhsOverrides));
         implementationAssignTargets.addAll(
                 BxmlMachineVariables.listImportedMachineConcreteAssigns(importedMachineNames, bxmlDirectory));
         Map<String, List<String>> importedOpAssigns =
@@ -348,7 +351,8 @@ public final class AcslGenerator {
                                 gluing,
                                 useGhostAbstraction,
                                 importedOpAssigns,
-                                importedInvariantPredicateNames)
+                                importedInvariantPredicateNames,
+                                varRhsOverrides)
                         : List.of();
 
         StringBuilder sb = new StringBuilder();
@@ -416,7 +420,8 @@ public final class AcslGenerator {
                                 machineEl, mergedMachineElements)
                         ? ""
                         : BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
-                                machineEl, ctx, concreteLinkRoot, abstractVariableNamesForGhost);
+                                machineEl, ctx, concreteLinkRoot, abstractVariableNamesForGhost,
+                                varRhsOverrides);
         if (!varsAbstract.isBlank()) {
             sb.append(varsAbstract);
             if (!varsAbstract.endsWith("\n")) sb.append("\n");

@@ -707,14 +707,26 @@ public final class GhostOperationsCiGenerator {
         names.sort((a, b) -> Integer.compare(b.length(), a.length()));
         String out = expr;
         for (String v : names) {
-            Pattern pat = Pattern.compile("\\b" + Pattern.quote(v) + "\\b");
-            Matcher m = pat.matcher(out);
-            StringBuffer sb = new StringBuffer();
-            while (m.find()) {
-                m.appendReplacement(sb, Matcher.quoteReplacement("\\old(dummy_" + v + ")"));
+            // Pass 1: vars already inside \old(v) → \old(dummy_v); avoids double-wrapping.
+            // \old( is a fixed-width 5-char lookbehind, valid in Java.
+            Pattern alreadyWrapped = Pattern.compile(
+                    "(?<=\\\\old\\()\\b" + Pattern.quote(v) + "\\b");
+            Matcher m1 = alreadyWrapped.matcher(out);
+            StringBuffer sb1 = new StringBuffer();
+            while (m1.find()) {
+                m1.appendReplacement(sb1, Matcher.quoteReplacement("dummy_" + v));
             }
-            m.appendTail(sb);
-            out = sb.toString();
+            m1.appendTail(sb1);
+            out = sb1.toString();
+            // Pass 2: bare vars (not already dummy_-prefixed) → \old(dummy_v).
+            Pattern bare = Pattern.compile("(?<!dummy_)\\b" + Pattern.quote(v) + "\\b");
+            Matcher m2 = bare.matcher(out);
+            StringBuffer sb2 = new StringBuffer();
+            while (m2.find()) {
+                m2.appendReplacement(sb2, Matcher.quoteReplacement("\\old(dummy_" + v + ")"));
+            }
+            m2.appendTail(sb2);
+            out = sb2.toString();
         }
         return out;
     }
@@ -796,6 +808,12 @@ public final class GhostOperationsCiGenerator {
                 return r;
             }
         }
+        // Balanced-paren-aware fallback for domain_restriction(param, <nested-expr>) == list_to_function(\old(...))
+        // Regex patterns above fail when the second arg of domain_restriction contains nested parens.
+        String drBalanced = tryRewriteDomainRestrictionParamBalanced(
+                t, varTypes, params, operation, ctx, concreteConstantNames);
+        if (drBalanced != null) return drBalanced;
+
         Matcher mDrEqListOld = GHOST_ENSURE_DOMAIN_RESTRICTION_EQ_LIST_OLD.matcher(t);
         if (mDrEqListOld.matches()) {
             String r =
@@ -910,6 +928,53 @@ public final class GhostOperationsCiGenerator {
                 + ") == dummy_list_to_function(\\old(dummy_"
                 + seqVar
                 + "))";
+    }
+
+    /**
+     * Balanced-paren-aware version of the domain_restriction(param, …) == list_to_function(\old(…))
+     * check. The regex patterns fail when the second arg of {@code domain_restriction} contains
+     * nested parentheses (e.g. {@code interval_set(1, \length(\old(dummy_myseq)))}). Also corrects
+     * the double-\old that arises when {@code rewriteAbstractIdsWithOld} wraps an already-wrapped
+     * {@code \old(myseq)}.
+     */
+    private static String tryRewriteDomainRestrictionParamBalanced(
+            String t,
+            Map<String, String> varTypes,
+            List<Param> params,
+            Element operation,
+            BxmlTranslateContext ctx,
+            Set<String> concreteConstantNames) {
+        if (t == null || !t.startsWith("domain_restriction(")) return null;
+        int open = "domain_restriction".length(); // index of '('
+        // First arg must be a plain identifier
+        int comma1 = findTopLevelComma(t, open + 1);
+        if (comma1 < 0) return null;
+        String firstArg = t.substring(open + 1, comma1).trim();
+        if (!firstArg.matches("\\w+")) return null;
+        // Find matching close of domain_restriction(...)
+        int close = findMatchingClose(t, open);
+        if (close < 0) return null;
+        String rest = t.substring(close + 1).trim();
+        if (!rest.startsWith("==")) return null;
+        String rhs = rest.substring(2).trim();
+        // RHS: (dummy_)?list_to_function(\old(dummy_seqVar)) — single old (normal case after fix)
+        // or list_to_function(\old(\old(dummy_seqVar))) — double old (legacy/defensive)
+        Pattern rhsPat = Pattern.compile(
+                "^(?:dummy_)?list_to_function\\(\\\\old\\(\\\\old\\(dummy_(\\w+)\\)\\)\\)$"
+                + "|^(?:dummy_)?list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)$");
+        Matcher m = rhsPat.matcher(rhs);
+        if (!m.matches()) return null;
+        String seqVar = m.group(1) != null ? m.group(1) : m.group(2);
+        String listType = varTypes == null ? null : varTypes.get(seqVar);
+        if (listType == null || !listType.startsWith("\\list")) return null;
+        if (!isPointerGhostParam(params, firstArg)) return null;
+        String len = inferPartialFunctionDomainLengthAcsl(operation, firstArg, ctx, concreteConstantNames);
+        if (len == null || len.isBlank()) return null;
+        String domainArg = t.substring(comma1 + 1, close).trim();
+        return "domain_restriction(dummy_array_to_function("
+                + firstArg + ", " + len + "), "
+                + domainArg
+                + ") == dummy_list_to_function(\\old(dummy_" + seqVar + "))";
     }
 
     private static boolean isPointerGhostParam(List<Param> params, String name) {

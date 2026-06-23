@@ -173,6 +173,25 @@ public final class BxmlOperationsTranslator {
             boolean useGhostAbstraction,
             Map<String, List<String>> importedOpAssigns,
             List<String> requiresOnlyPredicateNames) {
+        return translateOperations(machineEl, ctx, invariantPredicateNames, abstractVariableNames,
+                libScanGhostOperationBodies, rootAbstractMachineName, mergedRefinementChain,
+                gluing, useGhostAbstraction, importedOpAssigns, requiresOnlyPredicateNames,
+                Map.of());
+    }
+
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction,
+            Map<String, List<String>> importedOpAssigns,
+            List<String> requiresOnlyPredicateNames,
+            Map<String, String> varRhsOverrides) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
 
@@ -204,9 +223,10 @@ public final class BxmlOperationsTranslator {
             }
             Element pre = firstChildElement(child, "Precondition");
             List<String> outputParams = parseOutputParameterNames(child);
+            Map<String, String> arrayParamLens = inferArrayFunctionParamLengths(child, ctx);
             if (pre != null) {
                 requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
-                rewriteRequiresForArrayBackedFunctionParams(requires, child, ctx);
+                rewriteAcslListForArrayBackedParams(requires, arrayParamLens);
                 rewriteRequiresForOutputParameters(requires, outputParams);
             }
 
@@ -293,7 +313,8 @@ public final class BxmlOperationsTranslator {
                                         machineEl,
                                         mergedRefinementChain,
                                         assignedAbs,
-                                        ctx);
+                                        ctx,
+                                        varRhsOverrides);
                     }
                 }
             }
@@ -317,14 +338,26 @@ public final class BxmlOperationsTranslator {
             }
 
             // Becomes_In (v :: S) compila para rand() → Frama-C exige __fc_random_counter no assigns.
-            boolean hasBecomesIn = bodyHasBecomesIn(body);
-            if (!hasBecomesIn && implOp != null) {
-                hasBecomesIn = bodyHasBecomesIn(firstChildElement(implOp, "Body"));
-            }
+            // Apenas o corpo da implementação é compilado para C; a abstrata pode ter Becomes_In
+            // como especificação não-determinística sem que rand() apareça no código gerado.
+            boolean hasBecomesIn = implOp != null
+                    ? bodyHasBecomesIn(firstChildElement(implOp, "Body"))
+                    : bodyHasBecomesIn(body);
             if (hasBecomesIn) {
                 LinkedHashSet<String> withRandom = new LinkedHashSet<>(connectionConcreteAssigns);
                 withRandom.add("__fc_random_counter");
                 connectionConcreteAssigns = new ArrayList<>(withRandom);
+            }
+
+            rewriteAcslListForArrayBackedParams(ensures, arrayParamLens);
+            if (!arrayParamLens.isEmpty() && !loops.isEmpty()) {
+                List<BxmlLoopTranslator.LoopContract> rewrittenLoops = new ArrayList<>();
+                for (BxmlLoopTranslator.LoopContract lc : loops) {
+                    String inv = rewriteAcslStringForArrayBackedParams(lc.invariant(), arrayParamLens);
+                    rewrittenLoops.add(new BxmlLoopTranslator.LoopContract(
+                            lc.index(), inv, lc.variant(), lc.assigns()));
+                }
+                loops = rewrittenLoops;
             }
 
             boolean skipBody = isBodyPureSkip(body);
@@ -629,33 +662,33 @@ public final class BxmlOperationsTranslator {
      * ({@code xx : A --> B}), reescreve chamadas de contrato que esperam {@code Function_int_int}
      * para usar {@code array_to_function(xx, len)}.
      */
-    private static void rewriteRequiresForArrayBackedFunctionParams(
-            List<String> requires, Element operation, BxmlTranslateContext ctx) {
-        if (requires == null || requires.isEmpty() || operation == null || ctx == null) {
+    /**
+     * Reescreve em {@code strings} todas as ocorrências de parâmetros array-backed ({@code param}
+     * como palavra isolada) para {@code array_to_function(param, len)}.
+     * Não re-envolve se já está dentro de {@code array_to_function(}.
+     */
+    private static void rewriteAcslListForArrayBackedParams(
+            List<String> strings, Map<String, String> lensByParam) {
+        if (strings == null || strings.isEmpty() || lensByParam == null || lensByParam.isEmpty()) {
             return;
         }
-        Map<String, String> lensByParam = inferArrayFunctionParamLengths(operation, ctx);
-        if (lensByParam.isEmpty()) {
-            return;
+        for (int i = 0; i < strings.size(); i++) {
+            strings.set(i, rewriteAcslStringForArrayBackedParams(strings.get(i), lensByParam));
         }
-        for (int i = 0; i < requires.size(); i++) {
-            String req = requires.get(i);
-            if (req == null || req.isBlank()) {
-                continue;
-            }
-            String rewritten = req;
-            for (Map.Entry<String, String> e : lensByParam.entrySet()) {
-                String p = e.getKey();
-                String len = e.getValue();
-                rewritten =
-                        rewritten.replaceAll(
-                                "\\bis_total_function\\s*\\(\\s*"
-                                        + Pattern.quote(p)
-                                        + "\\b",
-                                "is_total_function(array_to_function(" + p + ", " + len + ")");
-            }
-            requires.set(i, rewritten);
+    }
+
+    private static String rewriteAcslStringForArrayBackedParams(
+            String s, Map<String, String> lensByParam) {
+        if (s == null || s.isBlank() || lensByParam == null || lensByParam.isEmpty()) return s;
+        for (Map.Entry<String, String> e : lensByParam.entrySet()) {
+            String p = e.getKey();
+            String len = e.getValue();
+            // Substitui ocorrências isoladas de p que não estejam já dentro de array_to_function(
+            s = s.replaceAll(
+                    "(?<!array_to_function\\()\\b" + Pattern.quote(p) + "\\b",
+                    "array_to_function(" + p + ", " + len + ")");
         }
+        return s;
     }
 
     private static Map<String, String> inferArrayFunctionParamLengths(
