@@ -906,6 +906,11 @@ public final class BxmlSetsTranslator {
                         prefixedVals.add(valueMachineName + "__" + val.trim());
                     }
                     if (!prefixedVals.isEmpty()) {
+                        if (valueMachineName.equals(machineName)) {
+                            for (int idx = 0; idx < prefixedVals.size(); idx++) {
+                                logics.add("    logic integer " + prefixedVals.get(idx) + " = " + idx + ";");
+                            }
+                        }
                         StringBuilder ax = new StringBuilder();
                         ax.append("    axiom ").append(acslSetName).append("_values:\n");
                         for (String pv : prefixedVals) {
