@@ -291,8 +291,12 @@ public final class AcslGenerator {
                         baseName, machineEl, mergedMachineElements, ctx, varRhsOverrides));
         implementationAssignTargets.addAll(
                 BxmlMachineVariables.listImportedMachineConcreteAssigns(importedMachineNames, bxmlDirectory));
+        List<String> seenMachineNames =
+                com.example.bxml.BxmlSetsTranslator.listSeenMachineNamesFromChain(
+                        machineEl, mergedMachineElements);
         Map<String, List<String>> importedOpAssigns =
-                BxmlMachineVariables.buildImportedOperationAssignsMap(importedMachineNames, bxmlDirectory);
+                BxmlMachineVariables.buildImportedOperationAssignsMap(
+                        importedMachineNames, seenMachineNames, bxmlDirectory);
         boolean useGhostAbstraction =
                 BxmlMachineVariables.needsGhostAbstraction(machineEl, mergedMachineElements);
         Set<String> operationStateVariableNames =

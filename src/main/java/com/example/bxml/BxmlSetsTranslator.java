@@ -199,6 +199,22 @@ public final class BxmlSetsTranslator {
         return List.copyOf(names);
     }
 
+    /**
+     * {@code SEES} da máquina abstrata e da cadeia fundida (implementações/refinamentos), sem
+     * duplicar nomes.
+     */
+    public static List<String> listSeenMachineNamesFromChain(
+            Element rootMachineEl, List<Element> mergedMachineElements) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        names.addAll(listReferencedMachineNames(rootMachineEl));
+        if (mergedMachineElements != null) {
+            for (Element mel : mergedMachineElements) {
+                names.addAll(listReferencedMachineNames(mel));
+            }
+        }
+        return List.copyOf(names);
+    }
+
     private static List<String> listReferencedMachineNamesFromClause(
             Element machineEl, String clauseName) {
         Element clause = firstChildElement(machineEl, clauseName);
