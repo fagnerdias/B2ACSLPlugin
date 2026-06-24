@@ -76,6 +76,19 @@ final class DummyGhostAxiomaticBuilder {
             Element machineEl,
             BxmlTranslateContext ctx,
             Path bxmlDirectory) {
+        return format(ghostEnsureLines, abstractVarNames, varTypes, maxSetComprehensionIndex,
+                machineEl, ctx, bxmlDirectory, Map.of());
+    }
+
+    String format(
+            List<String> ghostEnsureLines,
+            List<String> abstractVarNames,
+            Map<String, String> varTypes,
+            int maxSetComprehensionIndex,
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            Path bxmlDirectory,
+            Map<String, String> abstractConstDecls) {
         String ghostText = joinLines(ghostEnsureLines);
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSets =
                 machineEl == null
@@ -155,6 +168,20 @@ final class DummyGhostAxiomaticBuilder {
         }
 
         sb.append("    }\n*/\n");
+
+        // Abstract constants declared separately so the axiomatic survives post-processing
+        // of merged_code.c (dummy_ghost is stripped, but this block is not).
+        if (abstractConstDecls != null && !abstractConstDecls.isEmpty()) {
+            String machineName = machineEl == null ? "" : machineEl.getAttribute("name");
+            if (machineName == null) machineName = "";
+            sb.append("/*@\n");
+            sb.append("    axiomatic ").append(machineName.trim()).append("_ci_abstract_constants {\n\n");
+            for (Map.Entry<String, String> e : abstractConstDecls.entrySet()) {
+                sb.append("        ").append(e.getValue()).append(";\n\n");
+            }
+            sb.append("    }\n*/\n");
+        }
+
         return sb.toString();
     }
 

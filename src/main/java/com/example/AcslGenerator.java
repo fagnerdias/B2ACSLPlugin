@@ -370,7 +370,14 @@ public final class AcslGenerator {
         }
 
         // 1) Constantes e propriedades (só máquina abstrata raiz deste ficheiro)
-        String abstractConstants = BxmlConstantsAndProperties.formatAbstractConstantsBlock(machineEl, ctx);
+        // Lambda-defined constants used in ANY_Sub ghost ops are declared in ghost_operations.ci's
+        // separate axiomatic (not dummy_ghost); exclude them here to avoid "already declared" in Frama-C.
+        Set<String> ciDeclaredAbstractConsts =
+                GhostOperationsCiGenerator.machineHasAnySubOperations(machineEl)
+                        ? BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet()
+                        : Set.of();
+        String abstractConstants = BxmlConstantsAndProperties.formatAbstractConstantsBlock(
+                machineEl, ctx, ciDeclaredAbstractConsts);
         if (!abstractConstants.isBlank()) {
             sb.append(abstractConstants);
             if (!abstractConstants.endsWith("\n")) sb.append("\n");

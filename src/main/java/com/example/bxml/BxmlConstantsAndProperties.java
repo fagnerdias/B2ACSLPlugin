@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -61,12 +62,22 @@ public final class BxmlConstantsAndProperties {
      * ID(integer v1,…,vn)}; caso contrário cai no tipo ACSL derivado do {@code typref}.
      */
     public static String formatAbstractConstantsBlock(Element machineEl, BxmlTranslateContext ctx) {
+        return formatAbstractConstantsBlock(machineEl, ctx, Set.of());
+    }
+
+    /**
+     * Como {@link #formatAbstractConstantsBlock(Element, BxmlTranslateContext)}, mas omite as
+     * constantes cujos nomes estejam em {@code excludeNames} (porque já foram declaradas no CI).
+     */
+    public static String formatAbstractConstantsBlock(
+            Element machineEl, BxmlTranslateContext ctx, Set<String> excludeNames) {
         Element block = firstChildElement(machineEl, "Abstract_Constants");
         if (block == null) return "";
 
         String machineName = machineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return "";
 
+        Set<String> excluded = excludeNames == null ? Set.of() : excludeNames;
         Map<String, List<String>> lambdaParams = collectLambdaDefsFromProperties(machineEl);
 
         List<String> decls = new ArrayList<>();
@@ -78,6 +89,7 @@ public final class BxmlConstantsAndProperties {
             if ("Attr".equals(e.getLocalName()) || !"Id".equals(e.getLocalName())) continue;
             String name = e.getAttribute("value");
             if (name == null || name.isBlank()) continue;
+            if (excluded.contains(name)) continue;
             List<String> params = lambdaParams.get(name);
             if (params != null && !params.isEmpty()) {
                 String paramStr = String.join(", ", params.stream()
@@ -99,7 +111,7 @@ public final class BxmlConstantsAndProperties {
         return sb.toString();
     }
 
-    private static Map<String, List<String>> collectLambdaDefsFromProperties(Element machineEl) {
+    public static Map<String, List<String>> collectLambdaDefsFromProperties(Element machineEl) {
         Map<String, List<String>> result = new LinkedHashMap<>();
         Element propsEl = firstChildElement(machineEl, "Properties");
         if (propsEl == null) return result;

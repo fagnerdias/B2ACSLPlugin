@@ -174,7 +174,8 @@ public final class B2ACSLPipeline {
             for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
                 mergedEls.add(AcslGenerator.parseMachineElement(mp));
             }
-            if (!BxmlMachineVariables.needsGhostAbstraction(mr, mergedEls)) {
+            if (!BxmlMachineVariables.needsGhostAbstraction(mr, mergedEls)
+                    && !GhostOperationsCiGenerator.machineHasAnySubOperations(mr)) {
                 continue;
             }
             anyNeedsGhost = true;
@@ -693,6 +694,8 @@ public final class B2ACSLPipeline {
         }
 
         // frama-c -acsl-import="f1,f2,…" [ghost_operations.ci] <c>… -print -no-unicode
+        // O ghost_operations.ci vem antes dos .c: declarações do dummy_ghost (ex.: IS_VALID) são
+        // processadas primeiro; o -acsl-import do .acsl aceita redeclarações com perfil idêntico.
         List<String> importCmd = new ArrayList<>();
         importCmd.add(FRAMA_C);
         String acslImportList =
