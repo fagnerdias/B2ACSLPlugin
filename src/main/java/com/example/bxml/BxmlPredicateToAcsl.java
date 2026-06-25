@@ -244,7 +244,7 @@ public final class BxmlPredicateToAcsl {
                 if ("POW".equals(uop)) {
                     String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
                     Element inner = firstNonAttrElementChild(rightEl);
-                    String setAtom = bTypeArgToSeqOfSetName(inner);
+                    String setAtom = bTypeArgToSeqOfSetName(inner, ctx);
                     return "inclusion(" + left + ", " + setAtom + ")";
                 }
                 if ("FIN".equals(uop) || "fin".equals(uop)) {
@@ -258,7 +258,7 @@ public final class BxmlPredicateToAcsl {
                 if ("seq".equals(uop)) {
                     String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
                     Element typeArg = firstNonAttrElementChild(rightEl);
-                    String setAtom = bTypeArgToSeqOfSetName(typeArg);
+                    String setAtom = bTypeArgToSeqOfSetName(typeArg, ctx);
                     return "is_seq_of(" + left + ", " + setAtom + ")";
                 }
             }
@@ -443,15 +443,21 @@ public final class BxmlPredicateToAcsl {
         return null;
     }
 
-    /** Segundo argumento de {@code is_seq_of} (conjunto ACSL da lib, ex. {@code NAT}). */
-    private static String bTypeArgToSeqOfSetName(Element typeArg) {
+    /** Segundo argumento de {@code is_seq_of}/{@code inclusion} (conjunto ACSL da lib, ex. {@code NAT}). */
+    private static String bTypeArgToSeqOfSetName(Element typeArg, BxmlTranslateContext ctx) {
         if (typeArg != null && "Id".equals(typeArg.getLocalName())) {
             String v = typeArg.getAttribute("value");
             if (v == null || v.isBlank()) return "NAT";
             return switch (v) {
                 case "NAT", "INTEGER", "INT" -> "NAT";
                 case "BOOL" -> "BOOL";
-                default -> v;
+                default -> {
+                    if (ctx != null) {
+                        String renamed = ctx.enumeratedSetRenames().get(v);
+                        if (renamed != null) yield renamed;
+                    }
+                    yield v;
+                }
             };
         }
         return "NAT";

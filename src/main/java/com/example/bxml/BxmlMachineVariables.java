@@ -750,9 +750,13 @@ public final class BxmlMachineVariables {
             return null;
         }
         Element arrow = concreteVariableFunctionArrowElement(implMachineEl, varName);
+        if (arrow == null) {
+            return null;
+        }
         String range = arrayDomainRangeAcsl(arrow, ctx);
         if (range == null || range.isBlank()) {
-            return null;
+            // Domínio é um conjunto nomeado (não intervalo literal): usa [..] para cobrir todo o array.
+            return baseTarget + "[..]";
         }
         return baseTarget + "[" + range + "]";
     }

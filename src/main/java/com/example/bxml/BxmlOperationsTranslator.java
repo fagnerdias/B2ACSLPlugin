@@ -239,8 +239,10 @@ public final class BxmlOperationsTranslator {
             if (body != null) {
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
             }
+            Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, ctx);
             applyStarPrefixToEnsures(ensures, outputParams);
             rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, ctx);
+            removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
             List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
             for (String inv : invariantPredicateNames) {
                 ensures.add(inv);
@@ -359,6 +361,9 @@ public final class BxmlOperationsTranslator {
                 }
                 loops = rewrittenLoops;
             }
+            if (!funcTypedOutputs.isEmpty() && !loops.isEmpty()) {
+                loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
+            }
 
             boolean skipBody = isBodyPureSkip(body);
             // Se a abstrata tem Skip mas a implementação tem corpo real (ex.: Operation_Call),
@@ -376,6 +381,7 @@ public final class BxmlOperationsTranslator {
                             requires,
                             ensures,
                             outputParams,
+                            funcTypedOutputs,
                             ghostSlug,
                             ghostBehaviorArgs,
                             dummyGhostEnsureVars,
@@ -501,6 +507,85 @@ public final class BxmlOperationsTranslator {
             String rhs = s.substring(eq + 4).trim();
             ensures.set(i, "(integer)(*" + param + " != 0) == " + rhs);
         }
+    }
+
+    private static Set<String> functionTypedOutputParamNames(Element operation, BxmlTranslateContext ctx) {
+        Set<String> out = new HashSet<>();
+        Element outEl = firstChildElement(operation, "Output_Parameters");
+        if (outEl == null || ctx == null) return out;
+        NodeList ch = outEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if (!"Id".equals(e.getLocalName())) continue;
+            String name = e.getAttribute("value");
+            if (name == null || name.isBlank()) continue;
+            String trAttr = e.getAttribute("typref");
+            if (trAttr == null || trAttr.isBlank()) continue;
+            try {
+                int tr = Integer.parseInt(trAttr.trim());
+                String rawType = ctx.types().getRawType(tr);
+                // POW(X*Y) representa uma função ou relação B → output é array em C
+                if (rawType != null && rawType.startsWith("POW(") && rawType.contains("*")) {
+                    out.add(name.trim());
+                }
+            } catch (NumberFormatException ignored) {
+                // skip
+            }
+        }
+        return out;
+    }
+
+    private static void removeEnsuresForFunctionTypedOutputs(
+            List<String> ensures, Set<String> funcTypedOutputs) {
+        if (ensures == null || ensures.isEmpty() || funcTypedOutputs == null || funcTypedOutputs.isEmpty()) {
+            return;
+        }
+        ensures.removeIf(e -> {
+            if (e == null) return false;
+            int eq = e.indexOf(" == ");
+            if (eq < 0) return false;
+            String lhs = e.substring(0, eq).trim();
+            if (lhs.startsWith("*")) {
+                return funcTypedOutputs.contains(lhs.substring(1).trim());
+            }
+            return false;
+        });
+    }
+
+    private static List<BxmlLoopTranslator.LoopContract> rewriteLoopsForFunctionTypedOutputs(
+            List<BxmlLoopTranslator.LoopContract> loops, Set<String> funcTypedOutputs) {
+        List<BxmlLoopTranslator.LoopContract> result = new ArrayList<>();
+        for (BxmlLoopTranslator.LoopContract lc : loops) {
+            String inv = rewriteArrayOutputFunctionApply(lc.invariant(), funcTypedOutputs);
+            List<String> newAssigns = new ArrayList<>();
+            for (String a : lc.assigns()) {
+                if (funcTypedOutputs.contains(a)) {
+                    newAssigns.add(a + "[..]");
+                } else {
+                    newAssigns.add(a);
+                }
+            }
+            result.add(new BxmlLoopTranslator.LoopContract(lc.index(), inv, lc.variant(), newAssigns));
+        }
+        return List.copyOf(result);
+    }
+
+    private static String rewriteArrayOutputFunctionApply(String s, Set<String> params) {
+        if (s == null || s.isBlank() || params == null || params.isEmpty()) return s;
+        for (String p : params) {
+            String q = Pattern.quote(p);
+            // function_apply(p, X) == \true  →  p[X] != 0
+            s = s.replaceAll("function_apply\\(" + q + ",\\s*([^)]+)\\)\\s*==\\s*\\\\true",
+                    p + "[$1] != 0");
+            // function_apply(p, X) == \false  →  p[X] == 0
+            s = s.replaceAll("function_apply\\(" + q + ",\\s*([^)]+)\\)\\s*==\\s*\\\\false",
+                    p + "[$1] == 0");
+            // remaining function_apply(p, X)  →  p[X]
+            s = s.replaceAll("function_apply\\(" + q + ",\\s*([^)]+)\\)", p + "[$1]");
+        }
+        return s;
     }
 
     private static Set<String> boolOutputParameterNames(Element operation, BxmlTranslateContext ctx) {
@@ -761,6 +846,8 @@ public final class BxmlOperationsTranslator {
             List<String> ensures,
             /** Parâmetros de saída B (sem {@code *}); viram {@code assigns *nome}. */
             List<String> outputParameters,
+            /** Subconjunto de {@code outputParameters} cujo tipo B é função/relação (POW(X*Y)); viram {@code assigns nome[..]}. */
+            Set<String> functionTypedOutputParameters,
             /** Vazio se a operação for pura face às variáveis abstratas; senão slug para {@code ghost__<slug>(…)}. */
             String ghostBehaviorSlug,
             /** Nomes dos parâmetros de entrada para o {@code assert ghost__…}; ordem do BXML. */
@@ -779,6 +866,8 @@ public final class BxmlOperationsTranslator {
             boolean skipBody) {
 
         public OperationAcsl {
+            functionTypedOutputParameters =
+                    functionTypedOutputParameters == null ? Set.of() : Set.copyOf(functionTypedOutputParameters);
             dummyGhostEnsureVarNames =
                     dummyGhostEnsureVarNames == null ? List.of() : List.copyOf(dummyGhostEnsureVarNames);
             connectionConcreteAssigns =
@@ -800,6 +889,7 @@ public final class BxmlOperationsTranslator {
                     requires,
                     ensures,
                     outputParameters,
+                    Set.of(),
                     ghostBehaviorSlug,
                     ghostBehaviorInputNames,
                     dummyGhostEnsureVarNames,
@@ -829,7 +919,11 @@ public final class BxmlOperationsTranslator {
             }
             boolean hasAssigns = false;
             for (String p : outputParameters) {
-                sb.append("    assigns *").append(p).append(";\n");
+                if (functionTypedOutputParameters.contains(p)) {
+                    sb.append("    assigns ").append(p).append("[..];\n");
+                } else {
+                    sb.append("    assigns *").append(p).append(";\n");
+                }
                 hasAssigns = true;
             }
             LinkedHashSet<String> connectionEmitted = new LinkedHashSet<>();

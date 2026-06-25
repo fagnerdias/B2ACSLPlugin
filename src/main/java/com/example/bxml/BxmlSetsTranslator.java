@@ -338,6 +338,41 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Renomeação de conjuntos diferidos (sem {@code <Enumerated_Values>}) para o nome ACSL qualificado
+     * (ex. {@code COPY} → {@code Biblioteca_COPY}). Esses conjuntos são declarados com prefixo de
+     * máquina em {@code axiomatic NomeMaquina_sets} e devem ser referenciados pelo nome completo.
+     */
+    public static Map<String, String> buildDeferredSetRenames(Element machineEl) {
+        String machineName = machineEl.getAttribute("name");
+        if (machineName == null || machineName.isBlank()) return Map.of();
+        machineName = machineName.trim();
+        Element setsEl = firstChildElement(machineEl, "Sets");
+        if (setsEl == null) return Map.of();
+        LinkedHashMap<String, String> renames = new LinkedHashMap<>();
+        NodeList ch = setsEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element setEl = (Element) n;
+            if (!"Set".equals(setEl.getLocalName())) continue;
+            if (firstChildElement(setEl, "Enumerated_Values") != null) continue;
+            NodeList setChildren = setEl.getChildNodes();
+            for (int j = 0; j < setChildren.getLength(); j++) {
+                Node sn = setChildren.item(j);
+                if (sn.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element idEl = (Element) sn;
+                if (!"Id".equals(idEl.getLocalName())) continue;
+                String name = idEl.getAttribute("value");
+                if (name != null && !name.isBlank()) {
+                    renames.put(name.trim(), enumeratedSetAcslName(machineName, name.trim()));
+                    break;
+                }
+            }
+        }
+        return renames;
+    }
+
+    /**
      * Renomeação de conjuntos enumerados da máquina e das dependências {@code SEES}/{@code IMPORTS}.
      * Dependências primeiro; a máquina atual sobrescreve colisões (ex. {@code entry_point} e {@code ctx}
      * com o mesmo nome B).
@@ -357,13 +392,16 @@ public final class BxmlSetsTranslator {
                     continue;
                 }
                 try {
-                    merged.putAll(buildEnumeratedSetRenames(parseMachineElement(p)));
+                    Element depEl = parseMachineElement(p);
+                    merged.putAll(buildEnumeratedSetRenames(depEl));
+                    merged.putAll(buildDeferredSetRenames(depEl));
                 } catch (Exception ignored) {
                     // ignora dependência inacessível
                 }
             }
         }
         merged.putAll(buildEnumeratedSetRenames(machineEl));
+        merged.putAll(buildDeferredSetRenames(machineEl));
         return merged;
     }
 

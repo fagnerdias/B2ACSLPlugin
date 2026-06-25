@@ -1572,6 +1572,7 @@ public final class B2ACSLPipeline {
         content = attachAxiomsBlocksAfterParentAxiomatic(content);
         if (!rank.isEmpty()) {
             content = moveLibAxiomaticBlocksBeforeConnection(content, rank);
+            content = moveMachineAxiomaticsAfterSurroundingLibBlocks(content, rank);
         }
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
@@ -1911,6 +1912,74 @@ public final class B2ACSLPipeline {
             insert.append(sp.text);
         }
         return cut.substring(0, newConn) + insert + cut.substring(newConn);
+    }
+
+    /**
+     * Move blocos axiomáticos de máquina (não-lib) que estejam intercalados entre blocos de lib
+     * para depois do último bloco de lib que os segue. Isso evita referências a símbolos de lib
+     * (ex.: {@code relation_inverse}) antes da respetiva declaração.
+     */
+    private static String moveMachineAxiomaticsAfterSurroundingLibBlocks(
+            String content, Map<String, Integer> rank) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        // Identify spans that are non-lib but surrounded (before and after) by lib spans.
+        // "Surrounded" = has at least one lib span before AND at least one lib span after.
+        Set<String> libAndAxioms = new LinkedHashSet<>(rank.keySet());
+        for (String n : rank.keySet()) {
+            libAndAxioms.add(n + "_axioms");
+        }
+        int lastLibIdx = -1;
+        for (int i = spans.size() - 1; i >= 0; i--) {
+            AcsCommentSpan sp = spans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                lastLibIdx = i;
+                break;
+            }
+        }
+        if (lastLibIdx < 0) return content;
+
+        boolean seenLib = false;
+        List<AcsCommentSpan> toMove = new ArrayList<>();
+        for (int i = 0; i < lastLibIdx; i++) {
+            AcsCommentSpan sp = spans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                seenLib = true;
+            } else if (seenLib && sp.axiomaticName != null
+                    && !libAndAxioms.contains(sp.axiomaticName)
+                    && i < lastLibIdx) {
+                // Non-lib block after at least one lib block, and more lib blocks follow
+                toMove.add(sp);
+            }
+        }
+        if (toMove.isEmpty()) return content;
+
+        // Remove moved spans in reverse order (so earlier offsets remain valid)
+        List<AcsCommentSpan> rev = new ArrayList<>(toMove);
+        rev.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String result = content;
+        List<String> movedTexts = new ArrayList<>();
+        for (AcsCommentSpan sp : rev) {
+            movedTexts.add(0, result.substring(sp.start, sp.end));
+            result = result.substring(0, sp.start) + result.substring(sp.end);
+        }
+
+        // Find the new position of the last lib span in the modified content
+        List<AcsCommentSpan> newSpans = findAllAcsCommentSpans(result);
+        int insertAfter = -1;
+        for (int i = newSpans.size() - 1; i >= 0; i--) {
+            AcsCommentSpan sp = newSpans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                insertAfter = sp.end;
+                break;
+            }
+        }
+        if (insertAfter < 0) return content; // safety fallback
+
+        StringBuilder insert = new StringBuilder();
+        for (String t : movedTexts) {
+            insert.append(t);
+        }
+        return result.substring(0, insertAfter) + insert + result.substring(insertAfter);
     }
 
     private static AcsCommentSpan findDeclAxiomaticBlock(List<AcsCommentSpan> spans, String name) {
