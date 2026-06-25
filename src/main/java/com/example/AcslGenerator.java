@@ -283,9 +283,12 @@ public final class AcslGenerator {
         List<String> importedInvariantPredicateNames =
                 BxmlInvariantTranslator.listImportedMachineInvariantPredicateNames(
                         importedMachineNames, bxmlDirectory);
+        Map<String, String> varRhsOverrides =
+                BxmlMachineVariables.buildAbstractVarRhsOverrides(
+                        machineEl, mergedMachineElements, importedMachineNames, bxmlDirectory);
         List<String> implementationAssignTargets = new java.util.ArrayList<>(
                 BxmlMachineVariables.listInitialisationAssignTargets(
-                        baseName, machineEl, mergedMachineElements, ctx));
+                        baseName, machineEl, mergedMachineElements, ctx, varRhsOverrides));
         implementationAssignTargets.addAll(
                 BxmlMachineVariables.listImportedMachineConcreteAssigns(importedMachineNames, bxmlDirectory));
         Map<String, List<String>> importedOpAssigns =
@@ -348,7 +351,8 @@ public final class AcslGenerator {
                                 gluing,
                                 useGhostAbstraction,
                                 importedOpAssigns,
-                                importedInvariantPredicateNames)
+                                importedInvariantPredicateNames,
+                                varRhsOverrides)
                         : List.of();
 
         StringBuilder sb = new StringBuilder();
@@ -366,13 +370,35 @@ public final class AcslGenerator {
         }
 
         // 1) Constantes e propriedades (só máquina abstrata raiz deste ficheiro)
+        // Lambda-defined constants used in ANY_Sub ghost ops are declared in ghost_operations.ci's
+        // separate axiomatic (not dummy_ghost); exclude them here to avoid "already declared" in Frama-C.
+        Set<String> ciDeclaredAbstractConsts =
+                GhostOperationsCiGenerator.machineHasAnySubOperations(machineEl)
+                        ? BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet()
+                        : Set.of();
+        String abstractConstants = BxmlConstantsAndProperties.formatAbstractConstantsBlock(
+                machineEl, ctx, ciDeclaredAbstractConsts);
+        if (!abstractConstants.isBlank()) {
+            sb.append(abstractConstants);
+            if (!abstractConstants.endsWith("\n")) sb.append("\n");
+            sb.append("\n");
+        }
         String concreteConstants = BxmlConstantsAndProperties.formatConcreteConstantsBlock(machineEl, ctx);
         if (!concreteConstants.isBlank()) {
             sb.append(concreteConstants);
             if (!concreteConstants.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
+        // Traduz properties primeiro para popular o lambdaRegistry; emite lambda_functions antes
+        // de properties para que os predicados lambda estejam declarados quando properties os referencia.
         String propertiesBlock = BxmlConstantsAndProperties.formatPropertiesBlock(machineEl, ctx);
+        LambdaFunctionRegistry lambdaRegistryEarly = ctx.lambdaRegistry();
+        int lambdaEmittedUpTo = 0;
+        if (lambdaRegistryEarly != null && !lambdaRegistryEarly.isEmpty()) {
+            sb.append(lambdaRegistryEarly.formatAxiomaticBlock());
+            sb.append("\n");
+            lambdaEmittedUpTo = lambdaRegistryEarly.size();
+        }
         if (!propertiesBlock.isBlank()) {
             sb.append(propertiesBlock);
             if (!propertiesBlock.endsWith("\n")) sb.append("\n");
@@ -416,7 +442,8 @@ public final class AcslGenerator {
                                 machineEl, mergedMachineElements)
                         ? ""
                         : BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
-                                machineEl, ctx, concreteLinkRoot, abstractVariableNamesForGhost);
+                                machineEl, ctx, concreteLinkRoot, abstractVariableNamesForGhost,
+                                varRhsOverrides);
         if (!varsAbstract.isBlank()) {
             sb.append(varsAbstract);
             if (!varsAbstract.endsWith("\n")) sb.append("\n");
@@ -489,11 +516,11 @@ public final class AcslGenerator {
         appendMergedInvariantPredicatesOnly(
                 sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl);
 
-        // 2b) Bloco axiomatic das funções lambda extraídas durante a tradução
+        // 2b) Lambdas registados após a emissão antecipada (ex.: lambdas de operações)
         LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
-        if (lambdaRegistry != null && !lambdaRegistry.isEmpty()) {
+        if (lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo) {
             sb.append("\n");
-            sb.append(lambdaRegistry.formatAxiomaticBlock());
+            sb.append(lambdaRegistry.formatAxiomaticBlockFrom(lambdaEmittedUpTo));
             sb.append("\n");
         }
 

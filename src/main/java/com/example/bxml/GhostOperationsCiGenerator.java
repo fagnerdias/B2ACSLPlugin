@@ -235,7 +235,10 @@ public final class GhostOperationsCiGenerator {
             throws IOException {
         if (cDir == null || abstractMachineEl == null) return;
         Path target = cDir.resolve(GHOST_FILE);
-        if (!BxmlMachineVariables.needsGhostAbstraction(abstractMachineEl, mergedMachineElements)) {
+        boolean needsGhost = BxmlMachineVariables.needsGhostAbstraction(
+                abstractMachineEl, mergedMachineElements);
+        boolean hasAnySubOps = machineHasAnySubOperations(abstractMachineEl);
+        if (!needsGhost && !hasAnySubOps) {
             Files.deleteIfExists(target);
             return;
         }
@@ -253,16 +256,33 @@ public final class GhostOperationsCiGenerator {
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
         List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
-        if (abstractVarNames.isEmpty()) {
-            Files.deleteIfExists(cDir.resolve(GHOST_FILE));
-            return;
-        }
         Set<String> abstractSet = new LinkedHashSet<>(abstractVarNames);
         Map<String, String> varTypes =
                 BxmlMachineVariables.inferVariableLogicTypes(abstractMachineEl, ctx);
         Set<String> concreteConstants = new LinkedHashSet<>(concreteConstantNames(abstractMachineEl));
         concreteConstants.addAll(
                 BxmlSetsTranslator.listSeenMachineConcreteConstantNames(abstractMachineEl, bxmlDirectory));
+
+        List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
+                BxmlSetsTranslator.listEnumeratedSetsWithSees(
+                        abstractMachineEl, mergedMachineElements, bxmlDirectory);
+        Map<String, List<String>> abstractConstParams =
+                BxmlConstantsAndProperties.collectLambdaDefsFromProperties(abstractMachineEl);
+        Map<String, String> abstractConstDecls =
+                buildAbstractConstantDecls(abstractMachineEl, ctx, abstractConstParams);
+        List<GhostOp> ghostOps =
+                buildGhostOperations(
+                        abstractMachineEl,
+                        abstractSet,
+                        ctx,
+                        varTypes,
+                        concreteConstants,
+                        enumeratedSetsForGhost,
+                        abstractConstParams);
+        if (ghostOps.isEmpty()) {
+            Files.deleteIfExists(target);
+            return;
+        }
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* ghost_operations.ci — operações ghost não puras (gerado) — ")
@@ -273,19 +293,8 @@ public final class GhostOperationsCiGenerator {
             String cType = ghostCTypeFromLogicType(varTypes.get(v));
             sb.append("//@ ghost ").append(cType).append(" ghost_").append(v).append(";\n");
         }
-        sb.append("\n");
+        if (!abstractVarNames.isEmpty()) sb.append("\n");
 
-        List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
-                BxmlSetsTranslator.listEnumeratedSetsWithSees(
-                        abstractMachineEl, mergedMachineElements, bxmlDirectory);
-        List<GhostOp> ghostOps =
-                buildGhostOperations(
-                        abstractMachineEl,
-                        abstractSet,
-                        ctx,
-                        varTypes,
-                        concreteConstants,
-                        enumeratedSetsForGhost);
         List<String> allGhostEnsureLines = new ArrayList<>();
         for (GhostOp go : ghostOps) {
             allGhostEnsureLines.addAll(go.ghostEnsures());
@@ -294,8 +303,7 @@ public final class GhostOperationsCiGenerator {
                 Math.max(
                         ctx.comprehensions().maxComprehensionIndex(),
                         maxSetComprehensionIndexInGhostText(allGhostEnsureLines));
-
-        sb.append(
+        String axiomaticBlock =
                 new DummyGhostAxiomaticBuilder(AcslLibSymbolDependencyMap.instance())
                         .format(
                                 allGhostEnsureLines,
@@ -304,7 +312,9 @@ public final class GhostOperationsCiGenerator {
                                 maxSetComp,
                                 abstractMachineEl,
                                 ctx,
-                                bxmlDirectory));
+                                bxmlDirectory,
+                                abstractConstDecls);
+        if (!axiomaticBlock.isBlank()) sb.append(axiomaticBlock);
 
         for (GhostOp go : ghostOps) {
             sb.append(go.format());
@@ -314,13 +324,28 @@ public final class GhostOperationsCiGenerator {
         Files.writeString(cDir.resolve(GHOST_FILE), sb.toString(), StandardCharsets.UTF_8);
     }
 
+    public static boolean machineHasAnySubOperations(Element machineEl) {
+        Element opsEl = firstChildElement(machineEl, "Operations");
+        if (opsEl == null) return false;
+        NodeList ch = opsEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element op = (Element) n;
+            if (!"Operation".equals(op.getLocalName())) continue;
+            if (operationBodyHasAnySub(op)) return true;
+        }
+        return false;
+    }
+
     private static List<GhostOp> buildGhostOperations(
             Element abstractMachineEl,
             Set<String> abstractSet,
             BxmlTranslateContext ctx,
             Map<String, String> varTypes,
             Set<String> concreteConstants,
-            List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost) {
+            List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost,
+            Map<String, List<String>> abstractConstParams) {
         List<GhostOp> ops = new ArrayList<>();
         List<String> initEnsures = collectGhostEnsuresFromInit(abstractMachineEl, abstractSet, ctx);
         Set<String> initAssigned = new LinkedHashSet<>();
@@ -366,7 +391,8 @@ public final class GhostOperationsCiGenerator {
                             appendOutputParametersAsPointers(listInputParameters(op), op);
                     forall =
                             rewriteAnySubEnsureForGhost(
-                                    forall, abstractSet, concreteConstants, op, anySub, ctx);
+                                    forall, abstractSet, concreteConstants, op, anySub, ctx,
+                                    abstractConstParams);
                     forall = rewriteBoolOutputPredicateTernary(forall);
                     forall = castScalarIntGhostParamsInEnsure(forall, params);
                     ops.add(
@@ -707,14 +733,26 @@ public final class GhostOperationsCiGenerator {
         names.sort((a, b) -> Integer.compare(b.length(), a.length()));
         String out = expr;
         for (String v : names) {
-            Pattern pat = Pattern.compile("\\b" + Pattern.quote(v) + "\\b");
-            Matcher m = pat.matcher(out);
-            StringBuffer sb = new StringBuffer();
-            while (m.find()) {
-                m.appendReplacement(sb, Matcher.quoteReplacement("\\old(dummy_" + v + ")"));
+            // Pass 1: vars already inside \old(v) → \old(dummy_v); avoids double-wrapping.
+            // \old( is a fixed-width 5-char lookbehind, valid in Java.
+            Pattern alreadyWrapped = Pattern.compile(
+                    "(?<=\\\\old\\()\\b" + Pattern.quote(v) + "\\b");
+            Matcher m1 = alreadyWrapped.matcher(out);
+            StringBuffer sb1 = new StringBuffer();
+            while (m1.find()) {
+                m1.appendReplacement(sb1, Matcher.quoteReplacement("dummy_" + v));
             }
-            m.appendTail(sb);
-            out = sb.toString();
+            m1.appendTail(sb1);
+            out = sb1.toString();
+            // Pass 2: bare vars (not already dummy_-prefixed) → \old(dummy_v).
+            Pattern bare = Pattern.compile("(?<!dummy_)\\b" + Pattern.quote(v) + "\\b");
+            Matcher m2 = bare.matcher(out);
+            StringBuffer sb2 = new StringBuffer();
+            while (m2.find()) {
+                m2.appendReplacement(sb2, Matcher.quoteReplacement("\\old(dummy_" + v + ")"));
+            }
+            m2.appendTail(sb2);
+            out = sb2.toString();
         }
         return out;
     }
@@ -796,6 +834,12 @@ public final class GhostOperationsCiGenerator {
                 return r;
             }
         }
+        // Balanced-paren-aware fallback for domain_restriction(param, <nested-expr>) == list_to_function(\old(...))
+        // Regex patterns above fail when the second arg of domain_restriction contains nested parens.
+        String drBalanced = tryRewriteDomainRestrictionParamBalanced(
+                t, varTypes, params, operation, ctx, concreteConstantNames);
+        if (drBalanced != null) return drBalanced;
+
         Matcher mDrEqListOld = GHOST_ENSURE_DOMAIN_RESTRICTION_EQ_LIST_OLD.matcher(t);
         if (mDrEqListOld.matches()) {
             String r =
@@ -910,6 +954,53 @@ public final class GhostOperationsCiGenerator {
                 + ") == dummy_list_to_function(\\old(dummy_"
                 + seqVar
                 + "))";
+    }
+
+    /**
+     * Balanced-paren-aware version of the domain_restriction(param, …) == list_to_function(\old(…))
+     * check. The regex patterns fail when the second arg of {@code domain_restriction} contains
+     * nested parentheses (e.g. {@code interval_set(1, \length(\old(dummy_myseq)))}). Also corrects
+     * the double-\old that arises when {@code rewriteAbstractIdsWithOld} wraps an already-wrapped
+     * {@code \old(myseq)}.
+     */
+    private static String tryRewriteDomainRestrictionParamBalanced(
+            String t,
+            Map<String, String> varTypes,
+            List<Param> params,
+            Element operation,
+            BxmlTranslateContext ctx,
+            Set<String> concreteConstantNames) {
+        if (t == null || !t.startsWith("domain_restriction(")) return null;
+        int open = "domain_restriction".length(); // index of '('
+        // First arg must be a plain identifier
+        int comma1 = findTopLevelComma(t, open + 1);
+        if (comma1 < 0) return null;
+        String firstArg = t.substring(open + 1, comma1).trim();
+        if (!firstArg.matches("\\w+")) return null;
+        // Find matching close of domain_restriction(...)
+        int close = findMatchingClose(t, open);
+        if (close < 0) return null;
+        String rest = t.substring(close + 1).trim();
+        if (!rest.startsWith("==")) return null;
+        String rhs = rest.substring(2).trim();
+        // RHS: (dummy_)?list_to_function(\old(dummy_seqVar)) — single old (normal case after fix)
+        // or list_to_function(\old(\old(dummy_seqVar))) — double old (legacy/defensive)
+        Pattern rhsPat = Pattern.compile(
+                "^(?:dummy_)?list_to_function\\(\\\\old\\(\\\\old\\(dummy_(\\w+)\\)\\)\\)$"
+                + "|^(?:dummy_)?list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)$");
+        Matcher m = rhsPat.matcher(rhs);
+        if (!m.matches()) return null;
+        String seqVar = m.group(1) != null ? m.group(1) : m.group(2);
+        String listType = varTypes == null ? null : varTypes.get(seqVar);
+        if (listType == null || !listType.startsWith("\\list")) return null;
+        if (!isPointerGhostParam(params, firstArg)) return null;
+        String len = inferPartialFunctionDomainLengthAcsl(operation, firstArg, ctx, concreteConstantNames);
+        if (len == null || len.isBlank()) return null;
+        String domainArg = t.substring(comma1 + 1, close).trim();
+        return "domain_restriction(dummy_array_to_function("
+                + firstArg + ", " + len + "), "
+                + domainArg
+                + ") == dummy_list_to_function(\\old(dummy_" + seqVar + "))";
     }
 
     private static boolean isPointerGhostParam(List<Param> params, String name) {
@@ -1318,9 +1409,13 @@ public final class GhostOperationsCiGenerator {
             Set<String> concreteConstantNames,
             Element operation,
             Element anySub,
-            BxmlTranslateContext ctx) {
+            BxmlTranslateContext ctx,
+            Map<String, List<String>> abstractConstParams) {
         String s = prefixFunctionTypesForGhost(text);
+        s = uncurryAbstractConstantApplications(s, abstractConstParams);
+        s = fixForallQuantifierTypeAfterUncurry(s, abstractConstParams);
         s = prefixAcslLibFunctionsForGhost(s);
+        s = prefixEnumValuesForGhost(s, ctx.enumValueRenames());
         s = prefixGlobalLogicSetsForGhost(s);
         s = prefixSetComprehensionsForGhost(s);
         s = ghostDummyConcreteRefs(s, concreteConstantNames);
@@ -1489,6 +1584,154 @@ public final class GhostOperationsCiGenerator {
                             Matcher.quoteReplacement(dummyVal));
         }
         return out;
+    }
+
+    /**
+     * Reescreve {@code function_apply(NAME, couple(...))} → {@code NAME(arg1, arg2, ...)} para
+     * constantes abstratas declaradas como funções lógicas (não como relações B).
+     */
+    private static String uncurryAbstractConstantApplications(
+            String text, Map<String, List<String>> abstractConstParams) {
+        if (text == null || abstractConstParams == null || abstractConstParams.isEmpty()) {
+            return text;
+        }
+        String result = text;
+        for (String prefix : new String[]{"function_apply(", "dummy_function_apply("}) {
+            StringBuilder sb = new StringBuilder();
+            int idx = 0;
+            while (idx < result.length()) {
+                int callStart = result.indexOf(prefix, idx);
+                if (callStart < 0) {
+                    sb.append(result.substring(idx));
+                    break;
+                }
+                if (callStart > 0) {
+                    char before = result.charAt(callStart - 1);
+                    if (Character.isLetterOrDigit(before) || before == '_') {
+                        sb.append(result.charAt(idx));
+                        idx = callStart + 1;
+                        continue;
+                    }
+                }
+                int openParen = callStart + prefix.length() - 1;
+                int closeParen = findMatchingClose(result, openParen);
+                if (closeParen < 0) {
+                    sb.append(result.substring(idx, openParen + 1));
+                    idx = openParen + 1;
+                    continue;
+                }
+                String argsStr = result.substring(openParen + 1, closeParen);
+                int commaIdx = findTopLevelCommaInText(argsStr, 0);
+                if (commaIdx < 0) {
+                    sb.append(result.substring(idx, closeParen + 1));
+                    idx = closeParen + 1;
+                    continue;
+                }
+                String constName = argsStr.substring(0, commaIdx).trim();
+                if (!abstractConstParams.containsKey(constName)) {
+                    sb.append(result.substring(idx, closeParen + 1));
+                    idx = closeParen + 1;
+                    continue;
+                }
+                String coupleExpr = argsStr.substring(commaIdx + 1).trim();
+                List<String> flatArgs = extractCoupleArgs(coupleExpr);
+                sb.append(result.substring(idx, callStart));
+                sb.append(constName).append("(").append(String.join(", ", flatArgs)).append(")");
+                idx = closeParen + 1;
+            }
+            result = sb.toString();
+        }
+        return result;
+    }
+
+    private static List<String> extractCoupleArgs(String expr) {
+        String trimmed = expr.trim();
+        boolean isCouple = trimmed.startsWith("dummy_couple(") || trimmed.startsWith("couple(");
+        if (!isCouple) {
+            return new ArrayList<>(List.of(trimmed));
+        }
+        int openParen = trimmed.indexOf('(');
+        int closeParen = findMatchingClose(trimmed, openParen);
+        if (closeParen < 0 || closeParen != trimmed.length() - 1) {
+            return new ArrayList<>(List.of(trimmed));
+        }
+        String inner = trimmed.substring(openParen + 1, closeParen);
+        int comma = findTopLevelCommaInText(inner, 0);
+        if (comma < 0) {
+            return new ArrayList<>(List.of(trimmed));
+        }
+        List<String> result = new ArrayList<>(extractCoupleArgs(inner.substring(0, comma).trim()));
+        result.add(inner.substring(comma + 1).trim());
+        return result;
+    }
+
+    private static int findTopLevelCommaInText(String text, int start) {
+        int depth = 0;
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == ',' && depth == 0) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Quando um quantificador {@code \\forall integer VAR} é seguido de {@code VAR == NAME(...)}
+     * onde NAME é uma constante abstrata que retorna boolean, muda para {@code \\forall boolean VAR}.
+     */
+    private static String fixForallQuantifierTypeAfterUncurry(
+            String text, Map<String, List<String>> abstractConstParams) {
+        if (text == null || abstractConstParams.isEmpty()) return text;
+        java.util.regex.Pattern forallPat =
+                java.util.regex.Pattern.compile("\\\\forall\\s+integer\\s+(\\w+)\\b");
+        java.util.regex.Matcher m = forallPat.matcher(text);
+        while (m.find()) {
+            String varName = m.group(1);
+            for (String name : abstractConstParams.keySet()) {
+                if (text.contains(varName + " == " + name + "(")
+                        || text.contains(varName + "==" + name + "(")) {
+                    text = text.replaceFirst(
+                            "\\\\forall\\s+integer\\s+" + java.util.regex.Pattern.quote(varName) + "\\b",
+                            "\\\\forall boolean " + varName);
+                    m = forallPat.matcher(text);
+                    break;
+                }
+            }
+        }
+        return text;
+    }
+
+    private static Map<String, String> buildAbstractConstantDecls(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            Map<String, List<String>> lambdaParams) {
+        Map<String, String> result = new java.util.LinkedHashMap<>();
+        Element block = firstChildElement(machineEl, "Abstract_Constants");
+        if (block == null) return result;
+        org.w3c.dom.NodeList ch = block.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            org.w3c.dom.Node n = ch.item(i);
+            if (n.getNodeType() != org.w3c.dom.Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName()) || !"Id".equals(e.getLocalName())) continue;
+            String name = e.getAttribute("value");
+            if (name == null || name.isBlank()) continue;
+            name = name.trim();
+            List<String> params = lambdaParams.get(name);
+            if (params != null && !params.isEmpty()) {
+                String paramStr = params.stream()
+                        .map(v -> "integer " + v)
+                        .collect(java.util.stream.Collectors.joining(", "));
+                result.put(name, "logic boolean " + name + "(" + paramStr + ")");
+            } else {
+                String tr = e.getAttribute("typref");
+                int typref = (tr == null || tr.isBlank()) ? -1 : Integer.parseInt(tr.trim());
+                String logicType = ctx.types().acslVariableLogicTypeFromTypref(typref);
+                result.put(name, "logic " + logicType + " " + name);
+            }
+        }
+        return result;
     }
 
     /**

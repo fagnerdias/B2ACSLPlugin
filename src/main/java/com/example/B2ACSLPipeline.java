@@ -21,6 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.example.bxml.BxmlGluingNormalizer;
+import com.example.bxml.BxmlMachineVariables;
 import com.example.bxml.BxmlImportsGraph;
 import com.example.bxml.BxmlSeesGraph;
 import com.example.bxml.GhostOperationsCiGenerator;
@@ -162,6 +163,7 @@ public final class B2ACSLPipeline {
         Path cDir = langPath.resolve("c");
         // Staging dos ficheiros da lib sob cDir (elimina cópias redundantes em target/)
         System.setProperty("b2acsl.targetAcslDir", cDir.toAbsolutePath().normalize().toString());
+        boolean anyNeedsGhost = false;
         for (MachineFile mf : machines) {
             Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
             if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
@@ -172,8 +174,16 @@ public final class B2ACSLPipeline {
             for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
                 mergedEls.add(AcslGenerator.parseMachineElement(mp));
             }
+            if (!BxmlMachineVariables.needsGhostAbstraction(mr, mergedEls)
+                    && !GhostOperationsCiGenerator.machineHasAnySubOperations(mr)) {
+                continue;
+            }
+            anyNeedsGhost = true;
             GhostOperationsCiGenerator.write(
                     cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
+        }
+        if (!anyNeedsGhost) {
+            Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
         }
         Path ghostCiPath = GhostOperationsCiGenerator.targetPath(cDir);
         String ghostCiStripped =
@@ -684,6 +694,8 @@ public final class B2ACSLPipeline {
         }
 
         // frama-c -acsl-import="f1,f2,…" [ghost_operations.ci] <c>… -print -no-unicode
+        // O ghost_operations.ci vem antes dos .c: declarações do dummy_ghost (ex.: IS_VALID) são
+        // processadas primeiro; o -acsl-import do .acsl aceita redeclarações com perfil idêntico.
         List<String> importCmd = new ArrayList<>();
         importCmd.add(FRAMA_C);
         String acslImportList =
@@ -1683,7 +1695,7 @@ public final class B2ACSLPipeline {
      * {@code range.acsl}, {@code iseq.acsl}.
      */
     private static final List<String> SEQUENCE_CLUSTER_AFTER_IS_SEQ_OF =
-            List.of("range_function", "sequence_iseq");
+            List.of("range_function", "sequence_iseq", "sequence_last");
 
     /**
      * Garante {@code range_function} e {@code sequence_iseq} (se existirem) imediatamente após

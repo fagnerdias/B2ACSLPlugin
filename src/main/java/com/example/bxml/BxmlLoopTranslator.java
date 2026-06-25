@@ -145,7 +145,7 @@ public final class BxmlLoopTranslator {
 
         LinkedHashSet<String> assigns = new LinkedHashSet<>();
         Element body = firstChildElement(whileEl, "Body");
-        collectLoopAssigns(body, ctx, abstractMachineEl, assigns, importedOpAssigns);
+        collectLoopAssigns(body, ctx, abstractMachineEl, assigns, importedOpAssigns, Set.of());
 
         return new LoopContract(index, invariant, variant, List.copyOf(assigns));
     }
@@ -153,6 +153,12 @@ public final class BxmlLoopTranslator {
     private static void collectLoopAssigns(
             Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, Set<String> out,
             Map<String, List<String>> importedOpAssigns) {
+        collectLoopAssigns(sub, ctx, abstractMachineEl, out, importedOpAssigns, Set.of());
+    }
+
+    private static void collectLoopAssigns(
+            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, Set<String> out,
+            Map<String, List<String>> importedOpAssigns, Set<String> localVars) {
         if (sub == null) {
             return;
         }
@@ -165,7 +171,7 @@ public final class BxmlLoopTranslator {
                     if ("Id".equals(lhs.getLocalName())) {
                         // atribuição simples: x := ...
                         String name = lhs.getAttribute("value");
-                        if (name != null && !name.isBlank()) {
+                        if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
                             out.add(qualify(name.trim(), ctx, abstractMachineEl));
                         }
                     } else if ("Binary_Exp".equals(lhs.getLocalName())
@@ -174,12 +180,30 @@ public final class BxmlLoopTranslator {
                         List<Element> args = directExpChildren(lhs);
                         if (!args.isEmpty() && "Id".equals(args.get(0).getLocalName())) {
                             String name = args.get(0).getAttribute("value");
-                            if (name != null && !name.isBlank()) {
+                            if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
                                 out.add(qualify(name.trim(), ctx, abstractMachineEl));
                             }
                         }
                     }
                 }
+            }
+            return;
+        }
+        if ("VAR_IN".equals(sub.getLocalName())) {
+            // Variáveis declaradas em VAR_IN são locais ao bloco; não devem aparecer em loop assigns.
+            Set<String> innerLocals = new java.util.LinkedHashSet<>(localVars);
+            Element declaredVars = firstChildElement(sub, "Variables");
+            if (declaredVars != null) {
+                for (Element id : directExpChildren(declaredVars)) {
+                    if ("Id".equals(id.getLocalName())) {
+                        String name = id.getAttribute("value");
+                        if (name != null && !name.isBlank()) innerLocals.add(name.trim());
+                    }
+                }
+            }
+            Element innerBody = firstChildElement(sub, "Body");
+            if (innerBody != null) {
+                collectLoopAssigns(innerBody, ctx, abstractMachineEl, out, importedOpAssigns, innerLocals);
             }
             return;
         }
@@ -190,7 +214,7 @@ public final class BxmlLoopTranslator {
                 for (Element id : directExpChildren(outParams)) {
                     if ("Id".equals(id.getLocalName())) {
                         String name = id.getAttribute("value");
-                        if (name != null && !name.isBlank()) {
+                        if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
                             out.add(name.trim());
                         }
                     }
@@ -218,7 +242,7 @@ public final class BxmlLoopTranslator {
             if ("Attr".equals(ch.getLocalName())) {
                 continue;
             }
-            collectLoopAssigns(ch, ctx, abstractMachineEl, out, importedOpAssigns);
+            collectLoopAssigns(ch, ctx, abstractMachineEl, out, importedOpAssigns, localVars);
         }
     }
 

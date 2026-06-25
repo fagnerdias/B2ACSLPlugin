@@ -62,7 +62,29 @@ public final class BxmlMachineVariables {
                 rootAbstractForConcreteLink,
                 null,
                 Map.of(),
-                abstractVarNamesForGhostRead);
+                abstractVarNamesForGhostRead,
+                Map.of());
+    }
+
+    /**
+     * Como {@link #formatAxiomaticBlockWithGhostDummyReads(Element, BxmlTranslateContext, String, Set)}
+     * com sobreposições de RHS por variável (ex.: quando o estado concreto vem de máquina importada
+     * via linking invariant e o nome C real é diferente de {@code Raiz__v}).
+     */
+    public static String formatAxiomaticBlockWithGhostDummyReads(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractForConcreteLink,
+            Set<String> abstractVarNamesForGhostRead,
+            Map<String, String> varRhsOverrides) {
+        return formatAxiomaticBlock(
+                machineEl,
+                ctx,
+                rootAbstractForConcreteLink,
+                null,
+                Map.of(),
+                abstractVarNamesForGhostRead,
+                varRhsOverrides == null ? Map.of() : varRhsOverrides);
     }
 
     /**
@@ -99,6 +121,19 @@ public final class BxmlMachineVariables {
             Element refinementParent,
             Map<String, String> gluing,
             Set<String> ghostDummyReadsForAbstractVars) {
+        return formatAxiomaticBlock(
+                machineEl, ctx, rootAbstractMachineName, refinementParent,
+                gluing, ghostDummyReadsForAbstractVars, Map.of());
+    }
+
+    private static String formatAxiomaticBlock(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractMachineName,
+            Element refinementParent,
+            Map<String, String> gluing,
+            Set<String> ghostDummyReadsForAbstractVars,
+            Map<String, String> varRhsOverrides) {
         String machineName = machineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return "";
         boolean linkConcrete =
@@ -118,7 +153,8 @@ public final class BxmlMachineVariables {
                 machineEl,
                 gl,
                 ghostDummyReadsForAbstractVars,
-                ctx);
+                ctx,
+                varRhsOverrides);
     }
 
     private static String formatVariablesBlock(
@@ -131,6 +167,23 @@ public final class BxmlMachineVariables {
             Map<String, String> gluing,
             Set<String> ghostDummyReadsForAbstractVars,
             BxmlTranslateContext ctx) {
+        return formatVariablesBlock(
+                blockName, types, rootAbstractForImplRhs, refinementWithParent,
+                refinementParent, refinementChild, gluing, ghostDummyReadsForAbstractVars,
+                ctx, Map.of());
+    }
+
+    private static String formatVariablesBlock(
+            String blockName,
+            Map<String, String> types,
+            String rootAbstractForImplRhs,
+            boolean refinementWithParent,
+            Element refinementParent,
+            Element refinementChild,
+            Map<String, String> gluing,
+            Set<String> ghostDummyReadsForAbstractVars,
+            BxmlTranslateContext ctx,
+            Map<String, String> varRhsOverrides) {
         if (types.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic ").append(blockName).append("_variables {\n");
@@ -157,10 +210,15 @@ public final class BxmlMachineVariables {
                 sb.append(" reads dummy_ghost_").append(var);
             }
             if (rootAbstractForImplRhs != null) {
-                String rhs =
-                        implRhs != null
-                                ? implRhs
-                                : rootAbstractForImplRhs + "__" + var;
+                String rhs;
+                String override = varRhsOverrides == null ? null : varRhsOverrides.get(var);
+                if (override != null) {
+                    rhs = override;
+                } else if (implRhs != null) {
+                    rhs = implRhs;
+                } else {
+                    rhs = rootAbstractForImplRhs + "__" + var;
+                }
                 sb.append(" = ").append(rhs);
             } else if (refinementWithParent) {
                 Optional<String> abs =
@@ -241,6 +299,11 @@ public final class BxmlMachineVariables {
     /**
      * Verdadeiro quando alguma implementação fundida não declara variáveis próprias e reutiliza o
      * estado da abstrata (liga {@code logic v = Raiz__v;} no bloco {@code Raiz_variables}).
+     *
+     * <p>Implementações com {@code IMPORTS} ficam excluídas: nesse caso o estado concreto vem de
+     * outra máquina via linking invariant, o que requer ghost abstraction em vez de C globals
+     * da abstrata (ex.: {@code Mult_i} importa {@code Body} → {@code nn} usa {@code reads ghost_nn},
+     * e o invariante {@code loopnn == nn} faz a ligação formal).
      */
     public static boolean anyImplementationUsesAbstractVariablesOnly(
             Element abstractMachineEl, List<Element> mergedMachineElements) {
@@ -254,12 +317,8 @@ public final class BxmlMachineVariables {
             if (!isImplementationMachine(mel)) {
                 continue;
             }
-            // Se a implementação importa outras máquinas, o estado pode estar delegado
-            // a elas — não existem variáveis C machineName__v para as variáveis abstratas.
-            if (!BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
-                continue;
-            }
-            if (declaredVariableNames(mel).isEmpty()) {
+            if (declaredVariableNames(mel).isEmpty()
+                    && BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
                 return true;
             }
         }
@@ -304,6 +363,9 @@ public final class BxmlMachineVariables {
     /** Ghost só quando há refinamento/implementação com estado distinto do da abstrata. */
     public static boolean needsGhostAbstraction(
             Element abstractMachineEl, List<Element> mergedMachineElements) {
+        if (abstractMachineEl == null || declaredVariableNames(abstractMachineEl).isEmpty()) {
+            return false;
+        }
         return !usesDirectImplementationVariables(abstractMachineEl, mergedMachineElements);
     }
 
@@ -436,6 +498,16 @@ public final class BxmlMachineVariables {
             Element abstractMachineEl,
             List<Element> mergedMachineElements,
             BxmlTranslateContext ctx) {
+        return listLinkedConcreteAssignTargetsForInitialisation(
+                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx, Map.of());
+    }
+
+    public static List<String> listLinkedConcreteAssignTargetsForInitialisation(
+            String abstractMachineName,
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements,
+            BxmlTranslateContext ctx,
+            Map<String, String> varRhsOverrides) {
         if (abstractMachineName == null
                 || abstractMachineName.isBlank()
                 || abstractMachineEl == null
@@ -450,6 +522,15 @@ public final class BxmlMachineVariables {
         if (assigned.isEmpty()) {
             return List.of();
         }
+        // Skip vars whose C name comes from an imported machine (covered by importedAssigns)
+        if (varRhsOverrides != null && !varRhsOverrides.isEmpty()) {
+            Set<String> filtered = new LinkedHashSet<>();
+            for (String v : assigned) {
+                if (v != null && !varRhsOverrides.containsKey(v.trim())) filtered.add(v);
+            }
+            assigned = filtered;
+        }
+        if (assigned.isEmpty()) return List.of();
         if (ctx == null) {
             return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, assigned);
         }
@@ -512,6 +593,53 @@ public final class BxmlMachineVariables {
         return out;
     }
 
+    /**
+     * Como {@link #listLinkedConcreteAssignTargetsForOperation(String, Element, List, Set, BxmlTranslateContext)},
+     * mas omite variáveis cujo estado C real provém de máquina importada (já cobertas por
+     * {@code importedOpAssigns}), conforme indicado pelo mapa {@code varRhsOverrides}.
+     */
+    public static List<String> listLinkedConcreteAssignTargetsForOperation(
+            String abstractMachineName,
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements,
+            Set<String> assignedVariableNames,
+            BxmlTranslateContext ctx,
+            Map<String, String> varRhsOverrides) {
+        if (varRhsOverrides == null || varRhsOverrides.isEmpty()) {
+            return listLinkedConcreteAssignTargetsForOperation(
+                    abstractMachineName, abstractMachineEl, mergedMachineElements,
+                    assignedVariableNames, ctx);
+        }
+        if (abstractMachineName == null
+                || abstractMachineName.isBlank()
+                || abstractMachineEl == null
+                || assignedVariableNames == null
+                || assignedVariableNames.isEmpty()
+                || !anyImplementationUsesAbstractVariablesOnly(
+                        abstractMachineEl, mergedMachineElements)) {
+            return List.of();
+        }
+        Set<String> declared = declaredVariableNames(abstractMachineEl);
+        Set<String> filtered = new LinkedHashSet<>();
+        for (String v : assignedVariableNames) {
+            if (v != null && declared.contains(v.trim()) && !varRhsOverrides.containsKey(v.trim())) {
+                filtered.add(v.trim());
+            }
+        }
+        if (filtered.isEmpty()) return List.of();
+        if (ctx == null) {
+            return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, filtered);
+        }
+        String prefix = abstractMachineName.trim() + "__";
+        List<String> out = new ArrayList<>();
+        for (String v : filtered) {
+            String base = prefix + v;
+            String ranged = implementationAssignTargetWithRange(base, v, abstractMachineEl, ctx);
+            out.add(ranged == null ? base : ranged);
+        }
+        return out;
+    }
+
     private static List<String> linkedConcreteAssignTargetsForVariableNames(
             String abstractMachineName, Set<String> variableNames) {
         if (abstractMachineName == null
@@ -540,13 +668,24 @@ public final class BxmlMachineVariables {
             Element abstractMachineEl,
             List<Element> mergedMachineElements,
             BxmlTranslateContext ctx) {
+        return listInitialisationAssignTargets(
+                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx, Map.of());
+    }
+
+    public static List<String> listInitialisationAssignTargets(
+            String abstractMachineName,
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements,
+            BxmlTranslateContext ctx,
+            Map<String, String> varRhsOverrides) {
         List<String> fromImpl =
                 listImplementationAssignTargets(abstractMachineName, mergedMachineElements, ctx);
         if (!fromImpl.isEmpty()) {
             return fromImpl;
         }
         return listLinkedConcreteAssignTargetsForInitialisation(
-                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx);
+                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx,
+                varRhsOverrides == null ? Map.of() : varRhsOverrides);
     }
 
     public static List<String> listImplementationAssignTargets(
@@ -947,6 +1086,100 @@ public final class BxmlMachineVariables {
             }
         }
         return null;
+    }
+
+    /**
+     * Quando a implementação não tem variáveis próprias mas importa outra máquina que fornece o
+     * estado concreto via linking invariant (ex.: {@code loopnn == nn}), devolve o mapa
+     * {variável-abstrata → nome-C-da-variável-importada} (ex.: {@code "nn" → "Body__loopnn"}).
+     * Usado para substituir a fórmula padrão {@code Raiz__v} no bloco axiomatic de variáveis.
+     */
+    public static Map<String, String> buildAbstractVarRhsOverrides(
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements,
+            List<String> importedMachineNames,
+            Path bxmlDirectory) {
+        if (!anyImplementationUsesAbstractVariablesOnly(abstractMachineEl, mergedMachineElements)
+                || importedMachineNames == null
+                || importedMachineNames.isEmpty()
+                || bxmlDirectory == null) {
+            return Map.of();
+        }
+        Set<String> abstractVarNames = declaredVariableNames(abstractMachineEl);
+        if (abstractVarNames.isEmpty()) return Map.of();
+
+        Element implEl = null;
+        for (Element mel : mergedMachineElements) {
+            if (isImplementationMachine(mel) && declaredVariableNames(mel).isEmpty()) {
+                implEl = mel;
+                break;
+            }
+        }
+        if (implEl == null) return Map.of();
+
+        // importedVar → importedMachineName (abstract vars of the imported machine)
+        Map<String, String> importedVarToMachine = new LinkedHashMap<>();
+        for (String importedName : importedMachineNames) {
+            Path absPath = bxmlDirectory.resolve(importedName + ".bxml");
+            if (!Files.exists(absPath)) continue;
+            try {
+                Element importedAbstractEl = BxmlSetsTranslator.parseMachineElement(absPath);
+                for (String v : declaredVariableNames(importedAbstractEl)) {
+                    importedVarToMachine.put(v, importedName);
+                }
+            } catch (Exception ignored) {}
+        }
+        if (importedVarToMachine.isEmpty()) return Map.of();
+
+        Element invEl = firstChildElement(implEl, "Invariant");
+        if (invEl == null) return Map.of();
+
+        Map<String, String> result = new LinkedHashMap<>();
+        collectLinkingVarPairs(invEl, abstractVarNames, importedVarToMachine, result);
+        return result;
+    }
+
+    private static void collectLinkingVarPairs(
+            Element node,
+            Set<String> abstractVarNames,
+            Map<String, String> importedVarToMachine,
+            Map<String, String> result) {
+        String localName = node.getLocalName();
+        if ("Exp_Comparison".equals(localName) && "=".equals(node.getAttribute("op"))) {
+            List<Element> ch = nonAttrChildren(node);
+            if (ch.size() == 2) {
+                String lhsId = singleIdValue(ch.get(0));
+                String rhsId = singleIdValue(ch.get(1));
+                if (lhsId != null && rhsId != null) {
+                    if (abstractVarNames.contains(rhsId) && importedVarToMachine.containsKey(lhsId)) {
+                        result.put(rhsId, importedVarToMachine.get(lhsId) + "__" + lhsId);
+                    } else if (abstractVarNames.contains(lhsId) && importedVarToMachine.containsKey(rhsId)) {
+                        result.put(lhsId, importedVarToMachine.get(rhsId) + "__" + rhsId);
+                    }
+                }
+            }
+            return;
+        }
+        for (Element child : nonAttrChildren(node)) {
+            collectLinkingVarPairs(child, abstractVarNames, importedVarToMachine, result);
+        }
+    }
+
+    private static List<Element> nonAttrChildren(Element parent) {
+        List<Element> result = new ArrayList<>();
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() == Node.ELEMENT_NODE) {
+                Element e = (Element) n;
+                if (!"Attr".equals(e.getLocalName())) result.add(e);
+            }
+        }
+        return result;
+    }
+
+    private static String singleIdValue(Element el) {
+        return "Id".equals(el.getLocalName()) ? el.getAttribute("value") : null;
     }
 
     /**
