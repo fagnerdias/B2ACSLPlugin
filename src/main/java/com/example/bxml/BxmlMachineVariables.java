@@ -1205,25 +1205,52 @@ public final class BxmlMachineVariables {
      */
     public static Map<String, List<String>> buildImportedOperationAssignsMap(
             List<String> importedMachineNames, Path bxmlDirectory) {
-        if (importedMachineNames == null || importedMachineNames.isEmpty() || bxmlDirectory == null) {
-            return Map.of();
-        }
+        return buildImportedOperationAssignsMap(importedMachineNames, List.of(), bxmlDirectory);
+    }
+
+    /**
+     * Como {@link #buildImportedOperationAssignsMap(List, Path)}, mas também propaga
+     * {@code __fc_random_counter} para operações de máquinas <em>vistas</em> ({@code SEES}) que
+     * usam {@code Becomes_In}.  Máquinas vistas não contribuem com assigns concretos (as suas
+     * variáveis não pertencem ao chamador), apenas com {@code __fc_random_counter}.
+     */
+    public static Map<String, List<String>> buildImportedOperationAssignsMap(
+            List<String> importedMachineNames, List<String> seenMachineNames, Path bxmlDirectory) {
+        if (bxmlDirectory == null) return Map.of();
         LinkedHashMap<String, List<String>> result = new LinkedHashMap<>();
-        for (String machineName : importedMachineNames) {
-            List<String> machineAssigns = loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory);
-            Set<String> opsWithDirectRand = loadOperationNamesWithBecomesIn(machineName, bxmlDirectory);
-            Set<String> opsWithTransitiveRand = loadOperationNamesCallingRandOps(machineName, bxmlDirectory);
-            if (machineAssigns.isEmpty() && opsWithDirectRand.isEmpty() && opsWithTransitiveRand.isEmpty()) continue;
-            for (String opName : loadOperationNamesForMachine(machineName, bxmlDirectory)) {
-                List<String> opAssigns = new ArrayList<>(machineAssigns);
-                if (opsWithDirectRand.contains(opName) || opsWithTransitiveRand.contains(opName)) {
-                    opAssigns.add("__fc_random_counter");
-                }
-                if (!opAssigns.isEmpty()) {
-                    result.computeIfAbsent(opName, k -> new ArrayList<>()).addAll(opAssigns);
+
+        if (importedMachineNames != null) {
+            for (String machineName : importedMachineNames) {
+                List<String> machineAssigns = loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory);
+                Set<String> opsWithDirectRand = loadOperationNamesWithBecomesIn(machineName, bxmlDirectory);
+                Set<String> opsWithTransitiveRand = loadOperationNamesCallingRandOps(machineName, bxmlDirectory);
+                if (machineAssigns.isEmpty() && opsWithDirectRand.isEmpty() && opsWithTransitiveRand.isEmpty()) continue;
+                for (String opName : loadOperationNamesForMachine(machineName, bxmlDirectory)) {
+                    List<String> opAssigns = new ArrayList<>(machineAssigns);
+                    if (opsWithDirectRand.contains(opName) || opsWithTransitiveRand.contains(opName)) {
+                        opAssigns.add("__fc_random_counter");
+                    }
+                    if (!opAssigns.isEmpty()) {
+                        result.computeIfAbsent(opName, k -> new ArrayList<>()).addAll(opAssigns);
+                    }
                 }
             }
         }
+
+        // Máquinas vistas: só __fc_random_counter (sem assigns concretos)
+        if (seenMachineNames != null) {
+            for (String machineName : seenMachineNames) {
+                Set<String> opsWithDirectRand = loadOperationNamesWithBecomesIn(machineName, bxmlDirectory);
+                Set<String> opsWithTransitiveRand = loadOperationNamesCallingRandOps(machineName, bxmlDirectory);
+                if (opsWithDirectRand.isEmpty() && opsWithTransitiveRand.isEmpty()) continue;
+                for (String opName : loadOperationNamesForMachine(machineName, bxmlDirectory)) {
+                    if (opsWithDirectRand.contains(opName) || opsWithTransitiveRand.contains(opName)) {
+                        result.computeIfAbsent(opName, k -> new ArrayList<>()).add("__fc_random_counter");
+                    }
+                }
+            }
+        }
+
         return result;
     }
 
