@@ -62,6 +62,7 @@ public final class BxmlInitialisationTranslator {
 
         // Preferir o Initialisation da implementação (código C vem dela), se disponível.
         Element initSource = null;
+        Element initOwnerMachine = null;
         if (mergedMachineElements != null) {
             for (Element mel : mergedMachineElements) {
                 if ("implementation".equals(mel.getAttribute("type"))) {
@@ -69,6 +70,7 @@ public final class BxmlInitialisationTranslator {
                     if (implInit != null && firstSubChild(implInit) != null
                             && !"Skip".equals(firstSubChild(implInit).getLocalName())) {
                         initSource = implInit;
+                        initOwnerMachine = mel;
                         break;
                     }
                 }
@@ -76,24 +78,27 @@ public final class BxmlInitialisationTranslator {
         }
         if (initSource == null) {
             initSource = firstChildElement(machineEl, "Initialisation");
+            initOwnerMachine = machineEl;
         }
 
         List<String> ensures = new ArrayList<>();
         if (initSource != null) {
             walkSubstitution(firstSubChild(initSource), ensures, ctx);
         }
-        CartesianProductLoopSpec loopSpec = (initSource != null)
-                ? detectCartesianProductLoopSpec(firstSubChild(initSource), ctx)
-                : null;
+        List<CartesianProductLoopSpec> loopSpecs = (initSource != null)
+                ? detectAllLoopSpecs(firstSubChild(initSource), initOwnerMachine, ctx)
+                : List.of();
 
         String functionName = machineName + "__INITIALISATION";
         return new InitialisationAcsl(
-                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopSpec, false);
+                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopSpecs, false);
     }
 
     /**
      * Descrição de um loop de inicialização gerado por uma atribuição do padrão
-     * {@code ARRAY := (LO..HI) * {VALUE}} em B — o compilador C emite um loop {@code for(i = LO; i <= HI; i++)}.
+     * {@code ARRAY := DOMAIN * {VALUE}} em B — o compilador C emite um loop {@code while(i <= HI)}.
+     * O domínio pode ser um intervalo literal ({@code LO..HI}) ou um conjunto nomeado ({@code COPY},
+     * {@code BOOK}, etc.) cujos limites são resolvidos via seção {@code <Values>} da implementação.
      */
     public record CartesianProductLoopSpec(
             String counterVar,
@@ -102,11 +107,24 @@ public final class BxmlInitialisationTranslator {
             String cArrayName,
             String valueExpr) {}
 
-    private static CartesianProductLoopSpec detectCartesianProductLoopSpec(
-            Element sub, BxmlTranslateContext ctx) {
-        if (sub == null) return null;
-        return switch (sub.getLocalName()) {
-            case "Assignement_Sub" -> cartesianProductLoopSpecFromAssignment(sub, ctx);
+    /** Coleta todas as especificações de loop da sequência de substituições da inicialização. */
+    private static List<CartesianProductLoopSpec> detectAllLoopSpecs(
+            Element sub, Element implMachineEl, BxmlTranslateContext ctx) {
+        if (sub == null) return List.of();
+        List<CartesianProductLoopSpec> result = new ArrayList<>();
+        collectLoopSpecs(sub, implMachineEl, ctx, result);
+        return List.copyOf(result);
+    }
+
+    private static void collectLoopSpecs(
+            Element sub, Element implMachineEl, BxmlTranslateContext ctx,
+            List<CartesianProductLoopSpec> result) {
+        if (sub == null) return;
+        switch (sub.getLocalName()) {
+            case "Assignement_Sub" -> {
+                CartesianProductLoopSpec spec = cartesianProductLoopSpecFromAssignment(sub, implMachineEl, ctx);
+                if (spec != null) result.add(spec);
+            }
             case "Nary_Sub" -> {
                 NodeList children = sub.getChildNodes();
                 for (int i = 0; i < children.getLength(); i++) {
@@ -114,18 +132,15 @@ public final class BxmlInitialisationTranslator {
                     if (n.getNodeType() != Node.ELEMENT_NODE) continue;
                     Element ch = (Element) n;
                     if ("Attr".equals(ch.getLocalName())) continue;
-                    CartesianProductLoopSpec result = detectCartesianProductLoopSpec(ch, ctx);
-                    if (result != null) yield result;
+                    collectLoopSpecs(ch, implMachineEl, ctx, result);
                 }
-                yield null;
             }
-            case "Bloc_Sub" -> detectCartesianProductLoopSpec(firstSubChild(sub), ctx);
-            default -> null;
-        };
+            case "Bloc_Sub" -> collectLoopSpecs(firstSubChild(sub), implMachineEl, ctx, result);
+        }
     }
 
     private static CartesianProductLoopSpec cartesianProductLoopSpecFromAssignment(
-            Element assign, BxmlTranslateContext ctx) {
+            Element assign, Element implMachineEl, BxmlTranslateContext ctx) {
         Element varsEl = firstChildElement(assign, "Variables");
         if (varsEl == null) return null;
         String arrayVarName = null;
@@ -141,34 +156,84 @@ public final class BxmlInitialisationTranslator {
         Element valsEl = firstChildElement(assign, "Values");
         if (valsEl == null) return null;
         for (Element rhs : directExpChildren(valsEl)) {
-            CartesianProductLoopSpec spec = intervalCartesianProductLoopSpec(rhs, cArrayName, ctx);
+            CartesianProductLoopSpec spec = cartesianProductLoopSpec(rhs, cArrayName, implMachineEl, ctx);
             if (spec != null) return spec;
         }
         return null;
     }
 
-    private static CartesianProductLoopSpec intervalCartesianProductLoopSpec(
-            Element el, String cArrayName, BxmlTranslateContext ctx) {
+    /**
+     * Tenta extrair uma especificação de loop de uma expressão {@code DOMAIN * {VALUE}}.
+     * O domínio pode ser:
+     * <ul>
+     *   <li>Um intervalo literal: {@code Binary_Exp op='..'} (ex.: {@code 0..9})</li>
+     *   <li>Um conjunto nomeado: {@code Id} cujo valor está em {@code <Values>} da implementação</li>
+     * </ul>
+     */
+    private static CartesianProductLoopSpec cartesianProductLoopSpec(
+            Element el, String cArrayName, Element implMachineEl, BxmlTranslateContext ctx) {
         if (!"Binary_Exp".equals(el.getLocalName())) return null;
         if (!"*s".equals(el.getAttribute("op"))) return null;
         List<Element> children = directExpChildren(el);
         if (children.size() < 2) return null;
-        Element intervalEl = children.get(0);
+        Element domainEl = children.get(0);
         Element singletonEl = children.get(1);
-        if (!"Binary_Exp".equals(intervalEl.getLocalName())) return null;
-        if (!"..".equals(intervalEl.getAttribute("op"))) return null;
         if (!"Nary_Exp".equals(singletonEl.getLocalName())) return null;
         if (!"{".equals(singletonEl.getAttribute("op"))) return null;
         List<Element> singletonChildren = directExpChildren(singletonEl);
         if (singletonChildren.size() != 1) return null;
-        List<Element> bounds = directExpChildren(intervalEl);
-        if (bounds.size() < 2) return null;
 
-        String lo = BxmlExpressionToAcsl.translate(bounds.get(0), ctx);
-        String hi = BxmlExpressionToAcsl.translate(bounds.get(1), ctx);
+        String lo, hi;
+        if (BxmlExpressionToAcsl.isIntervalBinaryExp(domainEl)) {
+            // Intervalo literal: Binary_Exp op='..'
+            List<Element> bounds = directExpChildren(domainEl);
+            if (bounds.size() < 2) return null;
+            lo = BxmlExpressionToAcsl.translate(bounds.get(0), ctx);
+            hi = BxmlExpressionToAcsl.translate(bounds.get(1), ctx);
+        } else if ("Id".equals(domainEl.getLocalName())) {
+            // Conjunto nomeado: resolve via <Values> da implementação
+            String[] interval = resolveNamedSetInterval(domainEl.getAttribute("value"), implMachineEl, ctx);
+            if (interval == null) return null;
+            lo = interval[0];
+            hi = interval[1];
+        } else {
+            return null;
+        }
+
         String value = BxmlExpressionToAcsl.translate(singletonChildren.get(0), ctx);
-        if (lo == null || hi == null || value == null) return null;
+        if (lo == null || lo.isBlank() || hi == null || hi.isBlank() || value == null) return null;
         return new CartesianProductLoopSpec("i", lo.trim(), hi.trim(), cArrayName, value.trim());
+    }
+
+    /**
+     * Resolve um conjunto nomeado para seu intervalo {@code [lo, hi]} via seção {@code <Values>}
+     * da máquina de implementação. Retorna {@code null} se não encontrado ou se a valoração
+     * não for um intervalo literal.
+     */
+    private static String[] resolveNamedSetInterval(
+            String setName, Element implMachineEl, BxmlTranslateContext ctx) {
+        if (setName == null || setName.isBlank() || implMachineEl == null) return null;
+        Element valuesEl = firstChildElement(implMachineEl, "Values");
+        if (valuesEl == null) return null;
+        NodeList nl = valuesEl.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element valEl = (Element) n;
+            if (!"Valuation".equals(valEl.getLocalName())) continue;
+            if (!setName.equals(valEl.getAttribute("ident"))) continue;
+            // Primeiro filho não-Attr é a expressão de valor
+            for (Element valExpr : directExpChildren(valEl)) {
+                if (!BxmlExpressionToAcsl.isIntervalBinaryExp(valExpr)) return null;
+                List<Element> bounds = directExpChildren(valExpr);
+                if (bounds.size() < 2) return null;
+                String lo = BxmlExpressionToAcsl.translate(bounds.get(0), ctx);
+                String hi = BxmlExpressionToAcsl.translate(bounds.get(1), ctx);
+                if (lo == null || lo.isBlank() || hi == null || hi.isBlank()) return null;
+                return new String[]{lo.trim(), hi.trim()};
+            }
+        }
+        return null;
     }
 
     private static void walkSubstitution(Element sub, List<String> ensures, BxmlTranslateContext ctx) {
@@ -600,10 +665,11 @@ public final class BxmlInitialisationTranslator {
              */
             List<String> dummyGhostEnsureVarNames,
             /**
-             * Especificação do loop gerado por {@code ARRAY := (LO..HI) * {VALUE}}; quando não-nulo,
-             * emite o contrato completo com {@code loop invariant}, {@code loop assigns} e {@code loop variant}.
+             * Especificações de loop gerados por {@code ARRAY := DOMAIN * {VALUE}}; uma entrada por
+             * atribuição desse padrão na inicialização — cada uma emite {@code at loop N:} com
+             * {@code loop invariant}, {@code loop assigns} e {@code loop variant}.
              */
-            CartesianProductLoopSpec loopSpec,
+            List<CartesianProductLoopSpec> loopSpecs,
             /**
              * {@code true} para máquinas que não importam outras máquinas: emite um contrato mínimo
              * com {@code assigns \nothing;} mesmo que não haja outros conteúdos.
@@ -613,13 +679,19 @@ public final class BxmlInitialisationTranslator {
         public InitialisationAcsl {
             dummyGhostEnsureVarNames =
                     dummyGhostEnsureVarNames == null ? List.of() : List.copyOf(dummyGhostEnsureVarNames);
+            loopSpecs = loopSpecs == null ? List.of() : List.copyOf(loopSpecs);
+        }
+
+        /** Compatibilidade com chamadas que ainda usam o campo singular (agora lista). */
+        public CartesianProductLoopSpec loopSpec() {
+            return loopSpecs.isEmpty() ? null : loopSpecs.get(0);
         }
 
         public String toContractText() {
             boolean hasContent = !ensures.isEmpty()
                     || !dummyGhostEnsureVarNames.isEmpty()
                     || !assignsTargets.isEmpty()
-                    || loopSpec != null
+                    || !loopSpecs.isEmpty()
                     || includeGhostBehaviorAssert;
             if (!hasContent && !emitMinimalContract) return "";
             StringBuilder sb = new StringBuilder();
@@ -638,17 +710,19 @@ public final class BxmlInitialisationTranslator {
                     sb.append("    assigns ").append(a).append(";\n");
                 }
             }
-            if (loopSpec != null) {
-                String lo  = loopSpec.loExpr();
-                String hi  = loopSpec.hiExpr();
-                String arr = loopSpec.cArrayName();
-                String val = loopSpec.valueExpr();
-                String v   = loopSpec.counterVar();
-                sb.append("    at loop 1:\n");
+            for (int idx = 0; idx < loopSpecs.size(); idx++) {
+                CartesianProductLoopSpec ls = loopSpecs.get(idx);
+                String lo  = ls.loExpr();
+                String hi  = ls.hiExpr();
+                String arr = ls.cArrayName();
+                String val = ls.valueExpr();
+                String v   = ls.counterVar();
+                sb.append("    at loop ").append(idx + 1).append(":\n");
                 sb.append("        loop invariant ").append(lo).append(" <= ").append(v)
                   .append(" <= ").append(hi).append(" + 1;\n");
                 sb.append("        loop invariant \\forall integer k; ").append(lo)
-                  .append(" <= k < ").append(v).append(" ==> ").append(arr).append("[k] == ").append(val).append(";\n");
+                  .append(" <= k < ").append(v).append(" ==> ").append(arr)
+                  .append("[k] == ").append(val).append(";\n");
                 sb.append("        loop assigns ").append(v).append(", ")
                   .append(arr).append("[").append(lo).append(" .. ").append(hi).append("];\n");
                 sb.append("        loop variant ").append(hi).append(" + 1 - ").append(v).append(";\n");
