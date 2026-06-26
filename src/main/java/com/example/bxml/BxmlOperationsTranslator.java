@@ -559,10 +559,15 @@ public final class BxmlOperationsTranslator {
         List<BxmlLoopTranslator.LoopContract> result = new ArrayList<>();
         for (BxmlLoopTranslator.LoopContract lc : loops) {
             String inv = rewriteArrayOutputFunctionApply(lc.invariant(), funcTypedOutputs);
+            String upperBound = extractLoopUpperBound(lc.variant(), lc.assigns(), funcTypedOutputs);
             List<String> newAssigns = new ArrayList<>();
             for (String a : lc.assigns()) {
                 if (funcTypedOutputs.contains(a)) {
-                    newAssigns.add(a + "[..]");
+                    if (upperBound != null) {
+                        newAssigns.add(a + "[0.." + upperBound + "]");
+                    } else {
+                        newAssigns.add(a + "[..]");
+                    }
                 } else {
                     newAssigns.add(a);
                 }
@@ -570,6 +575,27 @@ public final class BxmlOperationsTranslator {
             result.add(new BxmlLoopTranslator.LoopContract(lc.index(), inv, lc.variant(), newAssigns));
         }
         return List.copyOf(result);
+    }
+
+    /**
+     * Tenta extrair o limite superior do loop a partir da expressão do variante.
+     * Para variantes da forma {@code (UPPER - counter + 1)} ou {@code (UPPER - counter)},
+     * retorna {@code UPPER} como string ACSL.
+     */
+    private static String extractLoopUpperBound(String variant, List<String> assigns,
+            Set<String> funcTypedOutputs) {
+        if (variant == null || variant.isBlank()) return null;
+        // Loop counter: assign that is not a function-typed output
+        String counter = assigns.stream()
+                .filter(a -> !funcTypedOutputs.contains(a))
+                .findFirst()
+                .orElse(null);
+        if (counter == null) return null;
+        // Match pattern: WORD - counter (anywhere in the variant)
+        Pattern p = Pattern.compile("(\\w+)\\s*-\\s*" + Pattern.quote(counter));
+        Matcher m = p.matcher(variant);
+        if (m.find()) return m.group(1);
+        return null;
     }
 
     private static String rewriteArrayOutputFunctionApply(String s, Set<String> params) {

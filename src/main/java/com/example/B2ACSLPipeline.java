@@ -1574,6 +1574,8 @@ public final class B2ACSLPipeline {
             content = moveLibAxiomaticBlocksBeforeConnection(content, rank);
             content = moveMachineAxiomaticsAfterSurroundingLibBlocks(content, rank);
         }
+        content = moveStandaloneMachinePredicatesAfterMachineAxiomatics(content, rank);
+        content = moveMachineAcslBlocksBeforeFirstGhostBlock(content, rank);
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -1982,6 +1984,137 @@ public final class B2ACSLPipeline {
         return result.substring(0, insertAfter) + insert + result.substring(insertAfter);
     }
 
+    /**
+     * Move predicados ACSL standalone (sem wrapper axiomatic) que estejam intercalados entre
+     * blocos de lib para depois do último bloco axiomatic do arquivo (incluindo axiomáticos de
+     * máquina). Isso corrige o caso onde Frama-C emite {@code predicate Biblioteca_invariant}
+     * antes dos axiomáticos de máquina que declaram as variáveis que o predicado referencia.
+     */
+    private static String moveStandaloneMachinePredicatesAfterMachineAxiomatics(
+            String content, Map<String, Integer> rank) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+
+        Set<String> libAndAxioms = new LinkedHashSet<>(rank.keySet());
+        for (String n : rank.keySet()) libAndAxioms.add(n + "_axioms");
+
+        // Find the last lib span index in the spans list
+        int lastLibIdx = -1;
+        for (int i = spans.size() - 1; i >= 0; i--) {
+            AcsCommentSpan sp = spans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                lastLibIdx = i;
+                break;
+            }
+        }
+        if (lastLibIdx < 0) return content;
+
+        // Collect standalone predicate blocks that appear between lib blocks
+        boolean seenLib = false;
+        List<AcsCommentSpan> toMove = new ArrayList<>();
+        for (int i = 0; i < lastLibIdx; i++) {
+            AcsCommentSpan sp = spans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                seenLib = true;
+            } else if (seenLib && sp.axiomaticName == null
+                    && LOGIC_OR_PREDICATE_IN_BLOCK.matcher(sp.text).find()) {
+                toMove.add(sp);
+            }
+        }
+        if (toMove.isEmpty()) return content;
+
+        // Remove them in reverse order to preserve offsets
+        List<AcsCommentSpan> rev = new ArrayList<>(toMove);
+        rev.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String result = content;
+        List<String> movedTexts = new ArrayList<>();
+        for (AcsCommentSpan sp : rev) {
+            movedTexts.add(0, result.substring(sp.start, sp.end));
+            result = result.substring(0, sp.start) + result.substring(sp.end);
+        }
+
+        // Insert after the last axiomatic block (machine or lib) in the modified content
+        List<AcsCommentSpan> newSpans = findAllAcsCommentSpans(result);
+        int insertAfter = -1;
+        for (int i = newSpans.size() - 1; i >= 0; i--) {
+            if (newSpans.get(i).axiomaticName != null) {
+                insertAfter = newSpans.get(i).end;
+                break;
+            }
+        }
+        if (insertAfter < 0) return content;
+
+        StringBuilder insert = new StringBuilder();
+        for (String t : movedTexts) insert.append(t);
+        return result.substring(0, insertAfter) + insert + result.substring(insertAfter);
+    }
+
+    /**
+     * Move todos os blocos ACSL de máquina (axiomáticos não-lib e predicados standalone) que
+     * aparecem após o primeiro bloco ghost ({@code /*@ ghost ... *\/}) para antes desse bloco.
+     * Isso garante que variáveis lógicas de máquina (ex.: {@code books}, {@code copyOf}) estejam
+     * declaradas quando o Frama-C processa os contratos de funções ghost.
+     */
+    private static String moveMachineAcslBlocksBeforeFirstGhostBlock(
+            String content, Map<String, Integer> rank) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+
+        // Find the first ghost block (/*@ ghost ... */)
+        int firstGhostStart = -1;
+        for (AcsCommentSpan sp : spans) {
+            if (sp.axiomaticName == null && sp.text.startsWith("/*@ ghost")) {
+                firstGhostStart = sp.start;
+                break;
+            }
+        }
+        if (firstGhostStart < 0) return content;
+
+        Set<String> libAndAxioms = new LinkedHashSet<>(rank.keySet());
+        for (String n : rank.keySet()) libAndAxioms.add(n + "_axioms");
+
+        // Collect machine-specific ACSL blocks that appear AFTER the first ghost block
+        List<AcsCommentSpan> toMove = new ArrayList<>();
+        for (AcsCommentSpan sp : spans) {
+            if (sp.start <= firstGhostStart) continue;
+            boolean isLibAxioms = sp.axiomaticName != null
+                    && sp.axiomaticName.endsWith("_axioms")
+                    && libAndAxioms.contains(resolveParentAxiomaticName(sp.axiomaticName, spans));
+            boolean isMachineAxiomatic = sp.axiomaticName != null
+                    && !libAndAxioms.contains(sp.axiomaticName)
+                    && !isLibAxioms;
+            boolean isStandalonePredicate = sp.axiomaticName == null
+                    && LOGIC_OR_PREDICATE_IN_BLOCK.matcher(sp.text).find();
+            if (isMachineAxiomatic || isStandalonePredicate) {
+                toMove.add(sp);
+            }
+        }
+        if (toMove.isEmpty()) return content;
+
+        // Remove them in reverse order to preserve earlier offsets
+        List<AcsCommentSpan> rev = new ArrayList<>(toMove);
+        rev.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String result = content;
+        List<String> movedTexts = new ArrayList<>();
+        for (AcsCommentSpan sp : rev) {
+            movedTexts.add(0, result.substring(sp.start, sp.end));
+            result = result.substring(0, sp.start) + result.substring(sp.end);
+        }
+
+        // Find new position of first ghost block in modified content
+        List<AcsCommentSpan> newSpans = findAllAcsCommentSpans(result);
+        int newGhostStart = -1;
+        for (AcsCommentSpan sp : newSpans) {
+            if (sp.axiomaticName == null && sp.text.startsWith("/*@ ghost")) {
+                newGhostStart = sp.start;
+                break;
+            }
+        }
+        if (newGhostStart < 0) return content;
+
+        StringBuilder insertSb = new StringBuilder();
+        for (String t : movedTexts) insertSb.append(t);
+        return result.substring(0, newGhostStart) + insertSb + result.substring(newGhostStart);
+    }
+
     private static AcsCommentSpan findDeclAxiomaticBlock(List<AcsCommentSpan> spans, String name) {
         for (AcsCommentSpan sp : spans) {
             if (name.equals(sp.axiomaticName)) {
@@ -2026,6 +2159,14 @@ public final class B2ACSLPipeline {
         }
         for (String n : declNames) {
             if (axiomsName.equals(n + "_axioms")) {
+                return n;
+            }
+        }
+        // Caso: base começa com o nome de uma declaração conhecida seguida de "_"
+        // ex.: array_to_function_int_axioms → base = array_to_function_int
+        //      → começa com "array_to_function_" → pai = array_to_function
+        for (String n : declNames) {
+            if (base.startsWith(n + "_")) {
                 return n;
             }
         }

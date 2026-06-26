@@ -46,7 +46,21 @@ public final class SpecificationAxiomaticInstantiator {
     private static final Pattern GENERIC_DECL_SUFFIX = Pattern.compile(
             "\\b(\\w+)(<\\s*[A-Z](?:\\s*,\\s*[A-Z])*\\s*>)\\s*(?=[:(])");
 
+    /**
+     * Analisa identificadores de tipo legados no formato underscore:
+     * {@code Relation_integer_boolean}, {@code Function_int_int}, etc.
+     * Captura: grupo 1 = tipo A, grupo 2 = tipo B.
+     * Quantificador lazy no grupo 1 para separar corretamente (ex.: {@code integer_boolean} → A=integer, B=boolean).
+     */
+    private static final Pattern LEGACY_PAIR_TYPE = Pattern.compile(
+            "^(?:Relation|Function)_([a-z][a-z0-9_]*?)_([a-z][a-z0-9_]*)$");
+
     private SpecificationAxiomaticInstantiator() {}
+
+    /** Normaliza {@code int} → {@code integer} para nomes de segmento simples. */
+    private static String normalizeLegacySegment(String seg) {
+        return "int".equals(seg) ? "integer" : seg;
+    }
 
     /** Verifica se {@code t} é uma variável de tipo genérica (letra maiúscula isolada, ex.: "A"). */
     private static boolean isTypeVariable(String t) {
@@ -99,6 +113,22 @@ public final class SpecificationAxiomaticInstantiator {
                                 && p.stream().noneMatch(SpecificationAxiomaticInstantiator::containsStatementChars)
                                 && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
                             pairs.add(p);
+                        }
+                    }
+                } else if (!t.contains("<") && (t.startsWith("Relation_") || t.startsWith("Function_"))) {
+                    // Tipos legados no formato underscore: Relation_int_int, Function_integer_boolean, etc.
+                    Matcher legacyM = LEGACY_PAIR_TYPE.matcher(t);
+                    if (legacyM.matches()) {
+                        String a = normalizeLegacySegment(legacyM.group(1));
+                        String b = normalizeLegacySegment(legacyM.group(2));
+                        if (!isTypeVariable(a) && !isTypeVariable(b)
+                                && !containsStatementChars(a) && !containsStatementChars(b)
+                                && !isLegacyDType(a) && !isLegacyDType(b)) {
+                            pairs.add(List.of(a, b));
+                            // Adiciona tipos individuais a setElem para que axiomas de aridade 1
+                            // (belongs, singleton, etc.) também sejam instanciados para esses tipos.
+                            if (!a.contains("<")) setElem.add(a);
+                            if (!b.contains("<")) setElem.add(b);
                         }
                     }
                 }
