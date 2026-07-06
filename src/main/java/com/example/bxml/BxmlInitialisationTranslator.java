@@ -237,10 +237,21 @@ public final class BxmlInitialisationTranslator {
     }
 
     private static void walkSubstitution(Element sub, List<String> ensures, BxmlTranslateContext ctx) {
+        walkSubstitution(sub, ensures, ctx, Set.of());
+    }
+
+    /**
+     * @param oldNames nomes de variáveis atribuídas em qualquer ramo da substituição paralela
+     *        ({@code ||}) que engloba {@code sub} (pode ser vazio fora de {@code ||}) — RHS e
+     *        condições de {@code If_Sub}/{@code Select} aninhados também precisam de {@code \old}
+     *        nessas variáveis, não só as atribuições diretas de {@code ||}.
+     */
+    private static void walkSubstitution(
+            Element sub, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
         if (sub == null) return;
         String ln = sub.getLocalName();
         switch (ln) {
-            case "Assignement_Sub" -> parseAssignementSub(sub, ensures, ctx);
+            case "Assignement_Sub" -> parseAssignementSub(sub, ensures, ctx, oldNames);
             case "Nary_Sub" -> {
                 String op = sub.getAttribute("op");
                 if (";".equals(op)) {
@@ -250,24 +261,24 @@ public final class BxmlInitialisationTranslator {
                         if (n.getNodeType() != Node.ELEMENT_NODE) continue;
                         Element ch = (Element) n;
                         if ("Attr".equals(ch.getLocalName())) continue;
-                        walkSubstitution(ch, ensures, ctx);
+                        walkSubstitution(ch, ensures, ctx, oldNames);
                     }
                 } else if ("||".equals(op)) {
                     // simultâneo: um ensures conjuntivo
-                    parseSimultaneous(sub, ensures, ctx);
+                    parseSimultaneous(sub, ensures, ctx, oldNames);
                 } else {
-                    walkSubstitution(firstSubChild(sub), ensures, ctx);
+                    walkSubstitution(firstSubChild(sub), ensures, ctx, oldNames);
                 }
             }
             case "Skip" -> { /* nada */ }
-            case "Bloc_Sub" -> walkSubstitution(firstSubChild(sub), ensures, ctx);
+            case "Bloc_Sub" -> walkSubstitution(firstSubChild(sub), ensures, ctx, oldNames);
             case "ANY_Sub" -> {
                 /* Tratado como contrato ghost por GhostOperationsCiGenerator; nada a emitir aqui. */
             }
             case "Becomes_In" -> parseBecomesInSub(sub, ensures, ctx);
             case "Becomes_Such_That" -> parseBecomesSuchThatSub(sub, ensures, ctx);
-            case "Select" -> parseSelectAsConditionalEnsures(sub, ensures, ctx);
-            case "If_Sub" -> parseIfSubAsConditionalEnsures(sub, ensures, ctx);
+            case "Select" -> parseSelectAsConditionalEnsures(sub, ensures, ctx, oldNames);
+            case "If_Sub" -> parseIfSubAsConditionalEnsures(sub, ensures, ctx, oldNames);
             default -> { /* outras substituições: extensão futura */ }
         }
     }
@@ -328,26 +339,20 @@ public final class BxmlInitialisationTranslator {
         return "\\forall " + String.join(", ", binders) + "; " + p + " ==> (" + q + ")";
     }
 
-    private static void parseSimultaneous(Element narySub, List<String> ensures, BxmlTranslateContext ctx) {
+    private static void parseSimultaneous(
+            Element narySub, List<String> ensures, BxmlTranslateContext ctx, Set<String> outerOldNames) {
         NodeList children = narySub.getChildNodes();
 
-        // Em substituição paralela (||), todas as RHS usam o pré-estado de TODAS as variáveis LHS.
-        Set<String> allLhsNames = new LinkedHashSet<>();
+        // Em substituição paralela (||), todas as RHS — e as condições/ramos de If_Sub/Select
+        // aninhados, mesmo dentro de Then/Else — usam o pré-estado de TODAS as variáveis
+        // atribuídas em qualquer ramo deste grupo (não só as de Assignement_Sub diretos).
+        Set<String> allLhsNames = new LinkedHashSet<>(outerOldNames);
         for (int i = 0; i < children.getLength(); i++) {
             Node n = children.item(i);
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Element ch = (Element) n;
-            if ("Attr".equals(ch.getLocalName()) || !"Assignement_Sub".equals(ch.getLocalName())) continue;
-            Element vars = firstChildElement(ch, "Variables");
-            if (vars == null) continue;
-            for (Element l : directExpChildren(vars)) {
-                if ("Id".equals(l.getLocalName())) {
-                    String v = l.getAttribute("value");
-                    if (v != null && !v.isBlank()) {
-                        allLhsNames.add(BxmlExpressionToAcsl.translateBNamedConstant(v.trim()));
-                    }
-                }
-            }
+            if ("Attr".equals(ch.getLocalName())) continue;
+            collectAssignedLhsNames(ch, allLhsNames);
         }
 
         for (int i = 0; i < children.getLength(); i++) {
@@ -362,10 +367,68 @@ public final class BxmlInitialisationTranslator {
             } else if ("Becomes_Such_That".equals(ch.getLocalName())) {
                 parseBecomesSuchThatSub(ch, ensures, ctx);
             } else if ("If_Sub".equals(ch.getLocalName())) {
-                parseIfSubAsConditionalEnsures(ch, ensures, ctx);
+                parseIfSubAsConditionalEnsures(ch, ensures, ctx, allLhsNames);
             } else if ("Select".equals(ch.getLocalName())) {
-                parseSelectAsConditionalEnsures(ch, ensures, ctx);
+                parseSelectAsConditionalEnsures(ch, ensures, ctx, allLhsNames);
             }
+        }
+    }
+
+    /**
+     * Recolhe recursivamente os nomes de variáveis atribuídas em toda a árvore de substituição
+     * (LHS de {@code Assignement_Sub}, {@code Variables} de {@code Becomes_Such_That}/{@code
+     * Becomes_In}), incluindo dentro de ramos {@code Then}/{@code Else}/{@code When} — para que uma
+     * {@code ||} que engloba um {@code If_Sub}/{@code Select} saiba de TODAS as variáveis
+     * simultaneamente atribuídas, mesmo as só atribuídas num dos ramos condicionais.
+     */
+    private static void collectAssignedLhsNames(Element sub, Set<String> out) {
+        if (sub == null) return;
+        switch (sub.getLocalName()) {
+            case "Assignement_Sub", "Becomes_Such_That", "Becomes_In" -> {
+                Element vars = firstChildElement(sub, "Variables");
+                if (vars == null) return;
+                for (Element l : directExpChildren(vars)) {
+                    if ("Id".equals(l.getLocalName())) {
+                        String v = l.getAttribute("value");
+                        if (v != null && !v.isBlank()) {
+                            out.add(BxmlExpressionToAcsl.translateBNamedConstant(v.trim()));
+                        }
+                    }
+                }
+            }
+            case "Nary_Sub", "Bloc_Sub" -> {
+                NodeList nl = sub.getChildNodes();
+                for (int i = 0; i < nl.getLength(); i++) {
+                    Node n = nl.item(i);
+                    if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                    Element ch = (Element) n;
+                    if ("Attr".equals(ch.getLocalName())) continue;
+                    collectAssignedLhsNames(ch, out);
+                }
+            }
+            case "If_Sub" -> {
+                Element thenEl = firstChildElement(sub, "Then");
+                if (thenEl != null) collectAssignedLhsNames(firstSubChild(thenEl), out);
+                Element elseEl = firstChildElement(sub, "Else");
+                if (elseEl != null) collectAssignedLhsNames(firstSubChild(elseEl), out);
+            }
+            case "Select" -> {
+                Element whenClauses = firstChildElement(sub, "When_Clauses");
+                if (whenClauses != null) {
+                    NodeList nl = whenClauses.getChildNodes();
+                    for (int i = 0; i < nl.getLength(); i++) {
+                        Node n = nl.item(i);
+                        if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                        Element when = (Element) n;
+                        if (!"When".equals(when.getLocalName())) continue;
+                        Element thenEl = firstChildElement(when, "Then");
+                        if (thenEl != null) collectAssignedLhsNames(firstSubChild(thenEl), out);
+                    }
+                }
+                Element elseEl = firstChildElement(sub, "Else");
+                if (elseEl != null) collectAssignedLhsNames(firstSubChild(elseEl), out);
+            }
+            default -> { /* Skip, ANY_Sub, etc. — nada a coletar */ }
         }
     }
 
@@ -373,18 +436,25 @@ public final class BxmlInitialisationTranslator {
      * {@code IF cond THEN body [ELSE body] END} → cláusulas {@code ensures} condicionais:
      * {@code (cond) ==> (efeito_then)} e, se existir {@code Else},
      * {@code !(cond) ==> (efeito_else)}.
+     *
+     * @param oldNames variáveis atribuídas simultaneamente noutro ramo da {@code ||} que engloba
+     *        este {@code If_Sub} (vazio fora de {@code ||}) — a condição e os efeitos herdam o
+     *        mesmo pré-estado para essas variáveis.
      */
     private static void parseIfSubAsConditionalEnsures(
-            Element ifSub, List<String> ensures, BxmlTranslateContext ctx) {
+            Element ifSub, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
         Element condEl = firstChildElement(ifSub, "Condition");
         Element thenEl = firstChildElement(ifSub, "Then");
         if (condEl == null || thenEl == null) return;
 
         String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
         if (cond == null || cond.isBlank()) return;
+        if (!oldNames.isEmpty()) {
+            cond = applyOldWrapping(cond, oldNames);
+        }
 
         List<String> thenEnsures = new ArrayList<>();
-        walkSubstitution(firstSubChild(thenEl), thenEnsures, ctx);
+        walkSubstitution(firstSubChild(thenEl), thenEnsures, ctx, oldNames);
         for (String e : thenEnsures) {
             ensures.add("(" + cond + ") ==> (" + e + ")");
         }
@@ -392,7 +462,7 @@ public final class BxmlInitialisationTranslator {
         Element elseEl = firstChildElement(ifSub, "Else");
         if (elseEl != null) {
             List<String> elseEnsures = new ArrayList<>();
-            walkSubstitution(firstSubChild(elseEl), elseEnsures, ctx);
+            walkSubstitution(firstSubChild(elseEl), elseEnsures, ctx, oldNames);
             for (String e : elseEnsures) {
                 ensures.add("!(" + cond + ") ==> (" + e + ")");
             }
@@ -402,9 +472,12 @@ public final class BxmlInitialisationTranslator {
     /**
      * {@code SELECT cond1 THEN body1 WHEN cond2 THEN body2 … [ELSE body] END} → cláusulas
      * {@code ensures} sequenciais: o i-ésimo {@code WHEN} só dispara se os anteriores falharam.
+     *
+     * @param oldNames variáveis atribuídas simultaneamente noutro ramo da {@code ||} que engloba
+     *        este {@code Select} (vazio fora de {@code ||}).
      */
     private static void parseSelectAsConditionalEnsures(
-            Element select, List<String> ensures, BxmlTranslateContext ctx) {
+            Element select, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
         Element whenClauses = firstChildElement(select, "When_Clauses");
         List<String> whenConds = new ArrayList<>();
         List<List<String>> whenEffects = new ArrayList<>();
@@ -423,9 +496,12 @@ public final class BxmlInitialisationTranslator {
 
                 String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
                 if (cond == null || cond.isBlank()) continue;
+                if (!oldNames.isEmpty()) {
+                    cond = applyOldWrapping(cond, oldNames);
+                }
 
                 List<String> branchEnsures = new ArrayList<>();
-                walkSubstitution(firstSubChild(thenEl), branchEnsures, ctx);
+                walkSubstitution(firstSubChild(thenEl), branchEnsures, ctx, oldNames);
                 whenConds.add(cond);
                 whenEffects.add(branchEnsures);
             }
@@ -443,7 +519,7 @@ public final class BxmlInitialisationTranslator {
         Element elseEl = firstChildElement(select, "Else");
         if (elseEl != null) {
             List<String> elseEnsures = new ArrayList<>();
-            walkSubstitution(firstSubChild(elseEl), elseEnsures, ctx);
+            walkSubstitution(firstSubChild(elseEl), elseEnsures, ctx, oldNames);
             String elseCond = selectElseCondition(whenConds);
             for (String e : elseEnsures) {
                 ensures.add("(" + elseCond + ") ==> (" + e + ")");

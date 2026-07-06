@@ -147,6 +147,19 @@ public final class SpecificationAxiomaticInstantiator {
                 }
             }
 
+            // Simetriza: para cada par (A, B) garante também (B, A). O bloco genérico
+            // Relation_inverse<A,B> (relation_functions/inverse.acsl) devolve Relation<B,A> e
+            // quantifica sobre Tuple<B,A> no seu axioma — como esse bloco é instanciado para
+            // todo par em pairTypes (independentemente de relation_inverse ser chamado com esse
+            // par na especificação), sem o par invertido as declarações first/second/couple/equals
+            // de Tuple<B,A> nunca são geradas, e o Frama-C rejeita o merge com
+            // "no such predicate or logic function second(Tuple<B,A>)".
+            Set<List<String>> withSwapped = new LinkedHashSet<>(pairs);
+            for (List<String> pair : pairs) {
+                withSwapped.add(List.of(pair.get(1), pair.get(0)));
+            }
+            pairs = withSwapped;
+
             // Para cada par (A, B), adiciona Tuple<A, B> como tipo elemento de Set.
             // Necessário para instanciar axiomas de conjunto puro (belongs, dom, ran, etc.)
             // com Tuple<A,B> como tipo concreto de A (e.g. belongs_Tuple_integer_integer).
@@ -406,33 +419,41 @@ public final class SpecificationAxiomaticInstantiator {
 
     // ── Substituições concretas ───────────────────────────────────────────────
 
+    /**
+     * Sinal de que {@code A} é o tipo de elemento de uma sequência B codificada como função total
+     * {@code integer --> A} (ex.: {@code is_sequence_def_B<A>}), mesmo sem {@code \list<A>} literal.
+     */
+    private static final Pattern SEQUENCE_ENCODED_AS_FUNCTION_OF_A =
+            Pattern.compile("Function\\s*<\\s*integer\\s*,\\s*A\\s*>");
+
     private static List<List<String>> buildSubstitutions(
             int arity, String content, MonoContext ctx) {
         if (arity == 1) {
             Set<String> candidates = new LinkedHashSet<>();
-            boolean hasList = content.contains("\\list<A");
+            // "[|" é o delimitador ACSL de literal de sequência (ex.: "[| n |]"); axiomas como
+            // ran_singleton_explicit<A>/front_singleton<A> usam-no em vez de um "\list<A>"
+            // explícito, mas continuam a ser sobre sequências, não sobre Set<A> genérico.
+            boolean hasList = content.contains("\\list<A") || content.contains("[|");
             boolean hasSet  = content.contains("Set<A");
+            boolean hasSequenceFunction = SEQUENCE_ENCODED_AS_FUNCTION_OF_A.matcher(content).find();
 
-            if (hasList) {
-                // Axiomas/lemas de sequência (têm \list<A>): o parâmetro A é um tipo
-                // de elemento de lista. Usa apenas listElemTypes para não gerar instâncias
-                // para Tuple<...> ou boolean que causam erros de tipo no Frama-C.
+            if (hasList || (!hasSet && hasSequenceFunction)) {
+                // Axiomas/lemas de sequência (\list<A>, ou Function<integer,A> como em
+                // is_sequence_def_B<A>): o parâmetro A é um tipo de elemento de lista. Usa
+                // apenas listElemTypes para não gerar instâncias para Tuple<...> ou boolean que
+                // não fazem sentido nessa codificação.
                 candidates.addAll(ctx.listElemTypes());
-            } else if (hasSet) {
-                // Axiomas de conjunto puros (Set<A>, sem \list<A>): A pode ser qualquer
-                // elemento de conjunto, incluindo Tuple<...> (e.g. belongs_Tuple_integer_integer
-                // é necessário para os axiomas de relação dom/ran).
-                candidates.addAll(ctx.setElemTypes());
             } else {
-                // Fallback: axiomas sem Set<A>/\list<A> (e.g. is_sequence_def_B<A>).
-                // Usa listElemTypes para evitar instâncias problemáticas com Tuple/boolean.
-                if (!ctx.listElemTypes().isEmpty()) {
-                    candidates.addAll(ctx.listElemTypes());
-                } else {
-                    ctx.singleTypes().stream()
-                            .filter(t -> !t.startsWith("Tuple<"))
-                            .forEach(candidates::add);
-                }
+                // Axiomas de conjunto (Set<A> literal), ou catch-all genérico sem nenhum sinal
+                // textual de tipo (ex.: singleton_membership<A>, que só referencia singleton(yy)
+                // sem repetir "Set<A>" no corpo, mas cujo singleton() está instanciado para TODOS
+                // os tipos de elemento de conjunto, incluindo Tuple<...>). Sem uma verificação de
+                // "isto é mesmo uma sequência" específica (hasSequenceFunction), assumir que A
+                // percorre apenas listElemTypes — como o código fazia antes — sub-instanciava
+                // catch-alls genuinamente genéricos sempre que a especificação usasse \list em
+                // QUALQUER outro ponto (ex.: só {@code integer}, mesmo quando o axioma também
+                // precisa de {@code boolean}/{@code Tuple<...>}).
+                candidates.addAll(ctx.setElemTypes());
             }
             return candidates.stream().map(List::of).toList();
         }

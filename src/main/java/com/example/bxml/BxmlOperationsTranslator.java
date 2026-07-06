@@ -230,8 +230,16 @@ public final class BxmlOperationsTranslator {
                 rewriteRequiresForOutputParameters(requires, outputParams);
             }
 
+            Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, ctx);
             for (String p : outputParams) {
-                requires.add("\\valid(" + p + ")");
+                // Saídas array-backed (função/relação B) têm o \valid deferido: precisa do
+                // intervalo do domínio (ex.: "0 .. MAX_COPY"), só conhecido após o laço da
+                // implementação ser traduzido (ver functionTypedOutputBounds mais abaixo).
+                // \valid(p) sozinho só cobre *p; sem o intervalo, o Frama-C aceita o assigns
+                // p[..] mas o WP não tem base para validar p[1..N-1].
+                if (!funcTypedOutputs.contains(p)) {
+                    requires.add("\\valid(" + p + ")");
+                }
             }
 
             List<String> ensures = new ArrayList<>();
@@ -239,7 +247,6 @@ public final class BxmlOperationsTranslator {
             if (body != null) {
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
             }
-            Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, ctx);
             applyStarPrefixToEnsures(ensures, outputParams);
             rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, ctx);
             removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
@@ -361,6 +368,22 @@ public final class BxmlOperationsTranslator {
                 }
                 loops = rewrittenLoops;
             }
+            // Intervalo do domínio de cada saída array-backed (ex.: cc -> "MAX_COPY", de
+            // "loop variant (MAX_COPY - ii) + 1"), derivado ANTES da reescrita do assigns do
+            // laço para funcTypedOutputs (que já consome este mesmo padrão por laço).
+            Map<String, String> functionTypedOutputBounds =
+                    extractFunctionTypedOutputBounds(loops, funcTypedOutputs);
+            for (String p : outputParams) {
+                if (!funcTypedOutputs.contains(p)) {
+                    continue;
+                }
+                String bound = functionTypedOutputBounds.get(p);
+                requires.add(
+                        bound != null
+                                ? "\\valid(" + p + " + (0 .. " + bound + "))"
+                                : "\\valid(" + p + ")");
+            }
+
             if (!funcTypedOutputs.isEmpty() && !loops.isEmpty()) {
                 loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
             }
@@ -382,6 +405,7 @@ public final class BxmlOperationsTranslator {
                             ensures,
                             outputParams,
                             funcTypedOutputs,
+                            functionTypedOutputBounds,
                             ghostSlug,
                             ghostBehaviorArgs,
                             dummyGhostEnsureVars,
@@ -575,6 +599,33 @@ public final class BxmlOperationsTranslator {
             result.add(new BxmlLoopTranslator.LoopContract(lc.index(), inv, lc.variant(), newAssigns));
         }
         return List.copyOf(result);
+    }
+
+    /**
+     * Para cada saída array-backed atribuída num laço, o limite superior do seu domínio (mesma
+     * extração usada por {@link #rewriteLoopsForFunctionTypedOutputs}), usado para o {@code
+     * requires \valid(p + (0 .. bound))} e o {@code assigns *(p + (0 .. bound))} ao nível da função
+     * — sem isto, {@code \valid(p)}/{@code p[..]} só garantem {@code *p} e o Frama-C pode reduzir o
+     * {@code assigns} ao reimprimir o merge, deixando {@code p[1..N-1]} sem cobertura de validade.
+     */
+    private static Map<String, String> extractFunctionTypedOutputBounds(
+            List<BxmlLoopTranslator.LoopContract> loops, Set<String> funcTypedOutputs) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (loops == null || loops.isEmpty() || funcTypedOutputs == null || funcTypedOutputs.isEmpty()) {
+            return out;
+        }
+        for (BxmlLoopTranslator.LoopContract lc : loops) {
+            String upperBound = extractLoopUpperBound(lc.variant(), lc.assigns(), funcTypedOutputs);
+            if (upperBound == null) {
+                continue;
+            }
+            for (String a : lc.assigns()) {
+                if (funcTypedOutputs.contains(a)) {
+                    out.putIfAbsent(a, upperBound);
+                }
+            }
+        }
+        return out;
     }
 
     /**
@@ -874,6 +925,13 @@ public final class BxmlOperationsTranslator {
             List<String> outputParameters,
             /** Subconjunto de {@code outputParameters} cujo tipo B é função/relação (POW(X*Y)); viram {@code assigns nome[..]}. */
             Set<String> functionTypedOutputParameters,
+            /**
+             * Para cada nome em {@code functionTypedOutputParameters} com limite superior conhecido
+             * (derivado do laço da implementação, ex. {@code "MAX_COPY"}), o {@code requires}/{@code
+             * assigns} usa {@code p + (0 .. bound)} em vez de {@code \valid(p)}/{@code p[..]} — que só
+             * cobrem {@code *p} e podem ser reduzidos pelo Frama-C ao reimprimir o merge.
+             */
+            Map<String, String> functionTypedOutputBounds,
             /** Vazio se a operação for pura face às variáveis abstratas; senão slug para {@code ghost__<slug>(…)}. */
             String ghostBehaviorSlug,
             /** Nomes dos parâmetros de entrada para o {@code assert ghost__…}; ordem do BXML. */
@@ -894,6 +952,8 @@ public final class BxmlOperationsTranslator {
         public OperationAcsl {
             functionTypedOutputParameters =
                     functionTypedOutputParameters == null ? Set.of() : Set.copyOf(functionTypedOutputParameters);
+            functionTypedOutputBounds =
+                    functionTypedOutputBounds == null ? Map.of() : Map.copyOf(functionTypedOutputBounds);
             dummyGhostEnsureVarNames =
                     dummyGhostEnsureVarNames == null ? List.of() : List.copyOf(dummyGhostEnsureVarNames);
             connectionConcreteAssigns =
@@ -916,6 +976,7 @@ public final class BxmlOperationsTranslator {
                     ensures,
                     outputParameters,
                     Set.of(),
+                    Map.of(),
                     ghostBehaviorSlug,
                     ghostBehaviorInputNames,
                     dummyGhostEnsureVarNames,
@@ -946,7 +1007,12 @@ public final class BxmlOperationsTranslator {
             boolean hasAssigns = false;
             for (String p : outputParameters) {
                 if (functionTypedOutputParameters.contains(p)) {
-                    sb.append("    assigns ").append(p).append("[..];\n");
+                    String bound = functionTypedOutputBounds.get(p);
+                    if (bound != null) {
+                        sb.append("    assigns *(").append(p).append(" + (0 .. ").append(bound).append("));\n");
+                    } else {
+                        sb.append("    assigns ").append(p).append("[..];\n");
+                    }
                 } else {
                     sb.append("    assigns *").append(p).append(";\n");
                 }

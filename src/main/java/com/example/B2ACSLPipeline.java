@@ -757,10 +757,15 @@ public final class B2ACSLPipeline {
                     "[B2ACSL] Per-operation WP enabled; functions: " + operationFunctionNames);
         }
 
-        List<String> wpFunctionsToRun =
-                operationFunctionNames.isEmpty()
-                        ? List.of((String) null)
-                        : operationFunctionNames;
+        List<String> wpFunctionsToRun;
+        if (operationFunctionNames.isEmpty()) {
+            // List.of(null) throws NPE by contract; a single whole-file WP run is requested
+            // with a null function name (buildWpCommand omits -wp-fct in that case).
+            wpFunctionsToRun = new ArrayList<>();
+            wpFunctionsToRun.add(null);
+        } else {
+            wpFunctionsToRun = operationFunctionNames;
+        }
         int failingExitCode = 0;
         for (String functionName : wpFunctionsToRun) {
             List<String> wpCmd =
