@@ -99,7 +99,31 @@ public final class SpecificationAxiomaticInstantiator {
                 if (t.startsWith("Set<") && t.endsWith(">")) {
                     String inner = t.substring(4, t.length() - 1).trim();
                     // Ignora variáveis de tipo (letras maiúsculas isoladas, ex.: "A") e tipos legados D*
-                    if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) setElem.add(inner);
+                    if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) {
+                        setElem.add(inner);
+                        // Set<Tuple<A,B>> também expressa uma relação (A,B): sem registar o par
+                        // aqui, blocos de aridade 2 (dom, ran, cartesian_product, is_total_function,
+                        // …) nunca são instanciados para pares só vistos nesta forma "expandida" —
+                        // como os aliases sempre presentes de types.acsl (ex.: Relation_int_bool =
+                        // Set<Tuple<integer,boolean> >), que hoje só alimentam setElemTypes (via
+                        // este mesmo ramo) e nunca pairTypes, deixando dom/ran inconsistentes com
+                        // os tipos listados em axiomatic new_types.
+                        if (inner.startsWith("Tuple<") && inner.endsWith(">")) {
+                            List<String> tupleParts =
+                                    splitTopComma(inner.substring(6, inner.length() - 1));
+                            if (tupleParts.size() == 2) {
+                                List<String> p = tupleParts.stream().map(String::trim).toList();
+                                if (p.stream().noneMatch(SpecificationAxiomaticInstantiator::isTypeVariable)
+                                        && p.stream()
+                                                .noneMatch(
+                                                        SpecificationAxiomaticInstantiator
+                                                                ::containsStatementChars)
+                                        && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
+                                    pairs.add(p);
+                                }
+                            }
+                        }
+                    }
                 } else if (t.startsWith("\\list<") && t.endsWith(">")) {
                     String inner = t.substring(6, t.length() - 1).trim();
                     if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) listElem.add(inner);

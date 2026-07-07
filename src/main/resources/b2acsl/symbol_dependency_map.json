@@ -65,8 +65,8 @@
   ],
   "symbol_to_defining_file": {
     "apply": "relation_functions/apply.acsl",
-    "array_to_function_bool": "function_functions/array_to_function.acsl",
-    "array_to_function_int": "function_functions/array_to_function.acsl",
+    "array_to_function_bool": "function_functions/array_to_function_bool.acsl",
+    "array_to_function_int": "function_functions/array_to_function_int.acsl",
     "becomes_element_of": "function_functions/becomes_element_of.acsl",
     "belongs": "set_functions/belongs.acsl",
     "card": "set_functions/card.acsl",
@@ -127,10 +127,10 @@
       "relation_functions/apply.acsl"
     ],
     "array_to_function_bool": [
-      "function_functions/array_to_function.acsl"
+      "function_functions/array_to_function_bool.acsl"
     ],
     "array_to_function_int": [
-      "function_functions/array_to_function.acsl"
+      "function_functions/array_to_function_int.acsl"
     ],
     "becomes_element_of": [
       "function_functions/becomes_element_of.acsl"
@@ -307,7 +307,6 @@
       "second"
     ],
     "array_to_function_bool": [
-      "array_to_function_int",
       "belongs",
       "couple",
       "dom",
@@ -323,7 +322,6 @@
       "ran_witness"
     ],
     "array_to_function_int": [
-      "array_to_function_bool",
       "belongs",
       "couple",
       "dom",
@@ -673,7 +671,8 @@
   "includes_from": {
     "function.acsl": [
       "function_functions/apply.acsl",
-      "function_functions/array_to_function.acsl",
+      "function_functions/array_to_function_bool.acsl",
+      "function_functions/array_to_function_int.acsl",
       "function_functions/becomes_element_of.acsl",
       "function_functions/id.acsl",
       "function_functions/is_bijective.acsl",
@@ -694,9 +693,17 @@
       "set_functions/belongs.acsl",
       "tuple_functions/tuple_couple.acsl"
     ],
-    "function_axioms/array_to_function_axioms.acsl": [
+    "function_axioms/array_to_function_bool_axioms.acsl": [
       "function_functions/apply.acsl",
-      "function_functions/array_to_function.acsl",
+      "function_functions/array_to_function_bool.acsl",
+      "function_functions/is_function.acsl",
+      "relation_functions/domain.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
+    "function_axioms/array_to_function_int_axioms.acsl": [
+      "function_functions/apply.acsl",
+      "function_functions/array_to_function_int.acsl",
       "function_functions/is_function.acsl",
       "relation_functions/domain.acsl",
       "set_functions/belongs.acsl",
@@ -710,8 +717,11 @@
     "function_functions/apply.acsl": [
       "function_axioms/apply_axioms.acsl"
     ],
-    "function_functions/array_to_function.acsl": [
-      "function_axioms/array_to_function_axioms.acsl"
+    "function_functions/array_to_function_bool.acsl": [
+      "function_axioms/array_to_function_bool_axioms.acsl"
+    ],
+    "function_functions/array_to_function_int.acsl": [
+      "function_axioms/array_to_function_int_axioms.acsl"
     ],
     "function_functions/becomes_element_of.acsl": [
       "function_functions/apply.acsl",
@@ -761,8 +771,15 @@
     ],
     "lemmas.acsl": [
       "function_functions/apply.acsl",
+      "function_functions/array_to_function_bool.acsl",
+      "function_functions/array_to_function_int.acsl",
+      "function_functions/is_surjective.acsl",
+      "function_functions/is_total.acsl",
+      "relation_functions/apply.acsl",
       "relation_functions/domain.acsl",
       "relation_functions/domain_restriction.acsl",
+      "relation_functions/inverse.acsl",
+      "relation_functions/range_restriction.acsl",
       "sequence_functions/front.acsl",
       "sequence_functions/function_to_list.acsl",
       "sequence_functions/is_seq_of.acsl",
