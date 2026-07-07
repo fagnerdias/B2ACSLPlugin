@@ -223,15 +223,23 @@ public final class BxmlOperationsTranslator {
             }
             Element pre = firstChildElement(child, "Precondition");
             List<String> outputParams = parseOutputParameterNames(child);
-            Map<String, String> arrayParamLens = inferArrayFunctionParamLengths(child, ctx);
+            Map<String, ArrayFunctionParamInfo> arrayParamLens = inferArrayFunctionParamLengths(child, ctx);
             if (pre != null) {
                 requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
                 rewriteAcslListForArrayBackedParams(requires, arrayParamLens);
-                rewriteRequiresForOutputParameters(requires, outputParams);
+                rewriteRequiresForOutputParameters(requires, outputParams, boolOutputParameterNames(child, ctx));
             }
 
+            Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, ctx);
             for (String p : outputParams) {
-                requires.add("\\valid(" + p + ")");
+                // Saídas array-backed (função/relação B) têm o \valid deferido: precisa do
+                // intervalo do domínio (ex.: "0 .. MAX_COPY"), só conhecido após o laço da
+                // implementação ser traduzido (ver functionTypedOutputBounds mais abaixo).
+                // \valid(p) sozinho só cobre *p; sem o intervalo, o Frama-C aceita o assigns
+                // p[..] mas o WP não tem base para validar p[1..N-1].
+                if (!funcTypedOutputs.contains(p)) {
+                    requires.add("\\valid(" + p + ")");
+                }
             }
 
             List<String> ensures = new ArrayList<>();
@@ -241,6 +249,7 @@ public final class BxmlOperationsTranslator {
             }
             applyStarPrefixToEnsures(ensures, outputParams);
             rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, ctx);
+            removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
             List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
             for (String inv : invariantPredicateNames) {
                 ensures.add(inv);
@@ -359,6 +368,25 @@ public final class BxmlOperationsTranslator {
                 }
                 loops = rewrittenLoops;
             }
+            // Intervalo do domínio de cada saída array-backed (ex.: cc -> "MAX_COPY", de
+            // "loop variant (MAX_COPY - ii) + 1"), derivado ANTES da reescrita do assigns do
+            // laço para funcTypedOutputs (que já consome este mesmo padrão por laço).
+            Map<String, String> functionTypedOutputBounds =
+                    extractFunctionTypedOutputBounds(loops, funcTypedOutputs);
+            for (String p : outputParams) {
+                if (!funcTypedOutputs.contains(p)) {
+                    continue;
+                }
+                String bound = functionTypedOutputBounds.get(p);
+                requires.add(
+                        bound != null
+                                ? "\\valid(" + p + " + (0 .. " + bound + "))"
+                                : "\\valid(" + p + ")");
+            }
+
+            if (!funcTypedOutputs.isEmpty() && !loops.isEmpty()) {
+                loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
+            }
 
             boolean skipBody = isBodyPureSkip(body);
             // Se a abstrata tem Skip mas a implementação tem corpo real (ex.: Operation_Call),
@@ -376,6 +404,8 @@ public final class BxmlOperationsTranslator {
                             requires,
                             ensures,
                             outputParams,
+                            funcTypedOutputs,
+                            functionTypedOutputBounds,
                             ghostSlug,
                             ghostBehaviorArgs,
                             dummyGhostEnsureVars,
@@ -501,6 +531,138 @@ public final class BxmlOperationsTranslator {
             String rhs = s.substring(eq + 4).trim();
             ensures.set(i, "(integer)(*" + param + " != 0) == " + rhs);
         }
+    }
+
+    private static Set<String> functionTypedOutputParamNames(Element operation, BxmlTranslateContext ctx) {
+        Set<String> out = new HashSet<>();
+        Element outEl = firstChildElement(operation, "Output_Parameters");
+        if (outEl == null || ctx == null) return out;
+        NodeList ch = outEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if (!"Id".equals(e.getLocalName())) continue;
+            String name = e.getAttribute("value");
+            if (name == null || name.isBlank()) continue;
+            String trAttr = e.getAttribute("typref");
+            if (trAttr == null || trAttr.isBlank()) continue;
+            try {
+                int tr = Integer.parseInt(trAttr.trim());
+                String rawType = ctx.types().getRawType(tr);
+                // POW(X*Y) representa uma função ou relação B → output é array em C
+                if (rawType != null && rawType.startsWith("POW(") && rawType.contains("*")) {
+                    out.add(name.trim());
+                }
+            } catch (NumberFormatException ignored) {
+                // skip
+            }
+        }
+        return out;
+    }
+
+    private static void removeEnsuresForFunctionTypedOutputs(
+            List<String> ensures, Set<String> funcTypedOutputs) {
+        if (ensures == null || ensures.isEmpty() || funcTypedOutputs == null || funcTypedOutputs.isEmpty()) {
+            return;
+        }
+        ensures.removeIf(e -> {
+            if (e == null) return false;
+            int eq = e.indexOf(" == ");
+            if (eq < 0) return false;
+            String lhs = e.substring(0, eq).trim();
+            if (lhs.startsWith("*")) {
+                return funcTypedOutputs.contains(lhs.substring(1).trim());
+            }
+            return false;
+        });
+    }
+
+    private static List<BxmlLoopTranslator.LoopContract> rewriteLoopsForFunctionTypedOutputs(
+            List<BxmlLoopTranslator.LoopContract> loops, Set<String> funcTypedOutputs) {
+        List<BxmlLoopTranslator.LoopContract> result = new ArrayList<>();
+        for (BxmlLoopTranslator.LoopContract lc : loops) {
+            String inv = rewriteArrayOutputFunctionApply(lc.invariant(), funcTypedOutputs);
+            String upperBound = extractLoopUpperBound(lc.variant(), lc.assigns(), funcTypedOutputs);
+            List<String> newAssigns = new ArrayList<>();
+            for (String a : lc.assigns()) {
+                if (funcTypedOutputs.contains(a)) {
+                    if (upperBound != null) {
+                        newAssigns.add(a + "[0.." + upperBound + "]");
+                    } else {
+                        newAssigns.add(a + "[..]");
+                    }
+                } else {
+                    newAssigns.add(a);
+                }
+            }
+            result.add(new BxmlLoopTranslator.LoopContract(lc.index(), inv, lc.variant(), newAssigns));
+        }
+        return List.copyOf(result);
+    }
+
+    /**
+     * Para cada saída array-backed atribuída num laço, o limite superior do seu domínio (mesma
+     * extração usada por {@link #rewriteLoopsForFunctionTypedOutputs}), usado para o {@code
+     * requires \valid(p + (0 .. bound))} e o {@code assigns *(p + (0 .. bound))} ao nível da função
+     * — sem isto, {@code \valid(p)}/{@code p[..]} só garantem {@code *p} e o Frama-C pode reduzir o
+     * {@code assigns} ao reimprimir o merge, deixando {@code p[1..N-1]} sem cobertura de validade.
+     */
+    private static Map<String, String> extractFunctionTypedOutputBounds(
+            List<BxmlLoopTranslator.LoopContract> loops, Set<String> funcTypedOutputs) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (loops == null || loops.isEmpty() || funcTypedOutputs == null || funcTypedOutputs.isEmpty()) {
+            return out;
+        }
+        for (BxmlLoopTranslator.LoopContract lc : loops) {
+            String upperBound = extractLoopUpperBound(lc.variant(), lc.assigns(), funcTypedOutputs);
+            if (upperBound == null) {
+                continue;
+            }
+            for (String a : lc.assigns()) {
+                if (funcTypedOutputs.contains(a)) {
+                    out.putIfAbsent(a, upperBound);
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Tenta extrair o limite superior do loop a partir da expressão do variante.
+     * Para variantes da forma {@code (UPPER - counter + 1)} ou {@code (UPPER - counter)},
+     * retorna {@code UPPER} como string ACSL.
+     */
+    private static String extractLoopUpperBound(String variant, List<String> assigns,
+            Set<String> funcTypedOutputs) {
+        if (variant == null || variant.isBlank()) return null;
+        // Loop counter: assign that is not a function-typed output
+        String counter = assigns.stream()
+                .filter(a -> !funcTypedOutputs.contains(a))
+                .findFirst()
+                .orElse(null);
+        if (counter == null) return null;
+        // Match pattern: WORD - counter (anywhere in the variant)
+        Pattern p = Pattern.compile("(\\w+)\\s*-\\s*" + Pattern.quote(counter));
+        Matcher m = p.matcher(variant);
+        if (m.find()) return m.group(1);
+        return null;
+    }
+
+    private static String rewriteArrayOutputFunctionApply(String s, Set<String> params) {
+        if (s == null || s.isBlank() || params == null || params.isEmpty()) return s;
+        for (String p : params) {
+            String q = Pattern.quote(p);
+            // function_apply(p, X) == \true  →  p[X] != 0
+            s = s.replaceAll("function_apply\\(" + q + ",\\s*([^)]+)\\)\\s*==\\s*\\\\true",
+                    p + "[$1] != 0");
+            // function_apply(p, X) == \false  →  p[X] == 0
+            s = s.replaceAll("function_apply\\(" + q + ",\\s*([^)]+)\\)\\s*==\\s*\\\\false",
+                    p + "[$1] == 0");
+            // remaining function_apply(p, X)  →  p[X]
+            s = s.replaceAll("function_apply\\(" + q + ",\\s*([^)]+)\\)", p + "[$1]");
+        }
+        return s;
     }
 
     private static Set<String> boolOutputParameterNames(Element operation, BxmlTranslateContext ctx) {
@@ -633,11 +795,12 @@ public final class BxmlOperationsTranslator {
                     "^belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^)]+)\\s*\\)$");
 
     private static void rewriteRequiresForOutputParameters(
-            List<String> requires, List<String> outputParams) {
+            List<String> requires, List<String> outputParams, Set<String> boolOutputParams) {
         if (requires == null || requires.isEmpty() || outputParams == null || outputParams.isEmpty()) {
             return;
         }
         Set<String> out = new HashSet<>(outputParams);
+        Set<String> boolOut = boolOutputParams == null ? Set.of() : boolOutputParams;
         for (int i = 0; i < requires.size(); i++) {
             String req = requires.get(i);
             if (req == null || req.isBlank()) {
@@ -652,48 +815,71 @@ public final class BxmlOperationsTranslator {
             if (!out.contains(var)) {
                 continue;
             }
-            String value = "(integer)*" + var;
+            // Saídas bool (C _Bool*) correspondem diretamente ao tipo lógico ACSL "boolean" — sem
+            // cast. O cast (integer) só se aplica a saídas int/enum (ex.: cc : COPY em Biblioteca),
+            // cujo domínio (Set<integer>) exige elevar o valor C para o tipo lógico "integer".
+            // Aplicá-lo também a saídas bool comparadas contra um domínio Set<boolean> (ex.: BOOL)
+            // provoca "invalid implicit conversion from integer to boolean" no Frama-C.
+            String value = boolOut.contains(var) ? "*" + var : "(integer)*" + var;
             requires.set(i, "belongs(" + value + ", " + set + ")");
+        }
+    }
+
+    /**
+     * Comprimento e tipo do codomínio de um parâmetro array-backed ({@code xx : A --> B} na
+     * precondição): {@code array_to_function_bool} quando {@code B} é {@code BOOL}, senão
+     * {@code array_to_function_int}.
+     */
+    /**
+     * Visibilidade de pacote: também usada por {@link BxmlSetsTranslator#collectMachineTextForIncludeScan}
+     * para reproduzir a mesma reescrita {@code array_to_function_*(...)} na varredura de símbolos de
+     * includes quando o {@code .acsl} real da máquina dependente ainda não foi gerado.
+     */
+    record ArrayFunctionParamInfo(String lengthExpr, boolean boolCodomain) {
+        String functionName() {
+            return boolCodomain ? "array_to_function_bool" : "array_to_function_int";
         }
     }
 
     /**
      * Em operações cuja entrada concreta é array/pointer representando função total em B
      * ({@code xx : A --> B}), reescreve chamadas de contrato que esperam {@code Function_int_int}
-     * para usar {@code array_to_function(xx, len)}.
+     * para usar {@code array_to_function_int(xx, len)}/{@code array_to_function_bool(xx, len)}.
      */
     /**
      * Reescreve em {@code strings} todas as ocorrências de parâmetros array-backed ({@code param}
-     * como palavra isolada) para {@code array_to_function(param, len)}.
-     * Não re-envolve se já está dentro de {@code array_to_function(}.
+     * como palavra isolada) para {@code array_to_function_int(param, len)}/{@code
+     * array_to_function_bool(param, len)}. Não re-envolve se já está dentro de {@code
+     * array_to_function_int(}/{@code array_to_function_bool(}.
      */
-    private static void rewriteAcslListForArrayBackedParams(
-            List<String> strings, Map<String, String> lensByParam) {
-        if (strings == null || strings.isEmpty() || lensByParam == null || lensByParam.isEmpty()) {
+    static void rewriteAcslListForArrayBackedParams(
+            List<String> strings, Map<String, ArrayFunctionParamInfo> infoByParam) {
+        if (strings == null || strings.isEmpty() || infoByParam == null || infoByParam.isEmpty()) {
             return;
         }
         for (int i = 0; i < strings.size(); i++) {
-            strings.set(i, rewriteAcslStringForArrayBackedParams(strings.get(i), lensByParam));
+            strings.set(i, rewriteAcslStringForArrayBackedParams(strings.get(i), infoByParam));
         }
     }
 
     private static String rewriteAcslStringForArrayBackedParams(
-            String s, Map<String, String> lensByParam) {
-        if (s == null || s.isBlank() || lensByParam == null || lensByParam.isEmpty()) return s;
-        for (Map.Entry<String, String> e : lensByParam.entrySet()) {
+            String s, Map<String, ArrayFunctionParamInfo> infoByParam) {
+        if (s == null || s.isBlank() || infoByParam == null || infoByParam.isEmpty()) return s;
+        for (Map.Entry<String, ArrayFunctionParamInfo> e : infoByParam.entrySet()) {
             String p = e.getKey();
-            String len = e.getValue();
-            // Substitui ocorrências isoladas de p que não estejam já dentro de array_to_function(
+            ArrayFunctionParamInfo info = e.getValue();
+            String fn = info.functionName();
+            // Substitui ocorrências isoladas de p que não estejam já dentro de array_to_function_*(
             s = s.replaceAll(
-                    "(?<!array_to_function\\()\\b" + Pattern.quote(p) + "\\b",
-                    "array_to_function(" + p + ", " + len + ")");
+                    "(?<!array_to_function_int\\()(?<!array_to_function_bool\\()\\b" + Pattern.quote(p) + "\\b",
+                    fn + "(" + p + ", " + info.lengthExpr() + ")");
         }
         return s;
     }
 
-    private static Map<String, String> inferArrayFunctionParamLengths(
+    static Map<String, ArrayFunctionParamInfo> inferArrayFunctionParamLengths(
             Element operation, BxmlTranslateContext ctx) {
-        Map<String, String> out = new LinkedHashMap<>();
+        Map<String, ArrayFunctionParamInfo> out = new LinkedHashMap<>();
         Element pre = firstChildElement(operation, "Precondition");
         if (pre == null) {
             return out;
@@ -703,7 +889,7 @@ public final class BxmlOperationsTranslator {
     }
 
     private static void collectArrayFunctionParamLengths(
-            Element pred, BxmlTranslateContext ctx, Map<String, String> out) {
+            Element pred, BxmlTranslateContext ctx, Map<String, ArrayFunctionParamInfo> out) {
         if (pred == null || ctx == null) {
             return;
         }
@@ -719,7 +905,7 @@ public final class BxmlOperationsTranslator {
                     String p = pair[0].getAttribute("value");
                     String len = arrayDomainCardinalityAcsl(pair[1], ctx);
                     if (p != null && !p.isBlank() && len != null && !len.isBlank()) {
-                        out.put(p.trim(), len);
+                        out.put(p.trim(), new ArrayFunctionParamInfo(len, arrowCodomainIsBool(pair[1])));
                     }
                 }
             }
@@ -732,6 +918,15 @@ public final class BxmlOperationsTranslator {
             if ("Attr".equals(ch.getLocalName())) continue;
             collectArrayFunctionParamLengths(ch, ctx, out);
         }
+    }
+
+    /** Verdadeiro se o codomínio da seta {@code -->} for {@code BOOL}. */
+    private static boolean arrowCodomainIsBool(Element arrowEl) {
+        if (arrowEl == null) return false;
+        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
+        if (domRng[1] == null) return false;
+        Element codomain = domRng[1];
+        return "Id".equals(codomain.getLocalName()) && "BOOL".equals(codomain.getAttribute("value"));
     }
 
     private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx) {
@@ -761,6 +956,15 @@ public final class BxmlOperationsTranslator {
             List<String> ensures,
             /** Parâmetros de saída B (sem {@code *}); viram {@code assigns *nome}. */
             List<String> outputParameters,
+            /** Subconjunto de {@code outputParameters} cujo tipo B é função/relação (POW(X*Y)); viram {@code assigns nome[..]}. */
+            Set<String> functionTypedOutputParameters,
+            /**
+             * Para cada nome em {@code functionTypedOutputParameters} com limite superior conhecido
+             * (derivado do laço da implementação, ex. {@code "MAX_COPY"}), o {@code requires}/{@code
+             * assigns} usa {@code p + (0 .. bound)} em vez de {@code \valid(p)}/{@code p[..]} — que só
+             * cobrem {@code *p} e podem ser reduzidos pelo Frama-C ao reimprimir o merge.
+             */
+            Map<String, String> functionTypedOutputBounds,
             /** Vazio se a operação for pura face às variáveis abstratas; senão slug para {@code ghost__<slug>(…)}. */
             String ghostBehaviorSlug,
             /** Nomes dos parâmetros de entrada para o {@code assert ghost__…}; ordem do BXML. */
@@ -779,6 +983,10 @@ public final class BxmlOperationsTranslator {
             boolean skipBody) {
 
         public OperationAcsl {
+            functionTypedOutputParameters =
+                    functionTypedOutputParameters == null ? Set.of() : Set.copyOf(functionTypedOutputParameters);
+            functionTypedOutputBounds =
+                    functionTypedOutputBounds == null ? Map.of() : Map.copyOf(functionTypedOutputBounds);
             dummyGhostEnsureVarNames =
                     dummyGhostEnsureVarNames == null ? List.of() : List.copyOf(dummyGhostEnsureVarNames);
             connectionConcreteAssigns =
@@ -800,6 +1008,8 @@ public final class BxmlOperationsTranslator {
                     requires,
                     ensures,
                     outputParameters,
+                    Set.of(),
+                    Map.of(),
                     ghostBehaviorSlug,
                     ghostBehaviorInputNames,
                     dummyGhostEnsureVarNames,
@@ -829,7 +1039,16 @@ public final class BxmlOperationsTranslator {
             }
             boolean hasAssigns = false;
             for (String p : outputParameters) {
-                sb.append("    assigns *").append(p).append(";\n");
+                if (functionTypedOutputParameters.contains(p)) {
+                    String bound = functionTypedOutputBounds.get(p);
+                    if (bound != null) {
+                        sb.append("    assigns *(").append(p).append(" + (0 .. ").append(bound).append("));\n");
+                    } else {
+                        sb.append("    assigns ").append(p).append("[..];\n");
+                    }
+                } else {
+                    sb.append("    assigns *").append(p).append(";\n");
+                }
                 hasAssigns = true;
             }
             LinkedHashSet<String> connectionEmitted = new LinkedHashSet<>();

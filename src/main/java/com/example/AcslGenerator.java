@@ -328,7 +328,7 @@ public final class AcslGenerator {
                         initBare.assignsTargets(),
                         initGhostAssert,
                         dummyGhostVarsForInit,
-                        initBare.loopSpec(),
+                        initBare.loopSpecs(),
                         machineHasNoImports);
         InitialisationAcsl init =
                 isAbstraction
@@ -393,21 +393,12 @@ public final class AcslGenerator {
             if (!concreteConstants.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
-        // Traduz properties primeiro para popular o lambdaRegistry; emite lambda_functions antes
-        // de properties para que os predicados lambda estejam declarados quando properties os referencia.
+        // Traduz properties antecipadamente para popular o lambdaRegistry (lambdas de operações
+        // já registados em translateOperations acima). O bloco properties é emitido mais tarde,
+        // depois das variáveis e dos lambda_functions, pois lambda_functions pode referenciar
+        // variáveis de estado (ex.: copyOf) que só ficam declaradas após as variáveis.
         String propertiesBlock = BxmlConstantsAndProperties.formatPropertiesBlock(machineEl, ctx);
-        LambdaFunctionRegistry lambdaRegistryEarly = ctx.lambdaRegistry();
         int lambdaEmittedUpTo = 0;
-        if (lambdaRegistryEarly != null && !lambdaRegistryEarly.isEmpty()) {
-            sb.append(lambdaRegistryEarly.formatAxiomaticBlock());
-            sb.append("\n");
-            lambdaEmittedUpTo = lambdaRegistryEarly.size();
-        }
-        if (!propertiesBlock.isBlank()) {
-            sb.append(propertiesBlock);
-            if (!propertiesBlock.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
-        }
         String valuesRoot = BxmlConstantsAndProperties.formatValuesBlock(machineEl, ctx);
         if (!valuesRoot.isBlank()) {
             sb.append(valuesRoot);
@@ -458,7 +449,8 @@ public final class AcslGenerator {
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
-                            mel, ctx.comprehensions(), gluing, machineEl);
+                            mel, ctx.comprehensions(), gluing, machineEl)
+                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames());
             String varsMerged =
                     BxmlMachineVariables.formatAxiomaticBlock(
                             mel, mctx, baseName, refinementChainParent, gluing);
@@ -475,7 +467,8 @@ public final class AcslGenerator {
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
-                            mel, ctx.comprehensions(), gluing, machineEl);
+                            mel, ctx.comprehensions(), gluing, machineEl)
+                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames());
             String constsMerged = BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx);
             if (!constsMerged.isBlank()) {
                 sb.append(constsMerged);
@@ -500,7 +493,8 @@ public final class AcslGenerator {
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
-                            mel, ctx.comprehensions(), gluing, machineEl);
+                            mel, ctx.comprehensions(), gluing, machineEl)
+                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames());
             String valuesMerged = BxmlConstantsAndProperties.formatValuesBlock(mel, mctx);
             if (!valuesMerged.isBlank()) {
                 sb.append(valuesMerged);
@@ -518,13 +512,21 @@ public final class AcslGenerator {
             sb.append("\n");
         }
         appendMergedInvariantPredicatesOnly(
-                sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl);
+                sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
+                ctx.enumeratedSetRenames());
 
-        // 2b) Lambdas registados após a emissão antecipada (ex.: lambdas de operações)
+        // 2b) Lambdas (emissão tardia, após variáveis): lambda_functions pode referenciar variáveis
+        // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima.
+        // Properties da máquina raiz é emitido a seguir, pois pode referenciar predicados lambda.
         LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
         if (lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo) {
             sb.append("\n");
             sb.append(lambdaRegistry.formatAxiomaticBlockFrom(lambdaEmittedUpTo));
+            sb.append("\n");
+        }
+        if (!propertiesBlock.isBlank()) {
+            sb.append(propertiesBlock);
+            if (!propertiesBlock.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
 
@@ -672,14 +674,16 @@ public final class AcslGenerator {
             List<Element> mergedMachineRoots,
             Map<String, String> gluing,
             BxmlComprehensionRegistry sharedComprehensions,
-            Element rootAbstractMachineEl) {
+            Element rootAbstractMachineEl,
+            Map<String, String> enumeratedSetRenames) {
         if (mergedMachineRoots == null || mergedMachineRoots.isEmpty()) {
             return;
         }
         for (Element mel : mergedMachineRoots) {
             BxmlTranslateContext ctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
-                            mel, sharedComprehensions, gluing, rootAbstractMachineEl);
+                            mel, sharedComprehensions, gluing, rootAbstractMachineEl)
+                    .withEnumeratedSetRenames(enumeratedSetRenames);
             String inv = BxmlInvariantTranslator.formatInvariantPredicates(mel, ctx);
             if (inv.isBlank()) continue;
             sb.append("\n");
@@ -737,7 +741,7 @@ public final class AcslGenerator {
                 init.assignsTargets(),
                 init.includeGhostBehaviorAssert(),
                 init.dummyGhostEnsureVarNames(),
-                init.loopSpec(),
+                init.loopSpecs(),
                 init.emitMinimalContract());
     }
 

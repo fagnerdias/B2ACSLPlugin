@@ -545,6 +545,7 @@ public final class BxmlExpressionToAcsl {
         String op = n.getAttribute("op");
         if ("{".equals(op)) {
             // enumeração finita { e1, e2, ... } — ACSL_Lib/set_functions/singleton.acsl
+            // Boolean_Literal dentro de {} como \true/\false: BOOL é Set<boolean> em B2ACSL.
             java.util.List<String> parts = new java.util.ArrayList<>();
             NodeList children = n.getChildNodes();
             for (int i = 0; i < children.getLength(); i++) {
@@ -552,7 +553,12 @@ public final class BxmlExpressionToAcsl {
                 if (node.getNodeType() != Node.ELEMENT_NODE) continue;
                 Element e = (Element) node;
                 if ("Attr".equals(e.getLocalName())) continue;
-                parts.add(translate(e, ctx));
+                if ("Boolean_Literal".equals(e.getLocalName())) {
+                    String bv = e.getAttribute("value");
+                    parts.add("TRUE".equalsIgnoreCase(bv == null ? "" : bv.trim()) ? "\\true" : "\\false");
+                } else {
+                    parts.add(translate(e, ctx));
+                }
             }
             if (parts.size() == 1) return "singleton(" + parts.get(0) + ")";
             // { e1, e2, ..., eN } → set_union(set_union(singleton(e1), singleton(e2)), singleton(eN))

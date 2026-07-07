@@ -46,7 +46,21 @@ public final class SpecificationAxiomaticInstantiator {
     private static final Pattern GENERIC_DECL_SUFFIX = Pattern.compile(
             "\\b(\\w+)(<\\s*[A-Z](?:\\s*,\\s*[A-Z])*\\s*>)\\s*(?=[:(])");
 
+    /**
+     * Analisa identificadores de tipo legados no formato underscore:
+     * {@code Relation_integer_boolean}, {@code Function_int_int}, etc.
+     * Captura: grupo 1 = tipo A, grupo 2 = tipo B.
+     * Quantificador lazy no grupo 1 para separar corretamente (ex.: {@code integer_boolean} → A=integer, B=boolean).
+     */
+    private static final Pattern LEGACY_PAIR_TYPE = Pattern.compile(
+            "^(?:Relation|Function)_([a-z][a-z0-9_]*?)_([a-z][a-z0-9_]*)$");
+
     private SpecificationAxiomaticInstantiator() {}
+
+    /** Normaliza {@code int} → {@code integer} para nomes de segmento simples. */
+    private static String normalizeLegacySegment(String seg) {
+        return "int".equals(seg) ? "integer" : seg;
+    }
 
     /** Verifica se {@code t} é uma variável de tipo genérica (letra maiúscula isolada, ex.: "A"). */
     private static boolean isTypeVariable(String t) {
@@ -85,7 +99,31 @@ public final class SpecificationAxiomaticInstantiator {
                 if (t.startsWith("Set<") && t.endsWith(">")) {
                     String inner = t.substring(4, t.length() - 1).trim();
                     // Ignora variáveis de tipo (letras maiúsculas isoladas, ex.: "A") e tipos legados D*
-                    if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) setElem.add(inner);
+                    if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) {
+                        setElem.add(inner);
+                        // Set<Tuple<A,B>> também expressa uma relação (A,B): sem registar o par
+                        // aqui, blocos de aridade 2 (dom, ran, cartesian_product, is_total_function,
+                        // …) nunca são instanciados para pares só vistos nesta forma "expandida" —
+                        // como os aliases sempre presentes de types.acsl (ex.: Relation_int_bool =
+                        // Set<Tuple<integer,boolean> >), que hoje só alimentam setElemTypes (via
+                        // este mesmo ramo) e nunca pairTypes, deixando dom/ran inconsistentes com
+                        // os tipos listados em axiomatic new_types.
+                        if (inner.startsWith("Tuple<") && inner.endsWith(">")) {
+                            List<String> tupleParts =
+                                    splitTopComma(inner.substring(6, inner.length() - 1));
+                            if (tupleParts.size() == 2) {
+                                List<String> p = tupleParts.stream().map(String::trim).toList();
+                                if (p.stream().noneMatch(SpecificationAxiomaticInstantiator::isTypeVariable)
+                                        && p.stream()
+                                                .noneMatch(
+                                                        SpecificationAxiomaticInstantiator
+                                                                ::containsStatementChars)
+                                        && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
+                                    pairs.add(p);
+                                }
+                            }
+                        }
+                    }
                 } else if (t.startsWith("\\list<") && t.endsWith(">")) {
                     String inner = t.substring(6, t.length() - 1).trim();
                     if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) listElem.add(inner);
@@ -99,6 +137,22 @@ public final class SpecificationAxiomaticInstantiator {
                                 && p.stream().noneMatch(SpecificationAxiomaticInstantiator::containsStatementChars)
                                 && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
                             pairs.add(p);
+                        }
+                    }
+                } else if (!t.contains("<") && (t.startsWith("Relation_") || t.startsWith("Function_"))) {
+                    // Tipos legados no formato underscore: Relation_int_int, Function_integer_boolean, etc.
+                    Matcher legacyM = LEGACY_PAIR_TYPE.matcher(t);
+                    if (legacyM.matches()) {
+                        String a = normalizeLegacySegment(legacyM.group(1));
+                        String b = normalizeLegacySegment(legacyM.group(2));
+                        if (!isTypeVariable(a) && !isTypeVariable(b)
+                                && !containsStatementChars(a) && !containsStatementChars(b)
+                                && !isLegacyDType(a) && !isLegacyDType(b)) {
+                            pairs.add(List.of(a, b));
+                            // Adiciona tipos individuais a setElem para que axiomas de aridade 1
+                            // (belongs, singleton, etc.) também sejam instanciados para esses tipos.
+                            if (!a.contains("<")) setElem.add(a);
+                            if (!b.contains("<")) setElem.add(b);
                         }
                     }
                 }
@@ -116,6 +170,19 @@ public final class SpecificationAxiomaticInstantiator {
                     }
                 }
             }
+
+            // Simetriza: para cada par (A, B) garante também (B, A). O bloco genérico
+            // Relation_inverse<A,B> (relation_functions/inverse.acsl) devolve Relation<B,A> e
+            // quantifica sobre Tuple<B,A> no seu axioma — como esse bloco é instanciado para
+            // todo par em pairTypes (independentemente de relation_inverse ser chamado com esse
+            // par na especificação), sem o par invertido as declarações first/second/couple/equals
+            // de Tuple<B,A> nunca são geradas, e o Frama-C rejeita o merge com
+            // "no such predicate or logic function second(Tuple<B,A>)".
+            Set<List<String>> withSwapped = new LinkedHashSet<>(pairs);
+            for (List<String> pair : pairs) {
+                withSwapped.add(List.of(pair.get(1), pair.get(0)));
+            }
+            pairs = withSwapped;
 
             // Para cada par (A, B), adiciona Tuple<A, B> como tipo elemento de Set.
             // Necessário para instanciar axiomas de conjunto puro (belongs, dom, ran, etc.)
@@ -376,33 +443,41 @@ public final class SpecificationAxiomaticInstantiator {
 
     // ── Substituições concretas ───────────────────────────────────────────────
 
+    /**
+     * Sinal de que {@code A} é o tipo de elemento de uma sequência B codificada como função total
+     * {@code integer --> A} (ex.: {@code is_sequence_def_B<A>}), mesmo sem {@code \list<A>} literal.
+     */
+    private static final Pattern SEQUENCE_ENCODED_AS_FUNCTION_OF_A =
+            Pattern.compile("Function\\s*<\\s*integer\\s*,\\s*A\\s*>");
+
     private static List<List<String>> buildSubstitutions(
             int arity, String content, MonoContext ctx) {
         if (arity == 1) {
             Set<String> candidates = new LinkedHashSet<>();
-            boolean hasList = content.contains("\\list<A");
+            // "[|" é o delimitador ACSL de literal de sequência (ex.: "[| n |]"); axiomas como
+            // ran_singleton_explicit<A>/front_singleton<A> usam-no em vez de um "\list<A>"
+            // explícito, mas continuam a ser sobre sequências, não sobre Set<A> genérico.
+            boolean hasList = content.contains("\\list<A") || content.contains("[|");
             boolean hasSet  = content.contains("Set<A");
+            boolean hasSequenceFunction = SEQUENCE_ENCODED_AS_FUNCTION_OF_A.matcher(content).find();
 
-            if (hasList) {
-                // Axiomas/lemas de sequência (têm \list<A>): o parâmetro A é um tipo
-                // de elemento de lista. Usa apenas listElemTypes para não gerar instâncias
-                // para Tuple<...> ou boolean que causam erros de tipo no Frama-C.
+            if (hasList || (!hasSet && hasSequenceFunction)) {
+                // Axiomas/lemas de sequência (\list<A>, ou Function<integer,A> como em
+                // is_sequence_def_B<A>): o parâmetro A é um tipo de elemento de lista. Usa
+                // apenas listElemTypes para não gerar instâncias para Tuple<...> ou boolean que
+                // não fazem sentido nessa codificação.
                 candidates.addAll(ctx.listElemTypes());
-            } else if (hasSet) {
-                // Axiomas de conjunto puros (Set<A>, sem \list<A>): A pode ser qualquer
-                // elemento de conjunto, incluindo Tuple<...> (e.g. belongs_Tuple_integer_integer
-                // é necessário para os axiomas de relação dom/ran).
-                candidates.addAll(ctx.setElemTypes());
             } else {
-                // Fallback: axiomas sem Set<A>/\list<A> (e.g. is_sequence_def_B<A>).
-                // Usa listElemTypes para evitar instâncias problemáticas com Tuple/boolean.
-                if (!ctx.listElemTypes().isEmpty()) {
-                    candidates.addAll(ctx.listElemTypes());
-                } else {
-                    ctx.singleTypes().stream()
-                            .filter(t -> !t.startsWith("Tuple<"))
-                            .forEach(candidates::add);
-                }
+                // Axiomas de conjunto (Set<A> literal), ou catch-all genérico sem nenhum sinal
+                // textual de tipo (ex.: singleton_membership<A>, que só referencia singleton(yy)
+                // sem repetir "Set<A>" no corpo, mas cujo singleton() está instanciado para TODOS
+                // os tipos de elemento de conjunto, incluindo Tuple<...>). Sem uma verificação de
+                // "isto é mesmo uma sequência" específica (hasSequenceFunction), assumir que A
+                // percorre apenas listElemTypes — como o código fazia antes — sub-instanciava
+                // catch-alls genuinamente genéricos sempre que a especificação usasse \list em
+                // QUALQUER outro ponto (ex.: só {@code integer}, mesmo quando o axioma também
+                // precisa de {@code boolean}/{@code Tuple<...>}).
+                candidates.addAll(ctx.setElemTypes());
             }
             return candidates.stream().map(List::of).toList();
         }

@@ -76,8 +76,8 @@ public final class WpOptionsDialog {
                                     : defaultProjectName);
             projectField.setEditable(false);
 
-            JCheckBox cvc5Box = new JCheckBox("CVC5", true);
             JCheckBox altErgoBox = new JCheckBox("Alt-Ergo", false);
+            JCheckBox cvc5Box = new JCheckBox("CVC5", true);            
             JCheckBox z3Box = new JCheckBox("Z3", false);            
 
             JSpinner timeoutSpinner =
@@ -92,8 +92,8 @@ public final class WpOptionsDialog {
 
             JCheckBox loopSimplificationBox = new JCheckBox("Enable Loop Simplification", false);
             JCheckBox smokeTestsBox = new JCheckBox("Enable Smoke Tests (-wp-smoke-tests)", true);
-            JCheckBox counterExamplesBox = new JCheckBox("Counter Examples (-wp-counter-examples)", true);
-            JCheckBox splitGoalsBox = new JCheckBox("Split Goals (-wp-split)", true);
+            JCheckBox counterExamplesBox = new JCheckBox("Counter Examples (-wp-counter-examples)", false);
+            JCheckBox splitGoalsBox = new JCheckBox("Split Goals (-wp-split)", false);
             JCheckBox verifyPerOperationBox =
                     new JCheckBox("Verify each operation separately (-wp-fct)", true);
 
@@ -128,7 +128,7 @@ public final class WpOptionsDialog {
             content.add(field("Project name", projectField), gbc);
 
             gbc.gridy = 1;
-            content.add(proversField(cvc5Box, altErgoBox, z3Box), gbc);
+            content.add(proversField(altErgoBox, cvc5Box, z3Box), gbc);
 
             gbc.gridy = 2;
             gbc.gridwidth = 1;
@@ -146,13 +146,13 @@ public final class WpOptionsDialog {
             smokeTestsBox.setOpaque(false);
             content.add(smokeTestsBox, gbc);
 
-            gbc.gridy = 4;
-            counterExamplesBox.setOpaque(false);
-            content.add(counterExamplesBox, gbc);
+            // gbc.gridy = 4;
+            // counterExamplesBox.setOpaque(false);
+            // content.add(counterExamplesBox, gbc);
 
-            gbc.gridy = 5;
-            splitGoalsBox.setOpaque(false);
-            content.add(splitGoalsBox, gbc);
+            // gbc.gridy = 5;
+            // splitGoalsBox.setOpaque(false);
+            // content.add(splitGoalsBox, gbc);
 
             root.add(content, BorderLayout.CENTER);
 

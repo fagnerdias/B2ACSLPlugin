@@ -2,11 +2,12 @@
   "_meta": {
     "generator": "scripts/generate_acsl_symbol_dependency_map.py",
     "root": "src/main/resources/lib/B2ACSLLib",
-    "symbol_count": 59
+    "symbol_count": 57
   },
   "symbols": [
     "apply",
-    "array_to_function",
+    "array_to_function_bool",
+    "array_to_function_int",
     "becomes_element_of",
     "belongs",
     "card",
@@ -43,10 +44,7 @@
     "length",
     "list_to_function",
     "not_belongs",
-    "not_inclusion",
-    "not_strict_inclusion",
     "pair",
-    "pred",
     "ran",
     "ran_witness",
     "range_restriction",
@@ -60,14 +58,15 @@
     "set_max",
     "set_min",
     "set_union",
+    "sigma",
     "singleton",
-    "strict_inclusion",
     "succ",
     "tail"
   ],
   "symbol_to_defining_file": {
     "apply": "relation_functions/apply.acsl",
-    "array_to_function": "function_functions/array_to_function.acsl",
+    "array_to_function_bool": "function_functions/array_to_function_bool.acsl",
+    "array_to_function_int": "function_functions/array_to_function_int.acsl",
     "becomes_element_of": "function_functions/becomes_element_of.acsl",
     "belongs": "set_functions/belongs.acsl",
     "card": "set_functions/card.acsl",
@@ -104,10 +103,7 @@
     "length": "sequence_functions/length.acsl",
     "list_to_function": "sequence_functions/list_to_function.acsl",
     "not_belongs": "set_functions/belongs.acsl",
-    "not_inclusion": "set_functions/inclusion.acsl",
-    "not_strict_inclusion": "set_functions/inclusion.acsl",
     "pair": "set_functions/pair.acsl",
-    "pred": "set_axioms/NAT_succ_axioms.acsl",
     "ran": "relation_functions/range.acsl",
     "ran_witness": "relation_axioms/relation_range.acsl",
     "range_restriction": "relation_functions/range_restriction.acsl",
@@ -121,8 +117,8 @@
     "set_max": "set_functions/max.acsl",
     "set_min": "set_functions/min.acsl",
     "set_union": "set_functions/union.acsl",
+    "sigma": "aggregate_functions/sigma.acsl",
     "singleton": "set_functions/singleton.acsl",
-    "strict_inclusion": "set_functions/inclusion.acsl",
     "succ": "set_axioms/NAT_succ_axioms.acsl",
     "tail": "sequence_functions/tail.acsl"
   },
@@ -130,8 +126,11 @@
     "apply": [
       "relation_functions/apply.acsl"
     ],
-    "array_to_function": [
-      "function_functions/array_to_function.acsl"
+    "array_to_function_bool": [
+      "function_functions/array_to_function_bool.acsl"
+    ],
+    "array_to_function_int": [
+      "function_functions/array_to_function_int.acsl"
     ],
     "becomes_element_of": [
       "function_functions/becomes_element_of.acsl"
@@ -243,17 +242,8 @@
     "not_belongs": [
       "set_functions/belongs.acsl"
     ],
-    "not_inclusion": [
-      "set_functions/inclusion.acsl"
-    ],
-    "not_strict_inclusion": [
-      "set_functions/inclusion.acsl"
-    ],
     "pair": [
       "set_functions/pair.acsl"
-    ],
-    "pred": [
-      "set_axioms/NAT_succ_axioms.acsl"
     ],
     "ran": [
       "relation_functions/range.acsl",
@@ -295,11 +285,11 @@
     "set_union": [
       "set_functions/union.acsl"
     ],
+    "sigma": [
+      "aggregate_functions/sigma.acsl"
+    ],
     "singleton": [
       "set_functions/singleton.acsl"
-    ],
-    "strict_inclusion": [
-      "set_functions/inclusion.acsl"
     ],
     "succ": [
       "set_axioms/NAT_succ_axioms.acsl"
@@ -316,45 +306,50 @@
       "first",
       "second"
     ],
-    "array_to_function": [
+    "array_to_function_bool": [
       "belongs",
-      "card",
       "couple",
       "dom",
       "empty",
       "equals",
       "function_apply",
       "inclusion",
-      "is_finite",
       "is_functional",
       "is_partial_function",
       "is_total_function",
       "not_belongs",
       "ran",
-      "ran_witness",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "ran_witness"
+    ],
+    "array_to_function_int": [
+      "belongs",
+      "couple",
+      "dom",
+      "empty",
+      "equals",
+      "function_apply",
+      "inclusion",
+      "is_functional",
+      "is_partial_function",
+      "is_total_function",
+      "not_belongs",
+      "ran",
+      "ran_witness"
     ],
     "becomes_element_of": [
       "belongs",
-      "card",
       "couple",
       "dom",
       "empty",
       "equals",
       "function_apply",
       "inclusion",
-      "is_finite",
       "is_functional",
       "is_partial_function",
       "is_total_function",
       "not_belongs",
       "ran",
-      "ran_witness",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "ran_witness"
     ],
     "card": [
       "belongs",
@@ -374,8 +369,7 @@
       "not_belongs",
       "set_intersection",
       "set_union",
-      "singleton",
-      "strict_inclusion"
+      "singleton"
     ],
     "disjoint": [
       "belongs",
@@ -387,8 +381,7 @@
       "not_belongs",
       "set_intersection",
       "set_union",
-      "singleton",
-      "strict_inclusion"
+      "singleton"
     ],
     "dom": [
       "belongs",
@@ -412,30 +405,23 @@
       "card",
       "empty",
       "inclusion",
-      "is_finite",
       "not_belongs",
       "set_union",
-      "singleton",
-      "strict_inclusion"
+      "singleton"
     ],
     "function_apply": [
       "belongs",
-      "card",
       "couple",
       "dom",
       "empty",
       "equals",
       "inclusion",
-      "is_finite",
       "is_functional",
       "is_partial_function",
       "is_total_function",
       "not_belongs",
       "ran",
-      "ran_witness",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "ran_witness"
     ],
     "function_singleton": [
       "belongs",
@@ -451,7 +437,6 @@
       "equals",
       "function_apply",
       "inclusion",
-      "is_finite",
       "is_functional",
       "is_partial_function",
       "is_sequence",
@@ -461,8 +446,7 @@
       "ran",
       "ran_witness",
       "set_union",
-      "singleton",
-      "strict_inclusion"
+      "singleton"
     ],
     "iSeq": [
       "belongs",
@@ -475,34 +459,23 @@
     ],
     "id": [
       "belongs",
-      "card",
       "couple",
       "dom",
       "empty",
       "equals",
       "function_apply",
       "inclusion",
-      "is_finite",
       "is_functional",
       "is_partial_function",
       "is_total_function",
       "not_belongs",
       "ran",
-      "ran_witness",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "ran_witness"
     ],
     "inclusion": [
       "belongs",
-      "card",
       "empty",
-      "equals",
-      "is_finite",
-      "not_belongs",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "not_belongs"
     ],
     "interval_set": [
       "belongs"
@@ -522,20 +495,14 @@
     ],
     "is_function_of": [
       "belongs",
-      "card",
       "couple",
       "dom",
       "empty",
-      "equals",
       "inclusion",
-      "is_finite",
       "is_functional",
       "not_belongs",
       "ran",
-      "ran_witness",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "ran_witness"
     ],
     "is_functional": [
       "belongs",
@@ -547,32 +514,20 @@
     ],
     "is_partial_function": [
       "belongs",
-      "card",
       "couple",
       "dom",
       "empty",
-      "equals",
       "inclusion",
-      "is_finite",
       "is_functional",
       "not_belongs",
       "ran",
-      "ran_witness",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "ran_witness"
     ],
     "is_pow_of": [
       "belongs",
-      "card",
       "empty",
-      "equals",
       "inclusion",
-      "is_finite",
-      "not_belongs",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "not_belongs"
     ],
     "is_seq_of": [
       "belongs"
@@ -589,21 +544,16 @@
     ],
     "is_total_function": [
       "belongs",
-      "card",
       "couple",
       "dom",
       "empty",
       "equals",
       "inclusion",
-      "is_finite",
       "is_functional",
       "is_partial_function",
       "not_belongs",
       "ran",
-      "ran_witness",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "ran_witness"
     ],
     "length": [
       "belongs",
@@ -629,7 +579,6 @@
       "function_apply",
       "function_to_list",
       "inclusion",
-      "is_finite",
       "is_functional",
       "is_partial_function",
       "is_sequence",
@@ -640,53 +589,15 @@
       "ran_witness",
       "second",
       "set_union",
-      "singleton",
-      "strict_inclusion"
+      "singleton"
     ],
     "not_belongs": [
       "belongs"
-    ],
-    "not_inclusion": [
-      "belongs",
-      "card",
-      "empty",
-      "equals",
-      "inclusion",
-      "is_finite",
-      "not_belongs",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
-    ],
-    "not_strict_inclusion": [
-      "belongs",
-      "card",
-      "empty",
-      "equals",
-      "inclusion",
-      "is_finite",
-      "not_belongs",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
     ],
     "pair": [
       "belongs",
       "set_union",
       "singleton"
-    ],
-    "pred": [
-      "belongs",
-      "card",
-      "empty",
-      "equals",
-      "inclusion",
-      "is_finite",
-      "not_belongs",
-      "set_union",
-      "singleton",
-      "strict_inclusion",
-      "succ"
     ],
     "ran": [
       "belongs",
@@ -750,35 +661,18 @@
     "singleton": [
       "belongs"
     ],
-    "strict_inclusion": [
-      "belongs",
-      "card",
-      "empty",
-      "equals",
-      "inclusion",
-      "is_finite",
-      "not_belongs",
-      "set_union",
-      "singleton"
-    ],
     "succ": [
       "belongs",
-      "card",
       "empty",
-      "equals",
       "inclusion",
-      "is_finite",
-      "not_belongs",
-      "pred",
-      "set_union",
-      "singleton",
-      "strict_inclusion"
+      "not_belongs"
     ]
   },
   "includes_from": {
     "function.acsl": [
       "function_functions/apply.acsl",
-      "function_functions/array_to_function.acsl",
+      "function_functions/array_to_function_bool.acsl",
+      "function_functions/array_to_function_int.acsl",
       "function_functions/becomes_element_of.acsl",
       "function_functions/id.acsl",
       "function_functions/is_bijective.acsl",
@@ -799,6 +693,22 @@
       "set_functions/belongs.acsl",
       "tuple_functions/tuple_couple.acsl"
     ],
+    "function_axioms/array_to_function_bool_axioms.acsl": [
+      "function_functions/apply.acsl",
+      "function_functions/array_to_function_bool.acsl",
+      "function_functions/is_function.acsl",
+      "relation_functions/domain.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
+    "function_axioms/array_to_function_int_axioms.acsl": [
+      "function_functions/apply.acsl",
+      "function_functions/array_to_function_int.acsl",
+      "function_functions/is_function.acsl",
+      "relation_functions/domain.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
     "function_axioms/is_function_axioms.acsl": [
       "function_functions/is_function.acsl",
       "set_functions/belongs.acsl",
@@ -807,12 +717,11 @@
     "function_functions/apply.acsl": [
       "function_axioms/apply_axioms.acsl"
     ],
-    "function_functions/array_to_function.acsl": [
-      "function_functions/apply.acsl",
-      "function_functions/is_function.acsl",
-      "relation_functions/domain.acsl",
-      "set_functions/belongs.acsl",
-      "tuple_functions/tuple_couple.acsl"
+    "function_functions/array_to_function_bool.acsl": [
+      "function_axioms/array_to_function_bool_axioms.acsl"
+    ],
+    "function_functions/array_to_function_int.acsl": [
+      "function_axioms/array_to_function_int_axioms.acsl"
     ],
     "function_functions/becomes_element_of.acsl": [
       "function_functions/apply.acsl",
@@ -862,9 +771,15 @@
     ],
     "lemmas.acsl": [
       "function_functions/apply.acsl",
-      "function_functions/array_to_function.acsl",
+      "function_functions/array_to_function_bool.acsl",
+      "function_functions/array_to_function_int.acsl",
+      "function_functions/is_surjective.acsl",
+      "function_functions/is_total.acsl",
+      "relation_functions/apply.acsl",
       "relation_functions/domain.acsl",
       "relation_functions/domain_restriction.acsl",
+      "relation_functions/inverse.acsl",
+      "relation_functions/range_restriction.acsl",
       "sequence_functions/front.acsl",
       "sequence_functions/function_to_list.acsl",
       "sequence_functions/is_seq_of.acsl",
@@ -1161,9 +1076,7 @@
       "set_functions/union.acsl"
     ],
     "set_axioms/inclusion_axioms.acsl": [
-      "set_functions/card.acsl",
       "set_functions/empty.acsl",
-      "set_functions/finite.acsl",
       "set_functions/inclusion.acsl"
     ],
     "set_axioms/intersection_axioms.acsl": [

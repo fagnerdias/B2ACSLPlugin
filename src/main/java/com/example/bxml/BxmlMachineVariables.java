@@ -218,6 +218,16 @@ public final class BxmlMachineVariables {
                     rhs = implRhs;
                 } else {
                     rhs = rootAbstractForImplRhs + "__" + var;
+                    // "logic boolean v = <scalar _Bool C global>;" faz o Frama-C/WP falhar em
+                    // TODOS os provers (CVC5/Alt-Ergo/Z3) com "[Why3 Error] Type mismatch between
+                    // bool and int" — reproduzido isoladamente sem qualquer código B2ACSL: o
+                    // modelo de memória do WP não converte corretamente o valor lido do chunk C
+                    // para o tipo lógico "boolean" nessa forma de definição direta. Envolver a
+                    // mesma leitura num ternário ACSL (\true/\false) contorna o problema (a
+                    // conversão passa a ocorrer via if-then-else, que o WP já trata bem).
+                    if ("boolean".equals(logicType)) {
+                        rhs = "(" + rhs + " ? \\true : \\false)";
+                    }
                 }
                 sb.append(" = ").append(rhs);
             } else if (refinementWithParent) {
@@ -750,9 +760,16 @@ public final class BxmlMachineVariables {
             return null;
         }
         Element arrow = concreteVariableFunctionArrowElement(implMachineEl, varName);
+        if (arrow == null) {
+            return null;
+        }
         String range = arrayDomainRangeAcsl(arrow, ctx);
         if (range == null || range.isBlank()) {
-            return null;
+            // Domínio é um conjunto nomeado (Id) — tenta resolver via <Values> da implementação.
+            range = resolveNamedSetDomainRange(arrow, implMachineEl, ctx);
+        }
+        if (range == null || range.isBlank()) {
+            return baseTarget + "[..]";
         }
         return baseTarget + "[" + range + "]";
     }
@@ -780,6 +797,52 @@ public final class BxmlMachineVariables {
             return null;
         }
         return low + " .. " + high;
+    }
+
+    /**
+     * Quando o domínio da seta {@code -->} é um conjunto nomeado (elemento {@code Id}),
+     * procura a sua valoração na secção {@code <Values>} da máquina de implementação e,
+     * se for um intervalo literal ({@code Binary_Exp op='..'}), retorna {@code "low .. high"}.
+     */
+    private static String resolveNamedSetDomainRange(
+            Element arrowEl, Element implMachineEl, BxmlTranslateContext ctx) {
+        if (arrowEl == null || implMachineEl == null || ctx == null) return null;
+        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
+        if (domRng[0] == null) return null;
+        Element domain = domRng[0];
+        if (!"Id".equals(domain.getLocalName())) return null;
+        String setName = domain.getAttribute("value");
+        if (setName == null || setName.isBlank()) return null;
+
+        Element valuesEl = firstChildElement(implMachineEl, "Values");
+        if (valuesEl == null) return null;
+
+        // Procura <Valuation ident='setName'>
+        NodeList nl = valuesEl.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            org.w3c.dom.Node n = nl.item(i);
+            if (n.getNodeType() != org.w3c.dom.Node.ELEMENT_NODE) continue;
+            Element valEl = (Element) n;
+            if (!"Valuation".equals(valEl.getLocalName())) continue;
+            if (!setName.equals(valEl.getAttribute("ident"))) continue;
+
+            // Pega o primeiro filho não-Attr (a expressão de valor)
+            NodeList children = valEl.getChildNodes();
+            for (int j = 0; j < children.getLength(); j++) {
+                org.w3c.dom.Node cn = children.item(j);
+                if (cn.getNodeType() != org.w3c.dom.Node.ELEMENT_NODE) continue;
+                Element valExpr = (Element) cn;
+                if ("Attr".equals(valExpr.getLocalName())) continue;
+                if (!BxmlExpressionToAcsl.isIntervalBinaryExp(valExpr)) return null;
+                Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(valExpr);
+                if (lr[0] == null || lr[1] == null) return null;
+                String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
+                String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
+                if (low.isBlank() || high.isBlank()) return null;
+                return low + " .. " + high;
+            }
+        }
+        return null;
     }
 
     private static boolean isImplementationMachine(Element machineEl) {
@@ -948,7 +1011,7 @@ public final class BxmlMachineVariables {
         }
         return switch (relationLogicType.trim()) {
             case "Relation_int_int" -> "Function_int_int";
-            case "Relation_int_bool" -> "Function_int_bool";
+            case "Relation_int_bool" -> "Function_integer_boolean";
             case "Relation_bool_int" -> "Function_bool_int";
             default -> relationLogicType;
         };
@@ -1052,6 +1115,8 @@ public final class BxmlMachineVariables {
 
     /**
      * Lado direito da ligação à implementação C: array {@code Raiz__v} como função (índices 0..n-1).
+     * Usa {@code array_to_function_bool} para domínios booleanos e {@code array_to_function_int}
+     * para inteiros. O tamanho é derivado do domínio da seta {@code -->} ou da secção VALUES.
      */
     private static String implementationRhsTotalFunctionFromArray(
             String rootAbstractName,
@@ -1059,16 +1124,20 @@ public final class BxmlMachineVariables {
             Element implMachineEl,
             BxmlTranslateContext ctx) {
         Element arrow = concreteVariableFunctionArrowElement(implMachineEl, varName);
-        String len = arrow != null ? arrayDomainCardinalityAcsl(arrow, ctx) : null;
+        String len = arrow != null ? arrayDomainCardinalityAcsl(arrow, ctx, implMachineEl) : null;
         if (len == null || len.isBlank()) {
             len = "1";
         }
+        boolean boolCodomain = arrow != null && arrowCodomainIsBool(arrow);
+        String funcName = boolCodomain ? "array_to_function_bool" : "array_to_function_int";
+        String cast = boolCodomain ? "(_Bool*)(" : "(int*)(";
         String q = rootAbstractName + "__" + varName;
-        return "array_to_function((int32_t*)(" + q + "), " + len + ")";
+        return funcName + "(" + cast + q + "), " + len + ")";
     }
 
-    /** Cardinalidade do intervalo/domínio de {@code -->} (ex. {@code 0..maximum} → {@code (maximum + 1)}). */
-    private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx) {
+    /** Cardinalidade do intervalo/domínio de {@code -->}; consulta a secção VALUES para conjuntos nomeados. */
+    private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx,
+            Element implMachineEl) {
         if (arrowEl == null || ctx == null) {
             return null;
         }
@@ -1083,6 +1152,57 @@ public final class BxmlMachineVariables {
                 String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
                 String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
                 return "(" + high + " - (" + low + ") + 1)";
+            }
+        }
+        if ("Id".equals(domain.getLocalName()) && implMachineEl != null) {
+            String setName = domain.getAttribute("value");
+            String card = lookupSetCardinalityFromValues(setName, implMachineEl, ctx);
+            if (card != null) return card;
+        }
+        return null;
+    }
+
+    /** Cardinalidade do intervalo/domínio de {@code -->} (ex. {@code 0..maximum} → {@code (maximum + 1)}). */
+    private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx) {
+        return arrayDomainCardinalityAcsl(arrowEl, ctx, null);
+    }
+
+    /** Verdadeiro se o codomínio da seta {@code -->} for {@code BOOL}. */
+    private static boolean arrowCodomainIsBool(Element arrowEl) {
+        if (arrowEl == null) return false;
+        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
+        if (domRng[1] == null) return false;
+        Element codomain = domRng[1];
+        return "Id".equals(codomain.getLocalName()) && "BOOL".equals(codomain.getAttribute("value"));
+    }
+
+    /** Procura {@code <Valuation ident='setName'>} na secção {@code <Values>} e retorna a cardinalidade. */
+    private static String lookupSetCardinalityFromValues(String setName, Element machineEl,
+            BxmlTranslateContext ctx) {
+        if (setName == null || setName.isBlank() || machineEl == null) return null;
+        NodeList children = machineEl.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element el = (Element) n;
+            if (!"Values".equals(el.getLocalName())) continue;
+            NodeList vals = el.getChildNodes();
+            for (int j = 0; j < vals.getLength(); j++) {
+                Node vn = vals.item(j);
+                if (vn.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element val = (Element) vn;
+                if (!"Valuation".equals(val.getLocalName())) continue;
+                if (!setName.equals(val.getAttribute("ident"))) continue;
+                Element exp = firstNonAttrElementChild(val);
+                if (exp != null && BxmlExpressionToAcsl.isIntervalBinaryExp(exp)) {
+                    Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(exp);
+                    if (lr[0] != null && lr[1] != null) {
+                        String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
+                        String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
+                        return "(" + high + " - (" + low + ") + 1)";
+                    }
+                }
+                break;
             }
         }
         return null;

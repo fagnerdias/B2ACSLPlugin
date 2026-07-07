@@ -558,6 +558,26 @@ public final class B2ACSLPipeline {
     }
 
     /**
+     * Ordena {@code cFiles} pela mesma ordem topológica (dependências antes de quem as usa) de
+     * {@code acslImportFiles}, em vez da ordem alfabética de {@link #findCFiles}. Máquinas sem
+     * posição conhecida em {@code acslImportFiles} mantêm a ordem relativa original (sort estável).
+     */
+    private static List<Path> orderCFilesByAcslImportOrder(List<Path> cFiles, List<Path> acslImportFiles) {
+        Map<String, Integer> rank = new HashMap<>();
+        for (int i = 0; i < acslImportFiles.size(); i++) {
+            String fileName = acslImportFiles.get(i).getFileName().toString();
+            if (fileName.endsWith(".acsl")) {
+                rank.putIfAbsent(fileName.substring(0, fileName.length() - ".acsl".length()), i);
+            }
+        }
+        List<Path> ordered = new ArrayList<>(cFiles);
+        ordered.sort(
+                Comparator.comparingInt(
+                        (Path p) -> rank.getOrDefault(abstractMachineNameFromCFile(p), Integer.MAX_VALUE)));
+        return ordered;
+    }
+
+    /**
      * {@code .acsl} para {@code -acsl-import} numa única invocação Frama-C: raízes SEES quando
      * existem; senão união (ordem estável) dos ficheiros resolvidos por cada {@code .c}.
      */
@@ -704,7 +724,13 @@ public final class B2ACSLPipeline {
         if (Files.isRegularFile(ghostCi)) {
             importCmd.add(ghostCi.toString());
         }
-        for (Path cFile : cFiles) {
+        // Ordena os .c pela MESMA ordem topológica (dependências antes de quem as usa) do
+        // -acsl-import, em vez da ordem alfabética de findCFiles: senão, os globais C de uma
+        // máquina "vista"/"importada" (ex.: main_fuel) podem acabar impressos DEPOIS da função de
+        // outra máquina que a usa (ex.: entry_point), e nenhum reordenamento de comentários ACSL
+        // (moveMemoryDependentVariableBlocksAfterTheirGlobals) resolve isso — a própria função C
+        // já está na ordem errada.
+        for (Path cFile : orderCFilesByAcslImportOrder(cFiles, acslImportFiles)) {
             importCmd.add(cFile.toString());
         }
         importCmd.add("-print");
@@ -744,6 +770,7 @@ public final class B2ACSLPipeline {
                 mergedCode, specificationUsedTypes);
         SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
         ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
+        moveMemoryDependentVariableBlocksAfterTheirGlobals(mergedCode);
 
         String cSourcesLabel =
                 cFiles.stream().map(p -> p.getFileName().toString()).reduce((a, b) -> a + ", " + b).orElse("");
@@ -757,10 +784,15 @@ public final class B2ACSLPipeline {
                     "[B2ACSL] Per-operation WP enabled; functions: " + operationFunctionNames);
         }
 
-        List<String> wpFunctionsToRun =
-                operationFunctionNames.isEmpty()
-                        ? List.of((String) null)
-                        : operationFunctionNames;
+        List<String> wpFunctionsToRun;
+        if (operationFunctionNames.isEmpty()) {
+            // List.of(null) throws NPE by contract; a single whole-file WP run is requested
+            // with a null function name (buildWpCommand omits -wp-fct in that case).
+            wpFunctionsToRun = new ArrayList<>();
+            wpFunctionsToRun.add(null);
+        } else {
+            wpFunctionsToRun = operationFunctionNames;
+        }
         int failingExitCode = 0;
         for (String functionName : wpFunctionsToRun) {
             List<String> wpCmd =
@@ -994,6 +1026,170 @@ public final class B2ACSLPipeline {
         String sepAfter = block.endsWith("\n") ? "" : "\n";
         String result = without.substring(0, insertAt) + sepBefore + block + sepAfter + without.substring(insertAt);
         Files.writeString(mergedC, result, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Frama-C imprime uma constante lógica (ou predicado) que lê memória mutável, direta ou
+     * transitivamente, com um parâmetro de label implícito {@code {L}} (ex.: {@code logic integer
+     * index{L}= iter_services__index;}, {@code predicate iter_services_i_invariant{L}=
+     * \at(... index ..., L);}). Num merge multi-ficheiro, a ordem relativa entre os {@code .acsl}
+     * importados e os {@code .c} pode colocar um desses blocos ANTES do que ele referencia — a
+     * própria declaração C do global (ex.: {@code static int32_t iter_services__index;} mais adiante
+     * no ficheiro) ou outro bloco {@code {L}=} do qual depende (ex.: {@code index} antes de
+     * {@code iter_services_i_invariant} usá-lo) — causando {@code unbound logic variable} no
+     * Frama-C. Move cada bloco assim afetado para logo após a última coisa de que depende.
+     */
+    private static void moveMemoryDependentVariableBlocksAfterTheirGlobals(Path mergedC) throws IOException {
+        if (!Files.isRegularFile(mergedC)) {
+            return;
+        }
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        String updated = content;
+        // Cada movimentação pode revelar outra violação de ordem (dependências em cadeia); repete
+        // até estabilizar (limite de segurança para não entrar em loop infinito num caso anómalo).
+        for (int pass = 0; pass < 40; pass++) {
+            String next = moveOneMemoryDependentVariableBlockIfNeeded(updated);
+            if (next.equals(updated)) {
+                break;
+            }
+            updated = next;
+        }
+        if (!updated.equals(content)) {
+            Files.writeString(mergedC, updated, StandardCharsets.UTF_8);
+        }
+    }
+
+    /** Casa o nome declarado por um bloco {@code nome{L}= ...} impresso pelo Frama-C. */
+    private static final Pattern LABELED_DECL_NAME = Pattern.compile("([A-Za-z_]\\w*)\\{L\\}\\s*=");
+
+    /** Casa a referência direta a um global C na forma {@code nome{L}= GLOBAL;}. */
+    private static final Pattern LABELED_LOGIC_CONST_REF =
+            Pattern.compile("\\w+\\{L\\}\\s*=\\s*([A-Za-z_]\\w*)\\s*;");
+
+    private static String moveOneMemoryDependentVariableBlockIfNeeded(String content) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        // Nome declarado {L}= -> span que o declara, para localizar dependências entre blocos
+        // (ex.: "iter_services_i_invariant{L}=" depende de "index{L}=" declarado noutro bloco).
+        Map<String, AcsCommentSpan> declaringSpan = new HashMap<>();
+        for (AcsCommentSpan sp : spans) {
+            Matcher dm = LABELED_DECL_NAME.matcher(sp.text);
+            if (dm.find()) {
+                declaringSpan.putIfAbsent(dm.group(1), sp);
+            }
+        }
+        for (AcsCommentSpan sp : spans) {
+            Matcher declMatcher = LABELED_DECL_NAME.matcher(sp.text);
+            if (!declMatcher.find()) {
+                continue; // só reordena blocos que o Frama-C marcou como dependentes de memória
+            }
+            String ownName = declMatcher.group(1);
+            int latestDepEnd = -1;
+
+            Matcher refMatcher = LABELED_LOGIC_CONST_REF.matcher(sp.text);
+            while (refMatcher.find()) {
+                int end = lastStaticDeclEndOutsideSpan(content, refMatcher.group(1), spans);
+                if (end > latestDepEnd) {
+                    latestDepEnd = end;
+                }
+            }
+            for (Map.Entry<String, AcsCommentSpan> e : declaringSpan.entrySet()) {
+                String depName = e.getKey();
+                AcsCommentSpan depSpan = e.getValue();
+                if (depName.equals(ownName) || depSpan == sp) {
+                    continue;
+                }
+                if (Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(depName) + "(?![A-Za-z0-9_])")
+                        .matcher(sp.text)
+                        .find()
+                        && depSpan.end > latestDepEnd) {
+                    latestDepEnd = depSpan.end;
+                }
+            }
+
+            if (latestDepEnd > sp.start) {
+                String without = content.substring(0, sp.start) + content.substring(sp.end);
+                int insertAt = latestDepEnd - (sp.end - sp.start);
+                if (insertAt < 0 || insertAt > without.length()) {
+                    continue;
+                }
+                insertAt = skipNewlineAfter(insertAt, without);
+                String sepBefore = insertAt > 0 && without.charAt(insertAt - 1) != '\n' ? "\n" : "";
+                String sepAfter = sp.text.endsWith("\n") ? "" : "\n";
+                return without.substring(0, insertAt) + sepBefore + sp.text + sepAfter + without.substring(insertAt);
+            }
+        }
+
+        // Passo B: um bloco {L}= também precisa vir ANTES do primeiro uso do seu nome em
+        // QUALQUER outro ponto do ficheiro — incluindo contratos de função soltos (ex.:
+        // "requires main_fuel_invariant;" acima de uma função, que não se move: está ligado à
+        // posição da própria função C). Sem isto, só se corrige a ordem quando quem usa o nome
+        // é OUTRO bloco {L}=; um "requires"/"ensures" comum ficaria sempre fora de alcance.
+        for (Map.Entry<String, AcsCommentSpan> e : declaringSpan.entrySet()) {
+            String name = e.getKey();
+            AcsCommentSpan declSpan = e.getValue();
+            int earliestUseStart = Integer.MAX_VALUE;
+            for (AcsCommentSpan sp : spans) {
+                if (sp == declSpan || sp.start >= declSpan.end) {
+                    continue;
+                }
+                if (Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(name) + "(?![A-Za-z0-9_])")
+                        .matcher(sp.text)
+                        .find()) {
+                    earliestUseStart = Math.min(earliestUseStart, sp.start);
+                }
+            }
+            if (earliestUseStart < declSpan.start) {
+                String without =
+                        content.substring(0, declSpan.start) + content.substring(declSpan.end);
+                // earliestUseStart está antes de declSpan.start, logo não é afetado pela remoção.
+                int insertAt = earliestUseStart;
+                String sepBefore =
+                        insertAt > 0 && without.charAt(insertAt - 1) != '\n' ? "\n" : "";
+                String sepAfter = declSpan.text.endsWith("\n") ? "" : "\n";
+                return without.substring(0, insertAt)
+                        + sepBefore
+                        + declSpan.text
+                        + sepAfter
+                        + without.substring(insertAt);
+            }
+        }
+        return content;
+    }
+
+    /**
+     * Fim da última declaração de variável global {@code [static] TIPO <globalName>[...];} fora de
+     * qualquer comentário ACSL. {@code static} é opcional: nem toda máquina B2ACSL gera variáveis
+     * concretas com {@code static} (ex.: máquinas sem cadeia de refinamento podem sair como globais
+     * simples, {@code int32_t nome;}), e exigi-lo deixava essas declarações invisíveis a esta
+     * varredura. Sem {@code static}, porém, o padrão "PALAVRA nome;" também casa cláusulas de
+     * contrato ACSL como {@code assigns nome;}/{@code ensures nome;} — por isso os spans {@code
+     * /*@ … *&#47;} (que é onde essas cláusulas sempre vivem; uma declaração C genuína nunca está
+     * dentro de um) são explicitamente excluídos.
+     */
+    private static int lastStaticDeclEndOutsideSpan(
+            String content, String globalName, List<AcsCommentSpan> acslSpans) {
+        Pattern declPattern =
+                Pattern.compile(
+                        "(?m)^\\s*(?:static\\s+)?[A-Za-z_]\\w*\\s+"
+                                + Pattern.quote(globalName)
+                                + "\\s*(?:\\[[^\\]]*\\])?\\s*;\\s*$");
+        Matcher dm = declPattern.matcher(content);
+        int lastEnd = -1;
+        while (dm.find()) {
+            int matchStart = dm.start();
+            boolean insideAcslComment = false;
+            for (AcsCommentSpan sp : acslSpans) {
+                if (matchStart >= sp.start && matchStart < sp.end) {
+                    insideAcslComment = true;
+                    break;
+                }
+            }
+            if (insideAcslComment) {
+                continue;
+            }
+            lastEnd = dm.end();
+        }
+        return lastEnd;
     }
 
     /**
@@ -1572,7 +1768,10 @@ public final class B2ACSLPipeline {
         content = attachAxiomsBlocksAfterParentAxiomatic(content);
         if (!rank.isEmpty()) {
             content = moveLibAxiomaticBlocksBeforeConnection(content, rank);
+            content = moveMachineAxiomaticsAfterSurroundingLibBlocks(content, rank);
         }
+        content = moveStandaloneMachinePredicatesAfterMachineAxiomatics(content, rank);
+        content = moveMachineAcslBlocksBeforeFirstGhostBlock(content, rank);
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -1913,6 +2112,205 @@ public final class B2ACSLPipeline {
         return cut.substring(0, newConn) + insert + cut.substring(newConn);
     }
 
+    /**
+     * Move blocos axiomáticos de máquina (não-lib) que estejam intercalados entre blocos de lib
+     * para depois do último bloco de lib que os segue. Isso evita referências a símbolos de lib
+     * (ex.: {@code relation_inverse}) antes da respetiva declaração.
+     */
+    private static String moveMachineAxiomaticsAfterSurroundingLibBlocks(
+            String content, Map<String, Integer> rank) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        // Identify spans that are non-lib but surrounded (before and after) by lib spans.
+        // "Surrounded" = has at least one lib span before AND at least one lib span after.
+        Set<String> libAndAxioms = new LinkedHashSet<>(rank.keySet());
+        for (String n : rank.keySet()) {
+            libAndAxioms.add(n + "_axioms");
+        }
+        int lastLibIdx = -1;
+        for (int i = spans.size() - 1; i >= 0; i--) {
+            AcsCommentSpan sp = spans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                lastLibIdx = i;
+                break;
+            }
+        }
+        if (lastLibIdx < 0) return content;
+
+        boolean seenLib = false;
+        List<AcsCommentSpan> toMove = new ArrayList<>();
+        for (int i = 0; i < lastLibIdx; i++) {
+            AcsCommentSpan sp = spans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                seenLib = true;
+            } else if (seenLib && sp.axiomaticName != null
+                    && !libAndAxioms.contains(sp.axiomaticName)
+                    && i < lastLibIdx) {
+                // Non-lib block after at least one lib block, and more lib blocks follow
+                toMove.add(sp);
+            }
+        }
+        if (toMove.isEmpty()) return content;
+
+        // Remove moved spans in reverse order (so earlier offsets remain valid)
+        List<AcsCommentSpan> rev = new ArrayList<>(toMove);
+        rev.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String result = content;
+        List<String> movedTexts = new ArrayList<>();
+        for (AcsCommentSpan sp : rev) {
+            movedTexts.add(0, result.substring(sp.start, sp.end));
+            result = result.substring(0, sp.start) + result.substring(sp.end);
+        }
+
+        // Find the new position of the last lib span in the modified content
+        List<AcsCommentSpan> newSpans = findAllAcsCommentSpans(result);
+        int insertAfter = -1;
+        for (int i = newSpans.size() - 1; i >= 0; i--) {
+            AcsCommentSpan sp = newSpans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                insertAfter = sp.end;
+                break;
+            }
+        }
+        if (insertAfter < 0) return content; // safety fallback
+
+        StringBuilder insert = new StringBuilder();
+        for (String t : movedTexts) {
+            insert.append(t);
+        }
+        return result.substring(0, insertAfter) + insert + result.substring(insertAfter);
+    }
+
+    /**
+     * Move predicados ACSL standalone (sem wrapper axiomatic) que estejam intercalados entre
+     * blocos de lib para depois do último bloco axiomatic do arquivo (incluindo axiomáticos de
+     * máquina). Isso corrige o caso onde Frama-C emite {@code predicate Biblioteca_invariant}
+     * antes dos axiomáticos de máquina que declaram as variáveis que o predicado referencia.
+     */
+    private static String moveStandaloneMachinePredicatesAfterMachineAxiomatics(
+            String content, Map<String, Integer> rank) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+
+        Set<String> libAndAxioms = new LinkedHashSet<>(rank.keySet());
+        for (String n : rank.keySet()) libAndAxioms.add(n + "_axioms");
+
+        // Find the last lib span index in the spans list
+        int lastLibIdx = -1;
+        for (int i = spans.size() - 1; i >= 0; i--) {
+            AcsCommentSpan sp = spans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                lastLibIdx = i;
+                break;
+            }
+        }
+        if (lastLibIdx < 0) return content;
+
+        // Collect standalone predicate blocks that appear between lib blocks
+        boolean seenLib = false;
+        List<AcsCommentSpan> toMove = new ArrayList<>();
+        for (int i = 0; i < lastLibIdx; i++) {
+            AcsCommentSpan sp = spans.get(i);
+            if (sp.axiomaticName != null && libAndAxioms.contains(sp.axiomaticName)) {
+                seenLib = true;
+            } else if (seenLib && sp.axiomaticName == null
+                    && LOGIC_OR_PREDICATE_IN_BLOCK.matcher(sp.text).find()) {
+                toMove.add(sp);
+            }
+        }
+        if (toMove.isEmpty()) return content;
+
+        // Remove them in reverse order to preserve offsets
+        List<AcsCommentSpan> rev = new ArrayList<>(toMove);
+        rev.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String result = content;
+        List<String> movedTexts = new ArrayList<>();
+        for (AcsCommentSpan sp : rev) {
+            movedTexts.add(0, result.substring(sp.start, sp.end));
+            result = result.substring(0, sp.start) + result.substring(sp.end);
+        }
+
+        // Insert after the last axiomatic block (machine or lib) in the modified content
+        List<AcsCommentSpan> newSpans = findAllAcsCommentSpans(result);
+        int insertAfter = -1;
+        for (int i = newSpans.size() - 1; i >= 0; i--) {
+            if (newSpans.get(i).axiomaticName != null) {
+                insertAfter = newSpans.get(i).end;
+                break;
+            }
+        }
+        if (insertAfter < 0) return content;
+
+        StringBuilder insert = new StringBuilder();
+        for (String t : movedTexts) insert.append(t);
+        return result.substring(0, insertAfter) + insert + result.substring(insertAfter);
+    }
+
+    /**
+     * Move todos os blocos ACSL de máquina (axiomáticos não-lib e predicados standalone) que
+     * aparecem após o primeiro bloco ghost ({@code /*@ ghost ... *\/}) para antes desse bloco.
+     * Isso garante que variáveis lógicas de máquina (ex.: {@code books}, {@code copyOf}) estejam
+     * declaradas quando o Frama-C processa os contratos de funções ghost.
+     */
+    private static String moveMachineAcslBlocksBeforeFirstGhostBlock(
+            String content, Map<String, Integer> rank) {
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+
+        // Find the first ghost block (/*@ ghost ... */)
+        int firstGhostStart = -1;
+        for (AcsCommentSpan sp : spans) {
+            if (sp.axiomaticName == null && sp.text.startsWith("/*@ ghost")) {
+                firstGhostStart = sp.start;
+                break;
+            }
+        }
+        if (firstGhostStart < 0) return content;
+
+        Set<String> libAndAxioms = new LinkedHashSet<>(rank.keySet());
+        for (String n : rank.keySet()) libAndAxioms.add(n + "_axioms");
+
+        // Collect machine-specific ACSL blocks that appear AFTER the first ghost block
+        List<AcsCommentSpan> toMove = new ArrayList<>();
+        for (AcsCommentSpan sp : spans) {
+            if (sp.start <= firstGhostStart) continue;
+            boolean isLibAxioms = sp.axiomaticName != null
+                    && sp.axiomaticName.endsWith("_axioms")
+                    && libAndAxioms.contains(resolveParentAxiomaticName(sp.axiomaticName, spans));
+            boolean isMachineAxiomatic = sp.axiomaticName != null
+                    && !libAndAxioms.contains(sp.axiomaticName)
+                    && !isLibAxioms;
+            boolean isStandalonePredicate = sp.axiomaticName == null
+                    && LOGIC_OR_PREDICATE_IN_BLOCK.matcher(sp.text).find();
+            if (isMachineAxiomatic || isStandalonePredicate) {
+                toMove.add(sp);
+            }
+        }
+        if (toMove.isEmpty()) return content;
+
+        // Remove them in reverse order to preserve earlier offsets
+        List<AcsCommentSpan> rev = new ArrayList<>(toMove);
+        rev.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
+        String result = content;
+        List<String> movedTexts = new ArrayList<>();
+        for (AcsCommentSpan sp : rev) {
+            movedTexts.add(0, result.substring(sp.start, sp.end));
+            result = result.substring(0, sp.start) + result.substring(sp.end);
+        }
+
+        // Find new position of first ghost block in modified content
+        List<AcsCommentSpan> newSpans = findAllAcsCommentSpans(result);
+        int newGhostStart = -1;
+        for (AcsCommentSpan sp : newSpans) {
+            if (sp.axiomaticName == null && sp.text.startsWith("/*@ ghost")) {
+                newGhostStart = sp.start;
+                break;
+            }
+        }
+        if (newGhostStart < 0) return content;
+
+        StringBuilder insertSb = new StringBuilder();
+        for (String t : movedTexts) insertSb.append(t);
+        return result.substring(0, newGhostStart) + insertSb + result.substring(newGhostStart);
+    }
+
     private static AcsCommentSpan findDeclAxiomaticBlock(List<AcsCommentSpan> spans, String name) {
         for (AcsCommentSpan sp : spans) {
             if (name.equals(sp.axiomaticName)) {
@@ -1957,6 +2355,14 @@ public final class B2ACSLPipeline {
         }
         for (String n : declNames) {
             if (axiomsName.equals(n + "_axioms")) {
+                return n;
+            }
+        }
+        // Caso: base começa com o nome de uma declaração conhecida seguida de "_"
+        // ex.: array_to_function_int_axioms → base = array_to_function_int
+        //      → começa com "array_to_function_" → pai = array_to_function
+        for (String n : declNames) {
+            if (base.startsWith(n + "_")) {
                 return n;
             }
         }
