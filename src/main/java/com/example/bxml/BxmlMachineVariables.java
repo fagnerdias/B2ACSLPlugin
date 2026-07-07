@@ -218,6 +218,16 @@ public final class BxmlMachineVariables {
                     rhs = implRhs;
                 } else {
                     rhs = rootAbstractForImplRhs + "__" + var;
+                    // "logic boolean v = <scalar _Bool C global>;" faz o Frama-C/WP falhar em
+                    // TODOS os provers (CVC5/Alt-Ergo/Z3) com "[Why3 Error] Type mismatch between
+                    // bool and int" — reproduzido isoladamente sem qualquer código B2ACSL: o
+                    // modelo de memória do WP não converte corretamente o valor lido do chunk C
+                    // para o tipo lógico "boolean" nessa forma de definição direta. Envolver a
+                    // mesma leitura num ternário ACSL (\true/\false) contorna o problema (a
+                    // conversão passa a ocorrer via if-then-else, que o WP já trata bem).
+                    if ("boolean".equals(logicType)) {
+                        rhs = "(" + rhs + " ? \\true : \\false)";
+                    }
                 }
                 sb.append(" = ").append(rhs);
             } else if (refinementWithParent) {

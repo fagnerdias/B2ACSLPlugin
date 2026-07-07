@@ -227,7 +227,7 @@ public final class BxmlOperationsTranslator {
             if (pre != null) {
                 requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
                 rewriteAcslListForArrayBackedParams(requires, arrayParamLens);
-                rewriteRequiresForOutputParameters(requires, outputParams);
+                rewriteRequiresForOutputParameters(requires, outputParams, boolOutputParameterNames(child, ctx));
             }
 
             Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, ctx);
@@ -795,11 +795,12 @@ public final class BxmlOperationsTranslator {
                     "^belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^)]+)\\s*\\)$");
 
     private static void rewriteRequiresForOutputParameters(
-            List<String> requires, List<String> outputParams) {
+            List<String> requires, List<String> outputParams, Set<String> boolOutputParams) {
         if (requires == null || requires.isEmpty() || outputParams == null || outputParams.isEmpty()) {
             return;
         }
         Set<String> out = new HashSet<>(outputParams);
+        Set<String> boolOut = boolOutputParams == null ? Set.of() : boolOutputParams;
         for (int i = 0; i < requires.size(); i++) {
             String req = requires.get(i);
             if (req == null || req.isBlank()) {
@@ -814,7 +815,12 @@ public final class BxmlOperationsTranslator {
             if (!out.contains(var)) {
                 continue;
             }
-            String value = "(integer)*" + var;
+            // Saídas bool (C _Bool*) correspondem diretamente ao tipo lógico ACSL "boolean" — sem
+            // cast. O cast (integer) só se aplica a saídas int/enum (ex.: cc : COPY em Biblioteca),
+            // cujo domínio (Set<integer>) exige elevar o valor C para o tipo lógico "integer".
+            // Aplicá-lo também a saídas bool comparadas contra um domínio Set<boolean> (ex.: BOOL)
+            // provoca "invalid implicit conversion from integer to boolean" no Frama-C.
+            String value = boolOut.contains(var) ? "*" + var : "(integer)*" + var;
             requires.set(i, "belongs(" + value + ", " + set + ")");
         }
     }
