@@ -797,9 +797,20 @@ public final class BxmlSetsTranslator {
                 if (n.getNodeType() != Node.ELEMENT_NODE) continue;
                 Element op = (Element) n;
                 if (!"Operation".equals(op.getLocalName())) continue;
+                // Mesma reescrita de parâmetros array-backed (xx : A --> B -> array_to_function_int/
+                // _bool(xx, len)) do caminho completo (BxmlOperationsTranslator): sem isto, esta
+                // varredura simplificada (usada quando o .acsl real da máquina dependente ainda não
+                // foi gerado, por ordem de geração) não vê o símbolo array_to_function_int/_bool e o
+                // include correspondente nunca é emitido pela máquina "carrier".
+                Map<String, BxmlOperationsTranslator.ArrayFunctionParamInfo> arrayParamLens =
+                        BxmlOperationsTranslator.inferArrayFunctionParamLengths(op, ctx);
                 Element pre = firstChildElement(op, "Precondition");
                 if (pre != null) {
-                    for (String clause : com.example.bxml.BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx)) {
+                    List<String> clauses =
+                            new ArrayList<>(
+                                    com.example.bxml.BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
+                    BxmlOperationsTranslator.rewriteAcslListForArrayBackedParams(clauses, arrayParamLens);
+                    for (String clause : clauses) {
                         if (clause != null && !clause.isBlank()) {
                             sb.append(clause).append('\n');
                         }
@@ -812,6 +823,7 @@ public final class BxmlSetsTranslator {
                         com.example.bxml.BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
                     } catch (Exception ignored) {
                     }
+                    BxmlOperationsTranslator.rewriteAcslListForArrayBackedParams(ensures, arrayParamLens);
                     for (String clause : ensures) {
                         if (clause != null && !clause.isBlank()) {
                             sb.append(clause).append('\n');

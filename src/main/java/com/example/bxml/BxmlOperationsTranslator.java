@@ -223,7 +223,7 @@ public final class BxmlOperationsTranslator {
             }
             Element pre = firstChildElement(child, "Precondition");
             List<String> outputParams = parseOutputParameterNames(child);
-            Map<String, String> arrayParamLens = inferArrayFunctionParamLengths(child, ctx);
+            Map<String, ArrayFunctionParamInfo> arrayParamLens = inferArrayFunctionParamLengths(child, ctx);
             if (pre != null) {
                 requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
                 rewriteAcslListForArrayBackedParams(requires, arrayParamLens);
@@ -826,42 +826,60 @@ public final class BxmlOperationsTranslator {
     }
 
     /**
+     * Comprimento e tipo do codomínio de um parâmetro array-backed ({@code xx : A --> B} na
+     * precondição): {@code array_to_function_bool} quando {@code B} é {@code BOOL}, senão
+     * {@code array_to_function_int}.
+     */
+    /**
+     * Visibilidade de pacote: também usada por {@link BxmlSetsTranslator#collectMachineTextForIncludeScan}
+     * para reproduzir a mesma reescrita {@code array_to_function_*(...)} na varredura de símbolos de
+     * includes quando o {@code .acsl} real da máquina dependente ainda não foi gerado.
+     */
+    record ArrayFunctionParamInfo(String lengthExpr, boolean boolCodomain) {
+        String functionName() {
+            return boolCodomain ? "array_to_function_bool" : "array_to_function_int";
+        }
+    }
+
+    /**
      * Em operações cuja entrada concreta é array/pointer representando função total em B
      * ({@code xx : A --> B}), reescreve chamadas de contrato que esperam {@code Function_int_int}
-     * para usar {@code array_to_function(xx, len)}.
+     * para usar {@code array_to_function_int(xx, len)}/{@code array_to_function_bool(xx, len)}.
      */
     /**
      * Reescreve em {@code strings} todas as ocorrências de parâmetros array-backed ({@code param}
-     * como palavra isolada) para {@code array_to_function(param, len)}.
-     * Não re-envolve se já está dentro de {@code array_to_function(}.
+     * como palavra isolada) para {@code array_to_function_int(param, len)}/{@code
+     * array_to_function_bool(param, len)}. Não re-envolve se já está dentro de {@code
+     * array_to_function_int(}/{@code array_to_function_bool(}.
      */
-    private static void rewriteAcslListForArrayBackedParams(
-            List<String> strings, Map<String, String> lensByParam) {
-        if (strings == null || strings.isEmpty() || lensByParam == null || lensByParam.isEmpty()) {
+    static void rewriteAcslListForArrayBackedParams(
+            List<String> strings, Map<String, ArrayFunctionParamInfo> infoByParam) {
+        if (strings == null || strings.isEmpty() || infoByParam == null || infoByParam.isEmpty()) {
             return;
         }
         for (int i = 0; i < strings.size(); i++) {
-            strings.set(i, rewriteAcslStringForArrayBackedParams(strings.get(i), lensByParam));
+            strings.set(i, rewriteAcslStringForArrayBackedParams(strings.get(i), infoByParam));
         }
     }
 
     private static String rewriteAcslStringForArrayBackedParams(
-            String s, Map<String, String> lensByParam) {
-        if (s == null || s.isBlank() || lensByParam == null || lensByParam.isEmpty()) return s;
-        for (Map.Entry<String, String> e : lensByParam.entrySet()) {
+            String s, Map<String, ArrayFunctionParamInfo> infoByParam) {
+        if (s == null || s.isBlank() || infoByParam == null || infoByParam.isEmpty()) return s;
+        for (Map.Entry<String, ArrayFunctionParamInfo> e : infoByParam.entrySet()) {
             String p = e.getKey();
-            String len = e.getValue();
-            // Substitui ocorrências isoladas de p que não estejam já dentro de array_to_function(
+            ArrayFunctionParamInfo info = e.getValue();
+            String fn = info.functionName();
+            // Substitui ocorrências isoladas de p que não estejam já dentro de array_to_function_*(
             s = s.replaceAll(
-                    "(?<!array_to_function\\()\\b" + Pattern.quote(p) + "\\b",
-                    "array_to_function(" + p + ", " + len + ")");
+                    "(?<!array_to_function_int\\()(?<!array_to_function_bool\\()\\b" + Pattern.quote(p) + "\\b",
+                    fn + "(" + p + ", " + info.lengthExpr() + ")");
         }
         return s;
     }
 
-    private static Map<String, String> inferArrayFunctionParamLengths(
+    static Map<String, ArrayFunctionParamInfo> inferArrayFunctionParamLengths(
             Element operation, BxmlTranslateContext ctx) {
-        Map<String, String> out = new LinkedHashMap<>();
+        Map<String, ArrayFunctionParamInfo> out = new LinkedHashMap<>();
         Element pre = firstChildElement(operation, "Precondition");
         if (pre == null) {
             return out;
@@ -871,7 +889,7 @@ public final class BxmlOperationsTranslator {
     }
 
     private static void collectArrayFunctionParamLengths(
-            Element pred, BxmlTranslateContext ctx, Map<String, String> out) {
+            Element pred, BxmlTranslateContext ctx, Map<String, ArrayFunctionParamInfo> out) {
         if (pred == null || ctx == null) {
             return;
         }
@@ -887,7 +905,7 @@ public final class BxmlOperationsTranslator {
                     String p = pair[0].getAttribute("value");
                     String len = arrayDomainCardinalityAcsl(pair[1], ctx);
                     if (p != null && !p.isBlank() && len != null && !len.isBlank()) {
-                        out.put(p.trim(), len);
+                        out.put(p.trim(), new ArrayFunctionParamInfo(len, arrowCodomainIsBool(pair[1])));
                     }
                 }
             }
@@ -900,6 +918,15 @@ public final class BxmlOperationsTranslator {
             if ("Attr".equals(ch.getLocalName())) continue;
             collectArrayFunctionParamLengths(ch, ctx, out);
         }
+    }
+
+    /** Verdadeiro se o codomínio da seta {@code -->} for {@code BOOL}. */
+    private static boolean arrowCodomainIsBool(Element arrowEl) {
+        if (arrowEl == null) return false;
+        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
+        if (domRng[1] == null) return false;
+        Element codomain = domRng[1];
+        return "Id".equals(codomain.getLocalName()) && "BOOL".equals(codomain.getAttribute("value"));
     }
 
     private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx) {
