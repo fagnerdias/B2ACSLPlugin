@@ -102,7 +102,8 @@ final class DummyGhostAxiomaticBuilder {
 
         Map<String, String> ghostNameToLibSymbol = collectGhostNameToLibSymbol(ghostText, reservedNames);
         Set<String> functionTypeAliases = collectFunctionTypeAliases(ghostText);
-        boolean needsNat = ghostText.contains("dummy_NAT");
+        boolean needsNat = Pattern.compile("\\bdummy_NAT\\b").matcher(ghostText).find();
+        boolean needsNat1 = Pattern.compile("\\bdummy_NAT1\\b").matcher(ghostText).find();
         boolean needsInt = ghostText.contains("dummy_INT");
         boolean needsBool = ghostText.contains("dummy_BOOL");
         if (!enumeratedSets.isEmpty()) {
@@ -115,6 +116,7 @@ final class DummyGhostAxiomaticBuilder {
 
         if (!ghostNameToLibSymbol.isEmpty()
                 || needsNat
+                || needsNat1
                 || needsInt
                 || needsBool
                 || !functionTypeAliases.isEmpty()
@@ -157,6 +159,10 @@ final class DummyGhostAxiomaticBuilder {
 
         if (needsNat) {
             sb.append("        logic DSet<integer> dummy_NAT;\n\n");
+        }
+
+        if (needsNat1) {
+            sb.append("        logic DSet<integer> dummy_NAT1;\n\n");
         }
 
         if (needsInt) {
@@ -525,6 +531,18 @@ final class DummyGhostAxiomaticBuilder {
                             "(?<![A-Za-z0-9_])dummy_" + Pattern.quote(name) + "(?![A-Za-z0-9_])");
             if (pat.matcher(ghostText).find()) {
                 sb.append("        logic integer dummy_").append(name).append(";\n\n");
+            }
+        }
+        // Conjuntos diferidos vistos (ex. Goods_GOODS, declarado em SETS na máquina vista) — o
+        // mesmo tratamento acima, mas com o tipo lógico DSet<integer> (não escalar).
+        List<String> seenDeferredSets =
+                BxmlSetsTranslator.listSeenMachineDeferredSetQualifiedNames(machineEl, bxmlDirectory);
+        for (String name : seenDeferredSets) {
+            Pattern pat =
+                    Pattern.compile(
+                            "(?<![A-Za-z0-9_])dummy_" + Pattern.quote(name) + "(?![A-Za-z0-9_])");
+            if (pat.matcher(ghostText).find()) {
+                sb.append("        logic DSet<integer> dummy_").append(name).append(";\n\n");
             }
         }
     }

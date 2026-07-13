@@ -1514,7 +1514,14 @@ public final class BxmlMachineVariables {
 
         if (implEl == null) return List.of();
 
-        List<String> result = new ArrayList<>(listImplementationAssignTargets(machineName, List.of(implEl), null));
+        // ctx da PRÓPRIA máquina importada (não null): implementationAssignTargetWithRange precisa
+        // dele para resolver o domínio da variável concreta (array/função total) e gerar
+        // "Raiz__v[..]" — com ctx null, cai sempre no alvo sem colchetes ("Raiz__v"), que o
+        // Frama-C rejeita como "not an assignable left value" quando v é, de facto, um array.
+        List<String> result =
+                new ArrayList<>(
+                        listImplementationAssignTargets(
+                                machineName, List.of(implEl), BxmlTranslateContext.forMachine(implEl)));
 
         if (abstractEl != null && needsGhostAbstraction(abstractEl, List.of(implEl))) {
             for (String v : GhostOperationsCiGenerator.listAbstractVariableNames(abstractEl)) {

@@ -163,6 +163,10 @@ public final class B2ACSLPipeline {
         Path cDir = langPath.resolve("c");
         // Staging dos ficheiros da lib sob cDir (elimina cópias redundantes em target/)
         System.setProperty("b2acsl.targetAcslDir", cDir.toAbsolutePath().normalize().toString());
+        // Limpa antes do loop: GhostOperationsCiGenerator.write() ACRESCENTA (não sobrescreve) a
+        // cada chamada — ver comentário abaixo — por isso o ficheiro precisa de começar vazio a
+        // cada execução, senão conteúdo de uma run anterior ficaria duplicado.
+        Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
         boolean anyNeedsGhost = false;
         for (MachineFile mf : machines) {
             Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
@@ -179,11 +183,22 @@ public final class B2ACSLPipeline {
                 continue;
             }
             anyNeedsGhost = true;
+            // write() ACRESCENTA ao ghost_operations.ci (não sobrescreve): num projeto com VÁRIAS
+            // máquinas a precisar de abstração ghost (ex.: Customer_estr tem Customer E Set), cada
+            // chamada usava Files.writeString sem APPEND, e só a ÚLTIMA máquina processada
+            // sobrevivia no ficheiro final — as declarações ghost_purchases/ghost_limit de Customer
+            // desapareciam silenciosamente, substituídas pelas de Set, dando "unbound logic
+            // variable ghost_purchases" no Frama-C. O bloco "axiomatic dummy_ghost { ... }" (mesmo
+            // nome/boilerplate genérico em toda chamada) que cada write() acrescenta é fundido num
+            // só logo a seguir ao loop, para não duplicar "type DSet<A>;" etc.
             GhostOperationsCiGenerator.write(
                     cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
         }
         if (!anyNeedsGhost) {
             Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
+        } else {
+            GhostOperationsCiGenerator.mergeDuplicateDummyGhostBlocks(
+                    GhostOperationsCiGenerator.targetPath(cDir));
         }
         Path ghostCiPath = GhostOperationsCiGenerator.targetPath(cDir);
         String ghostCiStripped =
@@ -578,6 +593,57 @@ public final class B2ACSLPipeline {
     }
 
     /**
+     * Palavras que o próprio B2ACSL usa estruturalmente no formato intermédio {@code function X:
+     * contract: requires …; ensures …;} passado ao {@code -acsl-import} (e nos blocos {@code
+     * axiomatic}/{@code ghost} gerados). Se o token reportado como erro de sintaxe for uma delas, a
+     * colisão não é curável por renomeação simples — renomear quebraria o próprio formato.
+     */
+    private static final Set<String> PROTECTED_ACSL_STRUCTURAL_WORDS =
+            Set.of(
+                    "requires", "ensures", "assigns", "contract", "function", "at", "assert",
+                    "ghost", "loop", "invariant", "variant", "axiom", "axiomatic", "predicate",
+                    "logic", "type", "include", "behavior", "reads", "admit", "lemma", "assumes",
+                    "return");
+
+    /** Casa {@code [acsl-import] ficheiro:linha: User Error: [Syntax error] <token>.} no output do Frama-C. */
+    private static final Pattern ACSL_IMPORT_SYNTAX_ERROR_TOKEN =
+            Pattern.compile("\\[acsl-import\\][^\\n]*\\[Syntax error\\]\\s*([A-Za-z_]\\w*)\\s*\\.");
+
+    private static String extractAcslImportSyntaxErrorToken(String framaCOutput) {
+        if (framaCOutput == null) {
+            return null;
+        }
+        Matcher m = ACSL_IMPORT_SYNTAX_ERROR_TOKEN.matcher(framaCOutput);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * Renomeia (fronteira de palavra, sufixo {@code _b}) todas as ocorrências de {@code badToken}
+     * nos {@code .acsl} importados e no {@code ghost_operations.ci} — identificador B (variável,
+     * parâmetro, …) que colide com uma palavra reservada do ACSL (ex.: {@code set}).
+     */
+    private static void renameReservedWordCollision(List<Path> acslImportFiles, Path ghostCi, String badToken)
+            throws IOException {
+        Pattern wordPattern =
+                Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(badToken) + "(?![A-Za-z0-9_])");
+        String replacement = badToken + "_b";
+        List<Path> targets = new ArrayList<>(acslImportFiles);
+        if (ghostCi != null && Files.isRegularFile(ghostCi)) {
+            targets.add(ghostCi);
+        }
+        for (Path p : targets) {
+            if (p == null || !Files.isRegularFile(p)) {
+                continue;
+            }
+            String text = Files.readString(p, StandardCharsets.UTF_8);
+            String renamed = wordPattern.matcher(text).replaceAll(Matcher.quoteReplacement(replacement));
+            if (!renamed.equals(text)) {
+                Files.writeString(p, renamed, StandardCharsets.UTF_8);
+            }
+        }
+    }
+
+    /**
      * {@code .acsl} para {@code -acsl-import} numa única invocação Frama-C: raízes SEES quando
      * existem; senão união (ordem estável) dos ficheiros resolvidos por cada {@code .c}.
      */
@@ -737,19 +803,57 @@ public final class B2ACSLPipeline {
         importCmd.add("-no-unicode");
         System.out.println("[B2ACSL] Frama-C acsl-import: " + String.join(" ", importCmd));
 
-        ProcessBuilder importPb = new ProcessBuilder(importCmd);
-        importPb.directory(cDir.toFile());
-        importPb.redirectOutput(mergedCode.toFile());
-        importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
+        // Alguns identificadores B (ex.: uma variável abstrata chamada "set") coincidem com
+        // palavras reservadas do ACSL — o -acsl-import falha com "[Syntax error] <token>.". Em vez
+        // de manter uma lista estática (sempre incompleta) de palavras reservadas, deteta-se o
+        // token exato reportado pelo próprio Frama-C, renomeia-se (sufixo "_b") em todos os .acsl
+        // importados e no ghost_operations.ci, e tenta-se de novo — self-healing, sem risco de
+        // adivinhar mal a lista. Só NÃO se tenta curar se o token colidir for uma das palavras
+        // estruturais que o próprio B2ACSL usa (requires/ensures/logic/…): renomeá-las corromperia
+        // o formato intermédio que o -acsl-import espera.
+        int importExitCode = -1;
+        // Tokens curados nesta ronda (ex.: "set"): ghost_operations.ci normalmente só tem a forma
+        // "dummy_set" (não colide), mas stripDummyPrefixFromMergedCode remove o prefixo "dummy_"
+        // DEPOIS do -acsl-import já ter passado, reintroduzindo a mesma palavra reservada de forma
+        // crua em merged_code.c — o -wp (invocação Frama-C separada) volta a rejeitá-la, só que com
+        // uma mensagem que já não nomeia o token ("unexpected token ','"). Por isso lembra-se aqui
+        // cada token curado para reaplicar a mesma renomeação já feita nos .acsl, depois do strip.
+        Set<String> healedReservedWords = new LinkedHashSet<>();
+        for (int attempt = 0; attempt < 5; attempt++) {
+            ProcessBuilder importPb = new ProcessBuilder(importCmd);
+            importPb.directory(cDir.toFile());
+            importPb.redirectOutput(mergedCode.toFile());
+            importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
 
-        Process pImport = importPb.start();
-        boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
-        if (!importOk) {
-            pImport.destroyForcibly();
-            return 5;
+            Process pImport = importPb.start();
+            boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
+            if (!importOk) {
+                pImport.destroyForcibly();
+                return 5;
+            }
+            importExitCode = pImport.exitValue();
+            if (importExitCode == 0) {
+                break;
+            }
+            String importOutput =
+                    Files.isRegularFile(mergedCode)
+                            ? Files.readString(mergedCode, StandardCharsets.UTF_8)
+                            : "";
+            String badToken = extractAcslImportSyntaxErrorToken(importOutput);
+            if (badToken == null || PROTECTED_ACSL_STRUCTURAL_WORDS.contains(badToken)) {
+                return importExitCode;
+            }
+            System.out.println(
+                    "[B2ACSL] '"
+                            + badToken
+                            + "' colide com palavra reservada do ACSL; renomeando para '"
+                            + badToken
+                            + "_b' em todos os .acsl importados e tentando novamente...");
+            renameReservedWordCollision(acslImportFiles, ghostCi, badToken);
+            healedReservedWords.add(badToken);
         }
-        if (pImport.exitValue() != 0) {
-            return pImport.exitValue();
+        if (importExitCode != 0) {
+            return importExitCode;
         }
 
         stripLeadingFramaCNonCOutput(mergedCode);
@@ -771,6 +875,14 @@ public final class B2ACSLPipeline {
         SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
         ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
         moveMemoryDependentVariableBlocksAfterTheirGlobals(mergedCode);
+        // Última etapa: várias transformações acima (ex. placeGhostOperationSpecsAboveFunctions)
+        // fazem a SUA PRÓPRIA remoção do prefixo "dummy_" ao inserir texto lido diretamente de
+        // ghost_operations.ci, reintroduzindo tarde uma palavra reservada do ACSL (ex. "dummy_set"
+        // → "set") já curada mais cedo no .acsl fonte. Reaplica-se aqui, no fim, para cobrir
+        // qualquer reintrodução independentemente de qual passo a causou.
+        for (String healed : healedReservedWords) {
+            renameReservedWordCollision(List.of(mergedCode), null, healed);
+        }
 
         String cSourcesLabel =
                 cFiles.stream().map(p -> p.getFileName().toString()).reduce((a, b) -> a + ", " + b).orElse("");
@@ -1066,6 +1178,17 @@ public final class B2ACSLPipeline {
     private static final Pattern LABELED_LOGIC_CONST_REF =
             Pattern.compile("\\w+\\{L\\}\\s*=\\s*([A-Za-z_]\\w*)\\s*;");
 
+    /**
+     * Casa a referência a um global C dentro de {@code array_to_function_int}/{@code
+     * array_to_function_bool} (ex.: {@code array_to_function_int((int32_t *)Price__price_i, 1)}),
+     * forma típica de {@code logic Function_..._..._ name{L}= \at(array_to_function_...(...), L);}
+     * gerada para variáveis concretas array/função (ex.: {@code Price__price_i}). Diferente de
+     * {@link #LABELED_LOGIC_CONST_REF}: aqui o global está dentro de uma chamada com cast, não
+     * numa atribuição direta {@code nome{L}= GLOBAL;}.
+     */
+    private static final Pattern LABELED_ARRAY_TO_FUNCTION_REF =
+            Pattern.compile("array_to_function_\\w+\\(\\([^()]*\\)\\s*([A-Za-z_]\\w*)\\s*,");
+
     private static String moveOneMemoryDependentVariableBlockIfNeeded(String content) {
         List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
         // Nome declarado {L}= -> span que o declara, para localizar dependências entre blocos
@@ -1088,6 +1211,13 @@ public final class B2ACSLPipeline {
             Matcher refMatcher = LABELED_LOGIC_CONST_REF.matcher(sp.text);
             while (refMatcher.find()) {
                 int end = lastStaticDeclEndOutsideSpan(content, refMatcher.group(1), spans);
+                if (end > latestDepEnd) {
+                    latestDepEnd = end;
+                }
+            }
+            Matcher arrayFnMatcher = LABELED_ARRAY_TO_FUNCTION_REF.matcher(sp.text);
+            while (arrayFnMatcher.find()) {
+                int end = lastStaticDeclEndOutsideSpan(content, arrayFnMatcher.group(1), spans);
                 if (end > latestDepEnd) {
                     latestDepEnd = end;
                 }

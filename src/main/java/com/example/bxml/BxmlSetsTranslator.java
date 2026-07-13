@@ -624,6 +624,36 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Nomes ACSL qualificados (ex. {@code Goods_GOODS}) de conjuntos diferidos (sem
+     * {@code Enumerated_Values}) declarados nas máquinas em {@code SEES} de {@code machineEl}.
+     * Espelha {@link #listSeenMachineConcreteConstantNames}: tal como as constantes concretas
+     * vistas, estes conjuntos são globais partilhados (declarados no {@code .acsl} da máquina
+     * vista, carregado via {@code -acsl-import}) e o gerador de {@code ghost_operations.ci}
+     * precisa de os tratar como referências {@code dummy_} locais — o parser externo do
+     * {@code .ci} não partilha o ambiente lógico do {@code -acsl-import}.
+     */
+    public static List<String> listSeenMachineDeferredSetQualifiedNames(
+            Element machineEl, Path bxmlDirectory) {
+        if (machineEl == null || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return List.of();
+        }
+        List<String> seenNames = listReferencedMachineNames(machineEl);
+        List<String> result = new ArrayList<>();
+        for (String seenName : seenNames) {
+            Path p = bxmlDirectory.resolve(seenName + ".bxml");
+            if (!Files.isRegularFile(p)) {
+                continue;
+            }
+            try {
+                Element seenEl = parseMachineElement(p);
+                result.addAll(buildDeferredSetRenames(seenEl).values());
+            } catch (Exception ignored) {
+            }
+        }
+        return result;
+    }
+
+    /**
      * Texto das máquinas em {@code SEES} para deteção de includes da {@code B2ACSLLib} na máquina que
      * vê (corpo dos {@code .acsl} já gerados, sem repetir o preâmbulo de {@code include}).
      */

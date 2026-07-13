@@ -445,6 +445,26 @@ public final class AcslGenerator {
             sb.append("\n");
         }
         // Variáveis das máquinas fundidas (r, i) — em ordem de cadeia, antes das compreensões.
+        //
+        // Nomes de variáveis já declarados (começa pela abstrata): uma variável de refinamento ou
+        // implementação B pode reusar o MESMO nome da variável abstrata que refina (namespaces B
+        // são por máquina, e.g. "limit" tanto em Customer quanto em Customer_i) — válido em B, mas
+        // ao fundir tudo num único ACSL plano isso declara "limit" duas vezes com o mesmo perfil e
+        // o Frama-C rejeita ("already declared with the same profile"). Deteta-se a colisão e
+        // renomeia-se (sufixo _r/_i) só a declaração dessa camada — a mesma renomeação é depois
+        // aplicada ao invariante dessa camada em appendMergedInvariantPredicatesOnly.
+        // Só semeia com os nomes abstratos se o bloco abstrato foi mesmo emitido: quando a
+        // implementação espelha as variáveis abstratas (varsAbstract == "", acima), esses nomes
+        // NUNCA aparecem no texto gerado — quem declara "is_outdoor_door_openable" bare é o
+        // próprio bloco da máquina fundida (mirroring). Semear aqui mesmo assim faria o loop
+        // abaixo "detetar" uma colisão inexistente e renomear essa declaração para _i/_r sem
+        // necessidade, deixando o nome bare usado nos requires/ensures sem declaração nenhuma.
+        Set<String> declaredVariableNames =
+                varsAbstract.isBlank()
+                        ? new LinkedHashSet<>()
+                        : new LinkedHashSet<>(
+                                BxmlMachineVariables.inferVariableLogicTypes(machineEl, ctx).keySet());
+        Map<Element, Map<String, String>> mergedVariableRenames = new LinkedHashMap<>();
         Element refinementChainParent = machineEl;
         for (Element mel : mergedMachineElements) {
             BxmlTranslateContext mctx =
@@ -455,6 +475,23 @@ public final class AcslGenerator {
                     BxmlMachineVariables.formatAxiomaticBlock(
                             mel, mctx, baseName, refinementChainParent, gluing);
             refinementChainParent = mel;
+
+            Set<String> ownNames = BxmlMachineVariables.inferVariableLogicTypes(mel, mctx).keySet();
+            Map<String, String> renameMap = new LinkedHashMap<>();
+            String suffix = "implementation".equalsIgnoreCase(mel.getAttribute("type")) ? "_i" : "_r";
+            for (String name : ownNames) {
+                if (declaredVariableNames.contains(name)) {
+                    renameMap.put(name, name + suffix);
+                }
+            }
+            if (!renameMap.isEmpty()) {
+                varsMerged = renameWholeWordIdentifiers(varsMerged, renameMap);
+                mergedVariableRenames.put(mel, renameMap);
+            }
+            for (String name : ownNames) {
+                declaredVariableNames.add(renameMap.getOrDefault(name, name));
+            }
+
             if (!varsMerged.isBlank()) {
                 sb.append(varsMerged);
                 if (!varsMerged.endsWith("\n")) sb.append("\n");
@@ -513,7 +550,7 @@ public final class AcslGenerator {
         }
         appendMergedInvariantPredicatesOnly(
                 sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
-                ctx.enumeratedSetRenames());
+                ctx.enumeratedSetRenames(), mergedVariableRenames);
 
         // 2b) Lambdas (emissão tardia, após variáveis): lambda_functions pode referenciar variáveis
         // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima.
@@ -668,14 +705,22 @@ public final class AcslGenerator {
         return generateAcsl(machine, bxmlPath, outputDir, mergeBxmlPathsFromDescendants, Map.of());
     }
 
-    /** Apenas {@code predicate} de invariantes de refinamentos/implementações. */
+    /**
+     * Apenas {@code predicate} de invariantes de refinamentos/implementações.
+     *
+     * @param variableRenamesByMachine mesma renomeação (por colisão de nome com a variável
+     *        abstrata, ex.: {@code limit} → {@code limit_i}) aplicada ao bloco de variáveis dessa
+     *        camada em {@link #generateAcsl}; aplica-se aqui ao invariante da MESMA camada para
+     *        que ambos refiram a variável renomeada consistentemente.
+     */
     private static void appendMergedInvariantPredicatesOnly(
             StringBuilder sb,
             List<Element> mergedMachineRoots,
             Map<String, String> gluing,
             BxmlComprehensionRegistry sharedComprehensions,
             Element rootAbstractMachineEl,
-            Map<String, String> enumeratedSetRenames) {
+            Map<String, String> enumeratedSetRenames,
+            Map<Element, Map<String, String>> variableRenamesByMachine) {
         if (mergedMachineRoots == null || mergedMachineRoots.isEmpty()) {
             return;
         }
@@ -686,10 +731,26 @@ public final class AcslGenerator {
                     .withEnumeratedSetRenames(enumeratedSetRenames);
             String inv = BxmlInvariantTranslator.formatInvariantPredicates(mel, ctx);
             if (inv.isBlank()) continue;
+            Map<String, String> renameMap = variableRenamesByMachine.get(mel);
+            if (renameMap != null && !renameMap.isEmpty()) {
+                inv = renameWholeWordIdentifiers(inv, renameMap);
+            }
             sb.append("\n");
             sb.append(inv);
             if (!inv.endsWith("\n")) sb.append("\n");
         }
+    }
+
+    /** Substitui (fronteira de palavra) cada chave de {@code renameMap} pelo respetivo valor em {@code text}. */
+    private static String renameWholeWordIdentifiers(String text, Map<String, String> renameMap) {
+        String result = text;
+        for (Map.Entry<String, String> e : renameMap.entrySet()) {
+            result =
+                    result.replaceAll(
+                            "(?<![A-Za-z0-9_])" + java.util.regex.Pattern.quote(e.getKey()) + "(?![A-Za-z0-9_])",
+                            java.util.regex.Matcher.quoteReplacement(e.getValue()));
+        }
+        return result;
     }
 
     /**
