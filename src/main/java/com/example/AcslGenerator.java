@@ -280,9 +280,17 @@ public final class AcslGenerator {
         List<String> importedMachineNames =
                 com.example.bxml.BxmlSetsTranslator.listImportedMachineNamesFromChain(
                         machineEl, mergedMachineElements);
+        // IMPORTS é transitivo em B: se esta máquina importa X e X importa Y, esta máquina também
+        // depende do invariante e do assigns de Y (X's próprias operações já a chamam
+        // internamente). listImportedMachineNamesFromChain só olha um nível — usado aqui só para
+        // requires/assigns "herdados", não para varRhsOverrides (ligação direta por invariante,
+        // que é sempre com um import direto).
+        List<String> transitiveImportedMachineNames =
+                com.example.bxml.BxmlSetsTranslator.listImportedMachineNamesTransitive(
+                        machineEl, mergedMachineElements, importsGraph);
         List<String> importedInvariantPredicateNames =
                 BxmlInvariantTranslator.listImportedMachineInvariantPredicateNames(
-                        importedMachineNames, bxmlDirectory);
+                        transitiveImportedMachineNames, bxmlDirectory);
         Map<String, String> varRhsOverrides =
                 BxmlMachineVariables.buildAbstractVarRhsOverrides(
                         machineEl, mergedMachineElements, importedMachineNames, bxmlDirectory);
@@ -290,13 +298,14 @@ public final class AcslGenerator {
                 BxmlMachineVariables.listInitialisationAssignTargets(
                         baseName, machineEl, mergedMachineElements, ctx, varRhsOverrides));
         implementationAssignTargets.addAll(
-                BxmlMachineVariables.listImportedMachineConcreteAssigns(importedMachineNames, bxmlDirectory));
+                BxmlMachineVariables.listImportedMachineConcreteAssigns(
+                        transitiveImportedMachineNames, bxmlDirectory));
         List<String> seenMachineNames =
                 com.example.bxml.BxmlSetsTranslator.listSeenMachineNamesFromChain(
                         machineEl, mergedMachineElements);
         Map<String, List<String>> importedOpAssigns =
                 BxmlMachineVariables.buildImportedOperationAssignsMap(
-                        importedMachineNames, seenMachineNames, bxmlDirectory);
+                        transitiveImportedMachineNames, seenMachineNames, bxmlDirectory);
         boolean useGhostAbstraction =
                 BxmlMachineVariables.needsGhostAbstraction(machineEl, mergedMachineElements);
         Set<String> operationStateVariableNames =

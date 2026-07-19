@@ -320,15 +320,38 @@ public final class BxmlMachineVariables {
         if (abstractMachineEl == null || mergedMachineElements == null || mergedMachineElements.isEmpty()) {
             return false;
         }
-        if (declaredVariableNames(abstractMachineEl).isEmpty()) {
+        Set<String> ownNames = declaredVariableNames(abstractMachineEl);
+        if (ownNames.isEmpty()) {
             return false;
+        }
+        // Ligação ESTRUTURAL sólida (variável representada como array/função total em memória —
+        // o invariante da própria abstrata a tipa com "-->", via concreteVariableFunctionArrowElement,
+        // o mesmo mecanismo de implementationRhsTotalFunctionFromArray/array_to_function_int).
+        boolean hasArrayBackedVariable = false;
+        for (String v : ownNames) {
+            if (concreteVariableFunctionArrowElement(abstractMachineEl, v) != null) {
+                hasArrayBackedVariable = true;
+                break;
+            }
         }
         for (Element mel : mergedMachineElements) {
             if (!isImplementationMachine(mel)) {
                 continue;
             }
-            if (declaredVariableNames(mel).isEmpty()
-                    && BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
+            if (!declaredVariableNames(mel).isEmpty()) {
+                continue;
+            }
+            // Sem Concrete_Variables próprias: a implementação manipula a variável abstrata
+            // diretamente OU herda o estado de uma máquina importada via invariante de colagem
+            // (ex. "loopnn == nn" em Mult_i, ligando o "nn" de Mult ao "loopnn" de Body). Sem
+            // IMPORTS não há ambiguidade nenhuma (não existe outra máquina para se colar) — qualifica
+            // sempre. Com IMPORTS, só qualifica se houver ligação array-backed sólida: uma variável
+            // cuja única "ligação" é invariante de colagem com OUTRA máquina não tem representação
+            // concreta própria nenhuma — defini-la diretamente como a variável da outra máquina
+            // tornaria essa invariante de colagem uma tautologia (nn == loopnn == Body__loopnn,
+            // nunca prova nada sobre a sincronização real); precisa continuar ghost, com a colagem
+            // verificada como obrigação de prova de verdade.
+            if (hasArrayBackedVariable || BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
                 return true;
             }
         }
@@ -1312,11 +1335,15 @@ public final class BxmlMachineVariables {
         if (importedMachineNames == null || importedMachineNames.isEmpty() || bxmlDirectory == null) {
             return List.of();
         }
-        List<String> result = new ArrayList<>();
+        // LinkedHashSet: loadConcreteAssignsForImportedMachine agora expande IMPORTS
+        // transitivamente, então uma máquina importada transitivamente por duas vias diferentes
+        // (ex.: "array" e, separadamente, "iter_services" já vindo do fecho transitivo de quem
+        // chama) não deve gerar "assigns X;" duplicado.
+        LinkedHashSet<String> result = new LinkedHashSet<>();
         for (String name : importedMachineNames) {
             result.addAll(loadConcreteAssignsForImportedMachine(name, bxmlDirectory));
         }
-        return result;
+        return List.copyOf(result);
     }
 
     /**
@@ -1494,6 +1521,21 @@ public final class BxmlMachineVariables {
     }
 
     private static List<String> loadConcreteAssignsForImportedMachine(String machineName, Path bxmlDirectory) {
+        return loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory, new LinkedHashSet<>());
+    }
+
+    /**
+     * @param visited nomes de máquina já expandidos nesta chamada (evita recursão infinita se o
+     *        grafo de IMPORTS tiver um ciclo, o que B não permite mas não custa proteger contra).
+     *        IMPORTS é transitivo: os alvos de {@code machineName} incluem também os de tudo que
+     *        {@code machineName} importa (ex.: {@code array} importa {@code iter_services} — quem
+     *        chama {@code array__set_array_value} de fora precisa do assigns de ambas).
+     */
+    private static List<String> loadConcreteAssignsForImportedMachine(
+            String machineName, Path bxmlDirectory, Set<String> visited) {
+        if (machineName == null || machineName.isBlank() || !visited.add(machineName.trim())) {
+            return List.of();
+        }
         Element abstractEl = null;
         Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
         if (Files.exists(abstractPath)) {
@@ -1518,15 +1560,33 @@ public final class BxmlMachineVariables {
         // dele para resolver o domínio da variável concreta (array/função total) e gerar
         // "Raiz__v[..]" — com ctx null, cai sempre no alvo sem colchetes ("Raiz__v"), que o
         // Frama-C rejeita como "not an assignable left value" quando v é, de facto, um array.
+        BxmlTranslateContext implCtx = BxmlTranslateContext.forMachine(implEl);
         List<String> result =
-                new ArrayList<>(
-                        listImplementationAssignTargets(
-                                machineName, List.of(implEl), BxmlTranslateContext.forMachine(implEl)));
+                new ArrayList<>(listImplementationAssignTargets(machineName, List.of(implEl), implCtx));
+
+        // Implementação sem Concrete_Variables próprias (usa a variável abstrata diretamente, ex.
+        // "array"/"array_i" — mesmo caso de anyImplementationUsesAbstractVariablesOnly): os alvos
+        // vêm da declaração da ABSTRATA, e a fatia [low..high] (quando a variável é array/função
+        // total) também é resolvida pelo invariante da ABSTRATA — a implementação não tem
+        // <Invariant> ao nível da máquina (o único <Invariant> em array_i.bxml, p.ex., é o de um
+        // loop dentro de <Operations>, não filho direto de <Machine>: firstChildElement não o acha).
+        if (result.isEmpty() && abstractEl != null) {
+            for (String v : declaredVariableNames(abstractEl)) {
+                String base = machineName + "__" + v;
+                String ranged = implementationAssignTargetWithRange(base, v, abstractEl, implCtx);
+                result.add(ranged == null ? base : ranged);
+            }
+        }
 
         if (abstractEl != null && needsGhostAbstraction(abstractEl, List.of(implEl))) {
             for (String v : GhostOperationsCiGenerator.listAbstractVariableNames(abstractEl)) {
                 result.add("ghost_" + v);
             }
+        }
+
+        for (String transitiveImport : BxmlSetsTranslator.listImportedMachineNames(implEl)) {
+            result.addAll(
+                    loadConcreteAssignsForImportedMachine(transitiveImport, bxmlDirectory, visited));
         }
 
         return result;

@@ -200,6 +200,40 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Como {@link #listImportedMachineNamesFromChain(Element, List)}, mas fecha transitivamente
+     * {@code IMPORTS} (só imports, não {@code SEES}): se {@code entry_point IMPORTS array} e
+     * {@code array IMPORTS iter_services}, {@code iter_services} entra no resultado mesmo sem
+     * {@code entry_point} importá-la diretamente — B trata IMPORTS como uma cadeia de
+     * inicialização/estado que se propaga (a máquina importadora herda a necessidade de respeitar
+     * o invariante e o {@code assigns} de tudo o que a sua importada, por sua vez, importa).
+     *
+     * @param importsGraph grafo de IMPORTS do projeto inteiro ({@link BxmlImportsGraph}); se
+     *        {@code null}, cai no comportamento de um nível de {@link
+     *        #listImportedMachineNamesFromChain(Element, List)}.
+     */
+    public static List<String> listImportedMachineNamesTransitive(
+            Element rootMachineEl, List<Element> mergedMachineElements, BxmlImportsGraph importsGraph) {
+        List<String> direct = listImportedMachineNamesFromChain(rootMachineEl, mergedMachineElements);
+        if (importsGraph == null) {
+            return direct;
+        }
+        LinkedHashSet<String> reachable = new LinkedHashSet<>();
+        ArrayDeque<String> frontier = new ArrayDeque<>(direct);
+        while (!frontier.isEmpty()) {
+            String current = frontier.poll();
+            if (current == null || current.isBlank() || !reachable.add(current.trim())) {
+                continue;
+            }
+            for (String next : importsGraph.importedBy(current.trim())) {
+                if (next != null && !next.isBlank() && !reachable.contains(next.trim())) {
+                    frontier.add(next.trim());
+                }
+            }
+        }
+        return List.copyOf(reachable);
+    }
+
+    /**
      * {@code SEES} da máquina abstrata e da cadeia fundida (implementações/refinamentos), sem
      * duplicar nomes.
      */

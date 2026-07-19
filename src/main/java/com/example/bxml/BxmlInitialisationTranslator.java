@@ -1,6 +1,7 @@
 package com.example.bxml;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -273,7 +274,10 @@ public final class BxmlInitialisationTranslator {
             case "Skip" -> { /* nada */ }
             case "Bloc_Sub" -> walkSubstitution(firstSubChild(sub), ensures, ctx, oldNames);
             case "ANY_Sub" -> {
-                /* Tratado como contrato ghost por GhostOperationsCiGenerator; nada a emitir aqui. */
+                String t = translateAnySubAsExists(sub, ctx);
+                if (!t.isBlank()) {
+                    ensures.add(t);
+                }
             }
             case "Becomes_In" -> parseBecomesInSub(sub, ensures, ctx);
             case "Becomes_Such_That" -> parseBecomesSuchThatSub(sub, ensures, ctx);
@@ -300,12 +304,29 @@ public final class BxmlInitialisationTranslator {
     }
 
     /**
-     * {@code ANY v WHERE P THEN Q} → {@code \forall T v; P ==> (tradução de Q)} (uma única cláusula).
+     * {@code ANY v WHERE P THEN Q} → {@code \exists T v; P && (tradução de Q)} (uma única cláusula).
+     *
+     * <p>{@code ANY} escolhe UM valor válido (não "para todo"), e o estado resultante reflete essa
+     * escolha — {@code \exists} com conjunção é a tradução fiel; {@code \forall ==>} (forma anterior)
+     * era logicamente mais fraco e escondia o mesmo problema descrito abaixo.
+     *
+     * <p>Quando uma variável de {@code ANY} é definida por uma igualdade no {@code WHERE} (ex.
+     * {@code new_Todo = Todo - {chosen}}) e usada como único RHS de uma atribuição direta no
+     * {@code THEN} (ex. {@code Todo := new_Todo}), essa variável é eliminada do quantificador: a
+     * igualdade do {@code WHERE} não é emitida, a atribuição correspondente traduz a expressão
+     * definidora diretamente, e as demais referências à variável auxiliar (se houver) são
+     * substituídas pelo nome da variável real (pós-estado) — evita um existencial supérfluo quando
+     * ele é só um alias para o novo valor de outra variável, e usa o nome mais natural (a própria
+     * variável de estado) nas cláusulas seguintes.
+     *
+     * <p>Referências no {@code WHERE} a variáveis atribuídas no {@code THEN} são pré-estado (B
+     * avalia a guarda antes da substituição) — por isso levam {@code \old(...)}, o que a tradução
+     * anterior não fazia.
      *
      * <p>A tradução das atribuições em {@code Then} reusa {@link #walkSubstitution} (mesmas regras
      * que {@code Initialisation} / corpos de operação).
      */
-    public static String translateAnySubAsForall(Element anySub, BxmlTranslateContext ctx) {
+    public static String translateAnySubAsExists(Element anySub, BxmlTranslateContext ctx) {
         if (anySub == null) return "";
         Element vars = firstChildElement(anySub, "Variables");
         Element predEl = firstChildElement(anySub, "Pred");
@@ -313,18 +334,73 @@ public final class BxmlInitialisationTranslator {
         if (vars == null || predEl == null || thenEl == null) {
             return "";
         }
-        String p = BxmlPredicateToAcsl.translateInvariantContent(predEl, ctx).trim();
-        if (p.isBlank()) {
-            p = "\\true";
+        List<Element> varIds = new ArrayList<>();
+        for (Element e : directExpChildren(vars)) {
+            if ("Id".equals(e.getLocalName())) varIds.add(e);
         }
-        List<Element> varIds = directExpChildren(vars);
-        List<String> binders = new ArrayList<>();
+        if (varIds.isEmpty()) {
+            return "";
+        }
+        Set<String> anyVarNames = new LinkedHashSet<>();
         for (Element vid : varIds) {
-            if (!"Id".equals(vid.getLocalName())) {
+            String n = vid.getAttribute("value");
+            if (n != null && !n.isBlank()) anyVarNames.add(n.trim());
+        }
+
+        List<Element> guardConjuncts = topLevelConjuncts(firstSubChild(predEl));
+        Element thenSub = firstSubChild(thenEl);
+        List<Element> thenSubs = topLevelParallelSubs(thenSub);
+
+        // auxVar -> (expressão definidora, conjunto do WHERE que a declara) para "auxVar = expr".
+        Map<String, Element> definingExpr = new LinkedHashMap<>();
+        Map<String, Element> definingConjunct = new LinkedHashMap<>();
+        for (Element c : guardConjuncts) {
+            if (!"Exp_Comparison".equals(c.getLocalName()) || !"=".equals(c.getAttribute("op"))) {
                 continue;
             }
+            Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(c);
+            if (pair[0] == null || pair[1] == null) continue;
+            String lhsName = soleIdName(pair[0]);
+            String rhsName = soleIdName(pair[1]);
+            if (lhsName != null && anyVarNames.contains(lhsName) && !definingExpr.containsKey(lhsName)) {
+                definingExpr.put(lhsName, pair[1]);
+                definingConjunct.put(lhsName, c);
+            } else if (rhsName != null && anyVarNames.contains(rhsName) && !definingExpr.containsKey(rhsName)) {
+                definingExpr.put(rhsName, pair[0]);
+                definingConjunct.put(rhsName, c);
+            }
+        }
+
+        // auxVar -> nome da variável real atribuída via "real := auxVar" (alias direto) no THEN.
+        Map<String, String> aliasRealName = new LinkedHashMap<>();
+        Map<String, Element> aliasAssign = new LinkedHashMap<>();
+        for (Element s : thenSubs) {
+            if (!"Assignement_Sub".equals(s.getLocalName())) continue;
+            Element lhsEl = firstChildElement(s, "Variables");
+            Element rhsEl = firstChildElement(s, "Values");
+            if (lhsEl == null || rhsEl == null) continue;
+            List<Element> lhsIds = directExpChildren(lhsEl);
+            List<Element> rhsVals = directExpChildren(rhsEl);
+            if (lhsIds.size() != 1 || rhsVals.size() != 1 || !"Id".equals(lhsIds.get(0).getLocalName())) {
+                continue;
+            }
+            String auxName = soleIdName(rhsVals.get(0));
+            if (auxName == null || !definingExpr.containsKey(auxName) || aliasRealName.containsKey(auxName)) {
+                continue;
+            }
+            String realName = lhsIds.get(0).getAttribute("value").trim();
+            if (realName.isBlank()) continue;
+            aliasRealName.put(auxName, realName);
+            aliasAssign.put(auxName, s);
+        }
+
+        Set<String> eliminated = new LinkedHashSet<>(definingExpr.keySet());
+        eliminated.retainAll(aliasRealName.keySet());
+
+        List<String> binders = new ArrayList<>();
+        for (Element vid : varIds) {
             String vn = vid.getAttribute("value").trim();
-            if (vn.isBlank()) {
+            if (vn.isBlank() || eliminated.contains(vn)) {
                 continue;
             }
             String ty = BxmlPredicateToAcsl.acslQuantifierLogicTypeForAnyVariable(predEl, vid, ctx);
@@ -333,10 +409,94 @@ public final class BxmlInitialisationTranslator {
         if (binders.isEmpty()) {
             return "";
         }
-        List<String> inner = new ArrayList<>();
-        walkSubstitution(firstSubChild(thenEl), inner, ctx);
-        String q = inner.isEmpty() ? "\\true" : String.join(" && ", inner);
-        return "\\forall " + String.join(", ", binders) + "; " + p + " ==> (" + q + ")";
+
+        Set<String> assignedRealNames = new LinkedHashSet<>();
+        collectAssignedLhsNames(thenSub, assignedRealNames);
+
+        List<String> guardParts = new ArrayList<>();
+        for (Element c : guardConjuncts) {
+            if (eliminated.stream().anyMatch(v -> c == definingConjunct.get(v))) {
+                continue;
+            }
+            String t = BxmlPredicateToAcsl.translatePropertyPred(c, ctx).trim();
+            if (t.isBlank()) continue;
+            t = applyOldWrapping(t, assignedRealNames);
+            t = renameEliminatedAuxVars(t, eliminated, aliasRealName);
+            guardParts.add(t);
+        }
+
+        List<String> thenParts = new ArrayList<>();
+        for (Element s : thenSubs) {
+            String auxHere = null;
+            for (String aux : eliminated) {
+                if (aliasAssign.get(aux) == s) {
+                    auxHere = aux;
+                    break;
+                }
+            }
+            if (auxHere != null) {
+                // "realVar := auxVar" com auxVar eliminada -> "realVar := <expressão definidora>".
+                // Só o RHS (a expressão definidora) é pré-estado; o LHS é a própria variável real
+                // sendo definida (pós-estado) e não pode levar \old — por isso wrapLhsVarsInRhsWithOld
+                // (que separa LHS/RHS) em vez de applyOldWrapping (que embrulharia os dois lados).
+                Element realIdEl = directExpChildren(firstChildElement(s, "Variables")).get(0);
+                String eq = BxmlExpressionToAcsl.formatEquality(realIdEl, definingExpr.get(auxHere), ctx);
+                thenParts.add(wrapLhsVarsInRhsWithOld(eq, assignedRealNames));
+                continue;
+            }
+            List<String> tmp = new ArrayList<>();
+            walkSubstitution(s, tmp, ctx, assignedRealNames);
+            for (String t : tmp) {
+                thenParts.add(renameEliminatedAuxVars(t, eliminated, aliasRealName));
+            }
+        }
+
+        String guardText = guardParts.isEmpty() ? "\\true" : String.join(" && ", guardParts);
+        String thenText = thenParts.isEmpty() ? "\\true" : String.join(" && ", thenParts);
+        return "\\exists " + String.join(", ", binders) + "; " + guardText + " && " + thenText;
+    }
+
+    private static String soleIdName(Element e) {
+        return e != null && "Id".equals(e.getLocalName()) ? e.getAttribute("value").trim() : null;
+    }
+
+    /** Filhos diretos de um {@code Nary_Pred op='&'}, ou {@code [predRoot]} se não for uma conjunção. */
+    private static List<Element> topLevelConjuncts(Element predRoot) {
+        List<Element> out = new ArrayList<>();
+        if (predRoot == null) return out;
+        if ("Nary_Pred".equals(predRoot.getLocalName()) && "&".equals(predRoot.getAttribute("op"))) {
+            out.addAll(directExpChildren(predRoot));
+        } else {
+            out.add(predRoot);
+        }
+        return out;
+    }
+
+    /** Filhos diretos de um {@code Nary_Sub op='||'}, ou {@code [thenSub]} se não for paralela. */
+    private static List<Element> topLevelParallelSubs(Element thenSub) {
+        List<Element> out = new ArrayList<>();
+        if (thenSub == null) return out;
+        if ("Nary_Sub".equals(thenSub.getLocalName()) && "||".equals(thenSub.getAttribute("op"))) {
+            out.addAll(directExpChildren(thenSub));
+        } else {
+            out.add(thenSub);
+        }
+        return out;
+    }
+
+    /** Troca (fronteira de palavra) cada variável eliminada pelo nome da variável real correspondente. */
+    private static String renameEliminatedAuxVars(
+            String text, Set<String> eliminated, Map<String, String> aliasRealName) {
+        String out = text;
+        for (String aux : eliminated) {
+            String real = aliasRealName.get(aux);
+            if (real == null) continue;
+            out =
+                    out.replaceAll(
+                            "(?<![A-Za-z0-9_])" + Pattern.quote(aux) + "(?![A-Za-z0-9_])",
+                            Matcher.quoteReplacement(real));
+        }
+        return out;
     }
 
     private static void parseSimultaneous(

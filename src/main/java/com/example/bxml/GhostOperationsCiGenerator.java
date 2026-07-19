@@ -465,22 +465,22 @@ public final class GhostOperationsCiGenerator {
 
                 Element anySub = BxmlInitialisationTranslator.findTopLevelAnySub(body);
                 if (anySub != null) {
-                    String forall = BxmlInitialisationTranslator.translateAnySubAsForall(anySub, ctx);
-                    if (forall == null || forall.isBlank()) continue;
+                    String existsForm = BxmlInitialisationTranslator.translateAnySubAsExists(anySub, ctx);
+                    if (existsForm == null || existsForm.isBlank()) continue;
                     List<Param> params =
                             appendOutputParametersAsPointers(listInputParameters(op), op);
-                    forall =
+                    existsForm =
                             rewriteAnySubEnsureForGhost(
-                                    forall, abstractSet, concreteConstants, op, anySub, ctx,
+                                    existsForm, abstractSet, concreteConstants, op, anySub, ctx,
                                     abstractConstParams);
-                    forall = rewriteBoolOutputPredicateTernary(forall);
-                    forall = castScalarIntGhostParamsInEnsure(forall, params);
+                    existsForm = rewriteBoolOutputPredicateTernary(existsForm);
+                    existsForm = castScalarIntGhostParamsInEnsure(existsForm, params);
                     ops.add(
                             new GhostOp(
                                     sanitizeGhostFunctionName(opName),
                                     params,
                                     assigned,
-                                    List.of(forall)));
+                                    List.of(existsForm)));
                     continue;
                 }
 
@@ -704,8 +704,12 @@ public final class GhostOperationsCiGenerator {
      *
      * <p>Em ACSL, predicados ({@code dummy_equals}, {@code dummy_belongs}, etc.) não podem ser usados
      * como condição de ternário (contexto de termo). Converte para bicondicional.
+     *
+     * <p>Visibilidade de pacote: também usada por {@link BxmlOperationsTranslator} para o mesmo
+     * padrão fora do universo ghost (ex.: {@code equals(...)} da B2ACSLLib) quando {@code
+     * bodyEnsuresOnly} passa a ser mantido no contrato real da função.
      */
-    private static String rewriteBoolOutputPredicateTernary(String ensure) {
+    static String rewriteBoolOutputPredicateTernary(String ensure) {
         if (ensure == null || ensure.isEmpty() || !ensure.contains("\\true")) return ensure;
         return ensure.replaceAll(
                 "(\\*\\w+)\\s*==\\s*\\((.+?)\\s*\\?\\s*\\\\true\\s*:\\s*\\\\false\\)",
@@ -2100,7 +2104,7 @@ public final class GhostOperationsCiGenerator {
      * parâmetros (na ordem de declaração no BXML); usado por contratos ghost derivados de
      * {@code ANY_Sub} (e respetivo {@code predicate ghost__<op>}).
      */
-    private static List<Param> appendOutputParametersAsPointers(
+    static List<Param> appendOutputParametersAsPointers(
             List<Param> base, Element operation) {
         List<Param> out = new ArrayList<>(base);
         if (operation == null) return out;
@@ -2140,7 +2144,7 @@ public final class GhostOperationsCiGenerator {
         return "int *";
     }
 
-    private static List<Param> listInputParameters(Element operation) {
+    static List<Param> listInputParameters(Element operation) {
         List<Param> out = new ArrayList<>();
         Element in = firstChildElement(operation, "Input_Parameters");
         if (in == null) return out;
@@ -2371,7 +2375,7 @@ public final class GhostOperationsCiGenerator {
      * Em cláusulas {@code ensures} ghost, parâmetros C {@code int} usam-se como {@code (integer)x}
      * ao serem passados a funções do universo {@code dummy_ghost} (tipos matemáticos ACSL).
      */
-    private static String castScalarIntGhostParamsInEnsure(String ensure, List<Param> params) {
+    static String castScalarIntGhostParamsInEnsure(String ensure, List<Param> params) {
         if (ensure == null || ensure.isBlank() || params == null || params.isEmpty()) {
             return ensure;
         }
@@ -2511,7 +2515,8 @@ public final class GhostOperationsCiGenerator {
         return null;
     }
 
-    private record Param(String type, String name) {}
+    /** Visibilidade de pacote: reaproveitado por {@link BxmlOperationsTranslator} (mesmo fim). */
+    record Param(String type, String name) {}
 
     private record GhostOp(
             String cName, List<Param> params, Set<String> assignsAbstract, List<String> ghostEnsures) {

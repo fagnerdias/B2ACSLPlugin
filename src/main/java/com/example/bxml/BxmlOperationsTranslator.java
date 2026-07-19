@@ -248,7 +248,30 @@ public final class BxmlOperationsTranslator {
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
             }
             applyStarPrefixToEnsures(ensures, outputParams);
+            // Antes de rewriteEnsuresBoolOutputEquality (que só troca o LHS "*p" por "(integer)(*p !=
+            // 0)"): "*p == (pred ? \true : \false)" pode ter um predicado da lib (ex.: equals(...))
+            // na condição do ternário, que o Frama-C rejeita ("symbol X is a predicate, not a
+            // function") — precisa virar bicondicional ANTES, enquanto o LHS ainda é "*p" (o regex
+            // desta função exige esse formato). Mesma correção já usada no lado ghost; só nunca
+            // apareceu aqui porque este ensures era descartado do contrato real (ver abaixo).
+            for (int ei = 0; ei < ensures.size(); ei++) {
+                ensures.set(ei, GhostOperationsCiGenerator.rewriteBoolOutputPredicateTernary(ensures.get(ei)));
+            }
             rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, ctx);
+            // Parâmetros de entrada escalares (C "int") ficam sem cast no ensures cru — comparados
+            // com um Set<integer> (ex. "singleton(bb)" dentro de "equals(books, ...)") o Frama-C
+            // infere o tipo lógico do parâmetro a partir do seu uso e rejeita ("invalid cast from
+            // Set<Biblioteca__BOOK> to Set<integer>"). O lado ghost já resolve isto com o mesmo
+            // "(integer)bb"; reaproveitado aqui pelo mesmo motivo do bloco acima.
+            List<GhostOperationsCiGenerator.Param> scalarCastParams =
+                    GhostOperationsCiGenerator.appendOutputParametersAsPointers(
+                            GhostOperationsCiGenerator.listInputParameters(child), child);
+            for (int ei = 0; ei < ensures.size(); ei++) {
+                ensures.set(
+                        ei,
+                        GhostOperationsCiGenerator.castScalarIntGhostParamsInEnsure(
+                                ensures.get(ei), scalarCastParams));
+            }
             removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
             List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
             for (String inv : invariantPredicateNames) {
@@ -277,13 +300,10 @@ public final class BxmlOperationsTranslator {
                     }
                 }
             }
-            if (useGhostAbstraction
-                    && assignsAbstract
-                    && invariantPredicateNames != null
-                    && !invariantPredicateNames.isEmpty()) {
-                Set<String> invariantOnly = new HashSet<>(invariantPredicateNames);
-                ensures.removeIf(e -> !invariantOnly.contains(e));
-            }
+            // ensures mantém o conteúdo funcional do corpo (bodyEnsuresOnly, já acrescentado acima)
+            // MESMO quando a operação também ganha um predicado ghost — quem chama esta função só
+            // vê o contrato real (o "at return: assert ghost__…" é interno ao corpo), então sem
+            // isto o chamador só sabia do invariante genérico, não do que a operação de facto faz.
             List<String> dummyGhostEnsureVars =
                     useGhostAbstraction && assignsAbstract
                             ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
@@ -334,7 +354,8 @@ public final class BxmlOperationsTranslator {
                 implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
                 if (implOp != null) {
                     loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(
-                            implOp, ctx, machineEl, importedOpAssigns);
+                            implOp, ctx, machineEl, importedOpAssigns,
+                            requiresOnlyPredicateNames == null ? List.of() : requiresOnlyPredicateNames);
                 }
             }
             if (importedOpAssigns != null && !importedOpAssigns.isEmpty() && implOp != null) {

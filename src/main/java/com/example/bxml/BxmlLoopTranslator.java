@@ -68,6 +68,21 @@ public final class BxmlLoopTranslator {
     public static List<LoopContract> translateLoopsFromImplementationOperation(
             Element implementationOperation, BxmlTranslateContext ctx, Element abstractMachineEl,
             Map<String, List<String>> importedOpAssigns) {
+        return translateLoopsFromImplementationOperation(
+                implementationOperation, ctx, abstractMachineEl, importedOpAssigns, List.of());
+    }
+
+    /**
+     * @param calleeInvariantPredicateNames predicados de invariante (próprios + de máquinas
+     *     importadas) já exigidos no {@code requires}/{@code ensures} da operação envolvente —
+     *     acrescentados ao {@code loop invariant} de qualquer laço cujo corpo contenha um {@code
+     *     Operation_Call}, para que o WP consiga voltar a satisfazer o {@code requires} dessa
+     *     chamada nas iterações seguintes (sem isto, o invariante "esquece" a pré-condição da
+     *     função chamada a cada volta do laço).
+     */
+    public static List<LoopContract> translateLoopsFromImplementationOperation(
+            Element implementationOperation, BxmlTranslateContext ctx, Element abstractMachineEl,
+            Map<String, List<String>> importedOpAssigns, List<String> calleeInvariantPredicateNames) {
         if (implementationOperation == null || ctx == null) {
             return List.of();
         }
@@ -76,7 +91,8 @@ public final class BxmlLoopTranslator {
             return List.of();
         }
         List<LoopContract> loops = new ArrayList<>();
-        walkForWhileLoops(body, ctx, abstractMachineEl, loops, importedOpAssigns);
+        walkForWhileLoops(
+                body, ctx, abstractMachineEl, loops, importedOpAssigns, calleeInvariantPredicateNames);
         return List.copyOf(loops);
     }
 
@@ -102,13 +118,18 @@ public final class BxmlLoopTranslator {
 
     private static void walkForWhileLoops(
             Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, List<LoopContract> out,
-            Map<String, List<String>> importedOpAssigns) {
+            Map<String, List<String>> importedOpAssigns, List<String> calleeInvariantPredicateNames) {
         if (sub == null) {
             return;
         }
         if ("While".equals(sub.getLocalName())) {
-            out.add(translateWhile(sub, ctx, abstractMachineEl, out.size() + 1, importedOpAssigns));
-            walkForWhileLoops(firstChildElement(sub, "Body"), ctx, abstractMachineEl, out, importedOpAssigns);
+            out.add(
+                    translateWhile(
+                            sub, ctx, abstractMachineEl, out.size() + 1, importedOpAssigns,
+                            calleeInvariantPredicateNames));
+            walkForWhileLoops(
+                    firstChildElement(sub, "Body"), ctx, abstractMachineEl, out, importedOpAssigns,
+                    calleeInvariantPredicateNames);
             return;
         }
         NodeList nl = sub.getChildNodes();
@@ -121,13 +142,14 @@ public final class BxmlLoopTranslator {
             if ("Attr".equals(ch.getLocalName())) {
                 continue;
             }
-            walkForWhileLoops(ch, ctx, abstractMachineEl, out, importedOpAssigns);
+            walkForWhileLoops(
+                    ch, ctx, abstractMachineEl, out, importedOpAssigns, calleeInvariantPredicateNames);
         }
     }
 
     private static LoopContract translateWhile(
             Element whileEl, BxmlTranslateContext ctx, Element abstractMachineEl, int index,
-            Map<String, List<String>> importedOpAssigns) {
+            Map<String, List<String>> importedOpAssigns, List<String> calleeInvariantPredicateNames) {
         Element invEl = firstChildElement(whileEl, "Invariant");
         String invariant = "";
         if (invEl != null) {
@@ -147,7 +169,67 @@ public final class BxmlLoopTranslator {
         Element body = firstChildElement(whileEl, "Body");
         collectLoopAssigns(body, ctx, abstractMachineEl, assigns, importedOpAssigns, Set.of());
 
+        if (bodyContainsOperationCall(body)) {
+            invariant = withCalleeInvariants(invariant, calleeInvariantPredicateNames);
+        }
+
         return new LoopContract(index, invariant, variant, List.copyOf(assigns));
+    }
+
+    /** Verdadeiro se {@code sub} (ou algum descendente) for um {@code Operation_Call}. */
+    private static boolean bodyContainsOperationCall(Element sub) {
+        if (sub == null) {
+            return false;
+        }
+        if ("Operation_Call".equals(sub.getLocalName())) {
+            return true;
+        }
+        NodeList nl = sub.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+            Element ch = (Element) n;
+            if ("Attr".equals(ch.getLocalName())) {
+                continue;
+            }
+            if (bodyContainsOperationCall(ch)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Acrescenta a {@code invariant} (por {@code &&}) os nomes de {@code names} ainda não presentes. */
+    private static String withCalleeInvariants(String invariant, List<String> names) {
+        if (names == null || names.isEmpty()) {
+            return invariant;
+        }
+        List<String> toAdd = new ArrayList<>();
+        for (String name : names) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            if (invariant != null && !invariant.isBlank() && containsWholeWord(invariant, name)) {
+                continue;
+            }
+            if (!toAdd.contains(name)) {
+                toAdd.add(name);
+            }
+        }
+        if (toAdd.isEmpty()) {
+            return invariant;
+        }
+        String extra = String.join(" && ", toAdd);
+        return (invariant == null || invariant.isBlank()) ? extra : invariant + " && " + extra;
+    }
+
+    private static boolean containsWholeWord(String text, String word) {
+        return java.util.regex.Pattern.compile(
+                        "(?<![A-Za-z0-9_])" + java.util.regex.Pattern.quote(word) + "(?![A-Za-z0-9_])")
+                .matcher(text)
+                .find();
     }
 
     private static void collectLoopAssigns(
