@@ -354,8 +354,7 @@ public final class BxmlOperationsTranslator {
                 implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
                 if (implOp != null) {
                     loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(
-                            implOp, ctx, machineEl, importedOpAssigns,
-                            requiresOnlyPredicateNames == null ? List.of() : requiresOnlyPredicateNames);
+                            implOp, ctx, machineEl, importedOpAssigns);
                 }
             }
             if (importedOpAssigns != null && !importedOpAssigns.isEmpty() && implOp != null) {
