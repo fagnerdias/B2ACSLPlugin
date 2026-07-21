@@ -1,5 +1,6 @@
 package com.example.bxml;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -192,6 +193,32 @@ public final class BxmlOperationsTranslator {
             Map<String, List<String>> importedOpAssigns,
             List<String> requiresOnlyPredicateNames,
             Map<String, String> varRhsOverrides) {
+        return translateOperations(machineEl, ctx, invariantPredicateNames, abstractVariableNames,
+                libScanGhostOperationBodies, rootAbstractMachineName, mergedRefinementChain,
+                gluing, useGhostAbstraction, importedOpAssigns, requiresOnlyPredicateNames,
+                varRhsOverrides, null);
+    }
+
+    /**
+     * @param bxmlDirectory diretório das fontes {@code .bxml} — necessário para resolver a fatia
+     *        {@code [low .. high]} dos {@code assigns} de conjuntos nomeados (deferred sets como
+     *        {@code GOODS}) valorados em máquinas VISTAS (SEES), não na própria implementação — ver
+     *        {@link BxmlMachineVariables#listConcreteAssignTargetsForAbstractMutation}.
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction,
+            Map<String, List<String>> importedOpAssigns,
+            List<String> requiresOnlyPredicateNames,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
 
@@ -304,9 +331,14 @@ public final class BxmlOperationsTranslator {
             // MESMO quando a operação também ganha um predicado ghost — quem chama esta função só
             // vê o contrato real (o "at return: assert ghost__…" é interno ao corpo), então sem
             // isto o chamador só sabia do invariante genérico, não do que a operação de facto faz.
+            // Usa abstractVariableNames (já filtrado pelo chamador, sem as variáveis colapsadas na
+            // implementação — ver BxmlMachineVariables#collapsedIntoImplementationVariableNames),
+            // não a lista COMPLETA de variáveis abstratas: uma variável colapsada não tem
+            // dummy_ghost_<v> declarado (não há camada ghost paralela para ela), então referenciá-la
+            // aqui geraria "unbound logic variable" no Frama-C.
             List<String> dummyGhostEnsureVars =
-                    useGhostAbstraction && assignsAbstract
-                            ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
+                    useGhostAbstraction && assignsAbstract && abstractVariableNames != null
+                            ? new ArrayList<>(abstractVariableNames)
                             : List.of();
 
             List<String> connectionConcreteAssigns = List.of();
@@ -326,7 +358,8 @@ public final class BxmlOperationsTranslator {
                                     mergedRefinementChain,
                                     assignedAbs,
                                     gluing,
-                                    ctx);
+                                    ctx,
+                                    bxmlDirectory);
                     if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
                         connectionConcreteAssigns =
                                 BxmlMachineVariables.listImplementationAssignTargetsForAbstractVariables(

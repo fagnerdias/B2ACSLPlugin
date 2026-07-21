@@ -249,6 +249,40 @@ public final class BxmlSetsTranslator {
         return List.copyOf(names);
     }
 
+    /**
+     * Como {@link #listSeenMachineNamesFromChain(Element, List)}, mas fecha transitivamente
+     * {@code SEES}: se {@code Customer} vê {@code Price} e {@code Price} vê {@code Goods},
+     * {@code Goods} entra no resultado mesmo sem {@code Customer} a ver diretamente — uma operação
+     * que chama outra de uma máquina vista (ex. {@code Customer__buy} chama
+     * {@code Price__pricequery}) precisa do {@code requires} do invariante dessa máquina vista
+     * (senão a pré-condição da chamada fica sem hipótese alguma e o WP não consegue prová-la), tal
+     * como {@link #listImportedMachineNamesTransitive} já fazia para {@code IMPORTS}.
+     *
+     * @param seesGraph grafo de SEES do projeto inteiro ({@link BxmlSeesGraph}); se {@code null},
+     *        cai no comportamento de um nível de {@link #listSeenMachineNamesFromChain(Element, List)}.
+     */
+    public static List<String> listSeenMachineNamesTransitive(
+            Element rootMachineEl, List<Element> mergedMachineElements, BxmlSeesGraph seesGraph) {
+        List<String> direct = listSeenMachineNamesFromChain(rootMachineEl, mergedMachineElements);
+        if (seesGraph == null) {
+            return direct;
+        }
+        LinkedHashSet<String> reachable = new LinkedHashSet<>();
+        ArrayDeque<String> frontier = new ArrayDeque<>(direct);
+        while (!frontier.isEmpty()) {
+            String current = frontier.poll();
+            if (current == null || current.isBlank() || !reachable.add(current.trim())) {
+                continue;
+            }
+            for (String next : seesGraph.seenBy(current.trim())) {
+                if (next != null && !next.isBlank() && !reachable.contains(next.trim())) {
+                    frontier.add(next.trim());
+                }
+            }
+        }
+        return List.copyOf(reachable);
+    }
+
     private static List<String> listReferencedMachineNamesFromClause(
             Element machineEl, String clauseName) {
         Element clause = firstChildElement(machineEl, clauseName);

@@ -260,7 +260,19 @@ public final class GhostOperationsCiGenerator {
                                         abstractMachineEl, mergedMachineElements, bxmlDirectory))
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
-        List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
+        // Variáveis colapsadas na implementação (mesmo nome abstrata/concreta, array-backed — ver
+        // BxmlMachineVariables#collapsedIntoImplementationVariableNames) não têm ghost_<v>/
+        // dummy_ghost_<v>: usam só a definição direta array-backed da camada da implementação, sem
+        // camada ghost paralela. Excluídas aqui em bloco, upstream de tudo (ghost_<v> C global,
+        // dummy_ghost_<v> axiomático, e a deteção de "atribuída" em buildGhostOperations), para não
+        // ter de replicar o filtro em cada função abaixo.
+        Set<String> collapsedVariableNames =
+                BxmlMachineVariables.collapsedIntoImplementationVariableNames(
+                        abstractMachineEl, mergedMachineElements);
+        List<String> abstractVarNames =
+                listAbstractVariableNames(abstractMachineEl).stream()
+                        .filter(v -> !collapsedVariableNames.contains(v))
+                        .toList();
         Set<String> abstractSet = new LinkedHashSet<>(abstractVarNames);
         Map<String, String> varTypes =
                 BxmlMachineVariables.inferVariableLogicTypes(abstractMachineEl, ctx);
@@ -741,6 +753,31 @@ public final class GhostOperationsCiGenerator {
         }
 
         if (!s.startsWith("equals(")) {
+            // "function_apply(v, idx) == rhs" comes from B's relational-override assignment sugar
+            // (f(x) := y, e.g. Price_i.setprice's "price(gg) := pp") via BxmlInitialisationTranslator's
+            // generic body-to-ensures translation. Since ACSL "ensures" already denotes post-state,
+            // "v" here means the NEW value — falling through to the generic rewriteAbstractIdsWithOld
+            // below would wrongly wrap it as \old(dummy_v), asserting the postcondition about the
+            // PRE-call function instead of the one just written.
+            if (s.startsWith("function_apply(")) {
+                int fnOpen = s.indexOf('(');
+                int fnClose = findMatchingClose(s, fnOpen);
+                if (fnClose > fnOpen) {
+                    String argsPart = s.substring(fnOpen + 1, fnClose);
+                    int argComma = findTopLevelComma(argsPart, 0);
+                    String rest = s.substring(fnClose + 1).trim();
+                    if (argComma >= 0 && rest.startsWith("==")) {
+                        String v = argsPart.substring(0, argComma).trim();
+                        String idx = argsPart.substring(argComma + 1).trim();
+                        String rhs = rest.substring(2).trim();
+                        if (abstractVars.contains(v)) {
+                            String idxGhost = prefixAbstractVarsForGhost(idx, abstractVars);
+                            String rhsGhost = prefixAbstractVarsForGhost(rhs, abstractVars);
+                            return "function_apply(dummy_" + v + ", " + idxGhost + ") == " + rhsGhost;
+                        }
+                    }
+                }
+            }
             Matcher belongsM = GHOST_ENSURE_BELONGS.matcher(s);
             if (belongsM.matches()) {
                 String v = stripIntegerCast(belongsM.group(1).trim());
@@ -1293,14 +1330,14 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * {@code v : S} no universo ghost. {@code S} pode ser o tipo função total B ({@code S --> T}
-     * / {@code S -->> T}) em vez de uma expressão de conjunto literal — "-->" não existe como
-     * operador ACSL, então traduzir literalmente (como faz o tradutor genérico de expressões)
-     * produz sintaxe inválida. Tal como a invariante "real" já trata este caso (ver
-     * {@code BxmlPredicateToAcsl}), converte-se para {@code is_total_function(v, dom, rng)}.
+     * {@code v :: S} no universo ghost — traduz o operador B {@code ::} (Becomes_In) para o
+     * predicado da B2ACSLLib {@code becomes_element_of}, com as mesmas duas sobrecargas que
+     * {@code BxmlInitialisationTranslator#becomesInMembershipEnsure} usa do lado NÃO-ghost
+     * (função-arrow: {@code becomes_element_of(v, dom, rng)}; conjunto literal:
+     * {@code becomes_element_of(v, S)}) — "-->" não existe como operador ACSL, então traduzir
+     * literalmente (como faz o tradutor genérico de expressões) produz sintaxe inválida.
      * Devolve texto ainda por prefixar (dummy_/enumerado/global): o chamador
-     * ({@link #collectGhostEnsuresFromInit}) já aplica esse pós-processamento a toda a linha,
-     * exatamente como faz hoje para o caso genérico {@code belongs(...)}.
+     * ({@link #collectGhostEnsuresFromInit}) já aplica esse pós-processamento a toda a linha.
      */
     private static String ghostMembershipEnsure(String v, Element setExp, BxmlTranslateContext ctx) {
         if (BxmlExpressionToAcsl.isFunctionArrowType(setExp)
@@ -1309,7 +1346,7 @@ public final class GhostOperationsCiGenerator {
             if (domRng[0] == null || domRng[1] == null) return null;
             String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
             String rangeSet = BxmlExpressionToAcsl.translate(domRng[1], ctx);
-            String base = "is_total_function(dummy_" + v + ", " + domainSet + ", " + rangeSet + ")";
+            String base = "becomes_element_of(dummy_" + v + ", " + domainSet + ", " + rangeSet + ")";
             if (BxmlExpressionToAcsl.isTotalSurjectionArrowType(setExp)) {
                 return base + " && is_surjective(dummy_" + v + ", " + rangeSet + ")";
             }
@@ -1317,7 +1354,7 @@ public final class GhostOperationsCiGenerator {
         }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) return null;
-        return "belongs(dummy_" + v + ", " + setExprText + ")";
+        return "becomes_element_of(dummy_" + v + ", " + setExprText + ")";
     }
 
     private static String ghostEnsureFromAssignment(
@@ -1370,6 +1407,11 @@ public final class GhostOperationsCiGenerator {
                 Element vars = firstChildElement(sub, "Variables");
                 if (vars == null) return;
                 for (Element id : directExpChildren(vars)) {
+                    String overridden = functionOverrideTargetName(id);
+                    if (overridden != null) {
+                        if (abstractSet.contains(overridden)) out.add(overridden);
+                        continue;
+                    }
                     if (!"Id".equals(id.getLocalName())) continue;
                     String v = id.getAttribute("value");
                     if (abstractSet.contains(v)) out.add(v);
@@ -2490,6 +2532,28 @@ public final class GhostOperationsCiGenerator {
             out.add(e);
         }
         return out;
+    }
+
+    /**
+     * B's relational-override assignment sugar {@code f(x) := y} (desugars to
+     * {@code f := f <+ {x |-> y}}) puts the target inside a {@code Binary_Exp op='('} (function
+     * application) as the sole {@code Variables} child, instead of a direct {@code Id} — e.g.
+     * {@code Price_i.setprice}'s {@code price(gg) := pp}. Without recognizing this shape,
+     * {@code price} was never detected as assigned, so no ghost update / concrete {@code assigns}
+     * was ever generated for the operation (fell back to {@code assigns \nothing;}). Returns the
+     * base function/variable name, or {@code null} if {@code e} isn't this shape.
+     */
+    private static String functionOverrideTargetName(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName()) || !"(".equals(e.getAttribute("op"))) {
+            return null;
+        }
+        List<Element> children = directExpChildren(e);
+        if (children.isEmpty()) return null;
+        Element first = children.get(0);
+        if ("Id".equals(first.getLocalName())) {
+            return first.getAttribute("value");
+        }
+        return functionOverrideTargetName(first);
     }
 
     private static Element firstSubChild(Element parent) {

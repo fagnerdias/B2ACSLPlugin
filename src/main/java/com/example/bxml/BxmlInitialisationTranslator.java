@@ -1,5 +1,7 @@
 package com.example.bxml;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -59,40 +61,153 @@ public final class BxmlInitialisationTranslator {
     public static InitialisationAcsl translate(
             Element machineEl, List<String> additionalAssignTargets, BxmlTranslateContext ctx,
             Map<String, Long> knownIntegerConstants, List<Element> mergedMachineElements) {
+        return translate(
+                machineEl, additionalAssignTargets, ctx, knownIntegerConstants,
+                mergedMachineElements, null);
+    }
+
+    /**
+     * @param bxmlDirectory diretório das fontes {@code .bxml} — necessário para resolver o
+     *        intervalo de conjuntos nomeados (deferred sets como {@code GOODS}) valorados em
+     *        máquinas VISTAS (SEES), usado pela especificação de loop {@code ARRAY := DOMAIN * {V}}
+     *        — ver {@link #resolveNamedSetInterval(String, Element, BxmlTranslateContext, Path)}.
+     */
+    public static InitialisationAcsl translate(
+            Element machineEl, List<String> additionalAssignTargets, BxmlTranslateContext ctx,
+            Map<String, Long> knownIntegerConstants, List<Element> mergedMachineElements,
+            Path bxmlDirectory) {
         String machineName = machineEl.getAttribute("name");
 
-        // Preferir o Initialisation da implementação (código C vem dela), se disponível.
-        Element initSource = null;
-        Element initOwnerMachine = null;
+        InitSource src = selectInitialisationSource(machineEl, mergedMachineElements);
+
+        List<String> ensures = new ArrayList<>();
+        if (src.initSource() != null) {
+            walkSubstitution(firstSubChild(src.initSource()), ensures, ctx);
+        }
+        List<CartesianProductLoopSpec> loopSpecs = (src.initSource() != null)
+                ? detectAllLoopSpecs(
+                        firstSubChild(src.initSource()), src.initOwnerMachine(), ctx, bxmlDirectory)
+                : List.of();
+
+        String functionName = machineName + "__INITIALISATION";
+        return new InitialisationAcsl(
+                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopSpecs, false);
+    }
+
+    private record InitSource(Element initSource, Element initOwnerMachine) {}
+
+    /**
+     * Seleciona a fonte do {@code <Initialisation>} a traduzir: prefere a da implementação fundida
+     * (o código C deriva dela) e só cai para a da máquina abstrata se nenhuma implementação tiver
+     * uma substituição própria não-trivial.
+     */
+    private static InitSource selectInitialisationSource(
+            Element machineEl, List<Element> mergedMachineElements) {
         if (mergedMachineElements != null) {
             for (Element mel : mergedMachineElements) {
                 if ("implementation".equals(mel.getAttribute("type"))) {
                     Element implInit = firstChildElement(mel, "Initialisation");
                     if (implInit != null && firstSubChild(implInit) != null
                             && !"Skip".equals(firstSubChild(implInit).getLocalName())) {
-                        initSource = implInit;
-                        initOwnerMachine = mel;
-                        break;
+                        return new InitSource(implInit, mel);
                     }
                 }
             }
         }
-        if (initSource == null) {
-            initSource = firstChildElement(machineEl, "Initialisation");
-            initOwnerMachine = machineEl;
-        }
+        return new InitSource(firstChildElement(machineEl, "Initialisation"), machineEl);
+    }
 
-        List<String> ensures = new ArrayList<>();
-        if (initSource != null) {
-            walkSubstitution(firstSubChild(initSource), ensures, ctx);
-        }
-        List<CartesianProductLoopSpec> loopSpecs = (initSource != null)
-                ? detectAllLoopSpecs(firstSubChild(initSource), initOwnerMachine, ctx)
-                : List.of();
+    /**
+     * Cláusulas {@code ensures} da inicialização para variáveis SEM camada ghost (ex.: colapsadas
+     * na implementação — ver {@link BxmlMachineVariables#collapsedIntoImplementationVariableNames}):
+     * quando a máquina usa abstração ghost para OUTRAS variáveis, o contrato real da INITIALISATION
+     * descarta {@code translate(...).ensures()} por inteiro (fica só a garantia ghost via {@code
+     * assert ghost__…}) — o que apagaria também a especificação de variáveis que já não têm
+     * rastreio ghost algum.
+     *
+     * <p>Ao contrário de {@link #translate}, usa sempre o {@code <Initialisation>} da máquina
+     * ABSTRATA (nunca o da implementação): a implementação tipicamente REFINA uma escolha
+     * não-determinística B ({@code v :: S --> T}) num valor concreto específico ({@code v := S*{c}}),
+     * e {@code v := S*{c}} não é a especificação — é só UMA testemunha válida dela. Para uma
+     * variável sem camada ghost, o contrato real deve continuar a prometer a ESPECIFICAÇÃO
+     * abstrata ({@code is_total_function(v, S, T)}), não o valor concreto de uma implementação
+     * particular (que seria sobre-específico e desnecessariamente mais difícil de provar).
+     *
+     * <p>Filtra a substituição da inicialização abstrata para produzir só as cláusulas cujo LHS
+     * esteja em {@code nonGhostVariableNames}, reutilizando os parsers de folha já existentes
+     * ({@link #parseAssignementSub}/{@link #parseBecomesInSub}/{@link #parseBecomesSuchThatSub}).
+     *
+     * <p>Limitação aceite: só cobre folhas diretas de {@code ;}/{@code ||} no nível de topo —
+     * {@code If_Sub}/{@code Select}/{@code ANY_Sub} no topo da inicialização não são filtrados
+     * (produzem nada aqui, em vez de arriscar duplicar/perder {@code \old} incorretamente); não
+     * ocorre em nenhum exemplo atual.
+     */
+    public static List<String> ensuresForNonGhostVariables(
+            Element machineEl, BxmlTranslateContext ctx, Set<String> nonGhostVariableNames) {
+        if (nonGhostVariableNames == null || nonGhostVariableNames.isEmpty()) return List.of();
+        Element initSource = firstChildElement(machineEl, "Initialisation");
+        if (initSource == null) return List.of();
+        Element sub = firstSubChild(initSource);
+        if (sub == null) return List.of();
+        Set<String> allLhsNames = new LinkedHashSet<>();
+        collectAssignedLhsNames(sub, allLhsNames);
+        List<String> out = new ArrayList<>();
+        walkSubstitutionForVariables(sub, out, ctx, nonGhostVariableNames, allLhsNames);
+        return out;
+    }
 
-        String functionName = machineName + "__INITIALISATION";
-        return new InitialisationAcsl(
-                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopSpecs, false);
+    private static void walkSubstitutionForVariables(
+            Element sub,
+            List<String> ensures,
+            BxmlTranslateContext ctx,
+            Set<String> keepNames,
+            Set<String> oldNames) {
+        if (sub == null) return;
+        switch (sub.getLocalName()) {
+            case "Assignement_Sub" -> {
+                if (leafVariableNamesMatch(sub, keepNames)) {
+                    parseAssignementSub(sub, ensures, ctx, oldNames);
+                }
+            }
+            case "Becomes_In" -> {
+                if (leafVariableNamesMatch(sub, keepNames)) {
+                    parseBecomesInSub(sub, ensures, ctx);
+                }
+            }
+            case "Becomes_Such_That" -> {
+                if (leafVariableNamesMatch(sub, keepNames)) {
+                    parseBecomesSuchThatSub(sub, ensures, ctx);
+                }
+            }
+            case "Nary_Sub" -> {
+                String op = sub.getAttribute("op");
+                if (";".equals(op) || "||".equals(op)) {
+                    NodeList children = sub.getChildNodes();
+                    for (int i = 0; i < children.getLength(); i++) {
+                        Node n = children.item(i);
+                        if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                        Element ch = (Element) n;
+                        if ("Attr".equals(ch.getLocalName())) continue;
+                        walkSubstitutionForVariables(ch, ensures, ctx, keepNames, oldNames);
+                    }
+                } else {
+                    walkSubstitutionForVariables(firstSubChild(sub), ensures, ctx, keepNames, oldNames);
+                }
+            }
+            case "Bloc_Sub" -> walkSubstitutionForVariables(firstSubChild(sub), ensures, ctx, keepNames, oldNames);
+            default -> { /* If_Sub/Select/ANY_Sub/Skip: ver limitação no Javadoc de ensuresForNonGhostVariables */ }
+        }
+    }
+
+    private static boolean leafVariableNamesMatch(Element leafSub, Set<String> keepNames) {
+        Element vars = firstChildElement(leafSub, "Variables");
+        if (vars == null) return false;
+        for (Element id : directExpChildren(vars)) {
+            if (!"Id".equals(id.getLocalName())) continue;
+            String v = id.getAttribute("value");
+            if (v != null && keepNames.contains(v.trim())) return true;
+        }
+        return false;
     }
 
     /**
@@ -110,20 +225,21 @@ public final class BxmlInitialisationTranslator {
 
     /** Coleta todas as especificações de loop da sequência de substituições da inicialização. */
     private static List<CartesianProductLoopSpec> detectAllLoopSpecs(
-            Element sub, Element implMachineEl, BxmlTranslateContext ctx) {
+            Element sub, Element implMachineEl, BxmlTranslateContext ctx, Path bxmlDirectory) {
         if (sub == null) return List.of();
         List<CartesianProductLoopSpec> result = new ArrayList<>();
-        collectLoopSpecs(sub, implMachineEl, ctx, result);
+        collectLoopSpecs(sub, implMachineEl, ctx, bxmlDirectory, result);
         return List.copyOf(result);
     }
 
     private static void collectLoopSpecs(
-            Element sub, Element implMachineEl, BxmlTranslateContext ctx,
+            Element sub, Element implMachineEl, BxmlTranslateContext ctx, Path bxmlDirectory,
             List<CartesianProductLoopSpec> result) {
         if (sub == null) return;
         switch (sub.getLocalName()) {
             case "Assignement_Sub" -> {
-                CartesianProductLoopSpec spec = cartesianProductLoopSpecFromAssignment(sub, implMachineEl, ctx);
+                CartesianProductLoopSpec spec =
+                        cartesianProductLoopSpecFromAssignment(sub, implMachineEl, ctx, bxmlDirectory);
                 if (spec != null) result.add(spec);
             }
             case "Nary_Sub" -> {
@@ -133,15 +249,15 @@ public final class BxmlInitialisationTranslator {
                     if (n.getNodeType() != Node.ELEMENT_NODE) continue;
                     Element ch = (Element) n;
                     if ("Attr".equals(ch.getLocalName())) continue;
-                    collectLoopSpecs(ch, implMachineEl, ctx, result);
+                    collectLoopSpecs(ch, implMachineEl, ctx, bxmlDirectory, result);
                 }
             }
-            case "Bloc_Sub" -> collectLoopSpecs(firstSubChild(sub), implMachineEl, ctx, result);
+            case "Bloc_Sub" -> collectLoopSpecs(firstSubChild(sub), implMachineEl, ctx, bxmlDirectory, result);
         }
     }
 
     private static CartesianProductLoopSpec cartesianProductLoopSpecFromAssignment(
-            Element assign, Element implMachineEl, BxmlTranslateContext ctx) {
+            Element assign, Element implMachineEl, BxmlTranslateContext ctx, Path bxmlDirectory) {
         Element varsEl = firstChildElement(assign, "Variables");
         if (varsEl == null) return null;
         String arrayVarName = null;
@@ -157,7 +273,8 @@ public final class BxmlInitialisationTranslator {
         Element valsEl = firstChildElement(assign, "Values");
         if (valsEl == null) return null;
         for (Element rhs : directExpChildren(valsEl)) {
-            CartesianProductLoopSpec spec = cartesianProductLoopSpec(rhs, cArrayName, implMachineEl, ctx);
+            CartesianProductLoopSpec spec =
+                    cartesianProductLoopSpec(rhs, cArrayName, implMachineEl, ctx, bxmlDirectory);
             if (spec != null) return spec;
         }
         return null;
@@ -168,11 +285,14 @@ public final class BxmlInitialisationTranslator {
      * O domínio pode ser:
      * <ul>
      *   <li>Um intervalo literal: {@code Binary_Exp op='..'} (ex.: {@code 0..9})</li>
-     *   <li>Um conjunto nomeado: {@code Id} cujo valor está em {@code <Values>} da implementação</li>
+     *   <li>Um conjunto nomeado: {@code Id} cujo valor está em {@code <Values>} da implementação,
+     *       ou (quando {@code bxmlDirectory} não é nulo) de uma máquina VISTA (SEES) — ver
+     *       {@link #resolveNamedSetInterval(String, Element, BxmlTranslateContext, Path)}</li>
      * </ul>
      */
     private static CartesianProductLoopSpec cartesianProductLoopSpec(
-            Element el, String cArrayName, Element implMachineEl, BxmlTranslateContext ctx) {
+            Element el, String cArrayName, Element implMachineEl, BxmlTranslateContext ctx,
+            Path bxmlDirectory) {
         if (!"Binary_Exp".equals(el.getLocalName())) return null;
         if (!"*s".equals(el.getAttribute("op"))) return null;
         List<Element> children = directExpChildren(el);
@@ -192,8 +312,10 @@ public final class BxmlInitialisationTranslator {
             lo = BxmlExpressionToAcsl.translate(bounds.get(0), ctx);
             hi = BxmlExpressionToAcsl.translate(bounds.get(1), ctx);
         } else if ("Id".equals(domainEl.getLocalName())) {
-            // Conjunto nomeado: resolve via <Values> da implementação
-            String[] interval = resolveNamedSetInterval(domainEl.getAttribute("value"), implMachineEl, ctx);
+            // Conjunto nomeado: resolve via <Values> da implementação (ou de uma máquina SEES)
+            String[] interval =
+                    resolveNamedSetInterval(
+                            domainEl.getAttribute("value"), implMachineEl, ctx, bxmlDirectory);
             if (interval == null) return null;
             lo = interval[0];
             hi = interval[1];
@@ -213,8 +335,42 @@ public final class BxmlInitialisationTranslator {
      */
     private static String[] resolveNamedSetInterval(
             String setName, Element implMachineEl, BxmlTranslateContext ctx) {
+        return resolveNamedSetInterval(setName, implMachineEl, ctx, null);
+    }
+
+    /**
+     * Como acima, mas quando o conjunto nomeado não está valorado na própria {@code implMachineEl}
+     * (ex. {@code GOODS} visto por {@code Price}/{@code Price_i} mas valorado em {@code Goods_i}),
+     * procura também nas máquinas VISTAS (SEES) — mesmo problema e mesma solução de
+     * {@code BxmlMachineVariables#lookupSetCardinalityFromValues}/{@code resolveNamedSetDomainRange}.
+     * Sem isto, o loop de inicialização ({@code price_i := GOODS*{1}}) não recebe nenhuma
+     * especificação ({@code loop invariant}/{@code loop assigns}/{@code loop variant}), e o WP não
+     * consegue provar nem o pós-estado nem a terminação (assume "assigns everything").
+     */
+    private static String[] resolveNamedSetInterval(
+            String setName, Element implMachineEl, BxmlTranslateContext ctx, Path bxmlDirectory) {
         if (setName == null || setName.isBlank() || implMachineEl == null) return null;
-        Element valuesEl = firstChildElement(implMachineEl, "Values");
+        String[] local = intervalFromOwnValues(setName, implMachineEl, ctx);
+        if (local != null || bxmlDirectory == null) {
+            return local;
+        }
+        for (String seenName : BxmlSetsTranslator.listReferencedMachineNames(implMachineEl)) {
+            for (String suffix : new String[] {"_i", "_imp", ""}) {
+                Path path = bxmlDirectory.resolve(seenName + suffix + ".bxml");
+                if (!Files.exists(path)) continue;
+                try {
+                    Element seenEl = BxmlSetsTranslator.parseMachineElement(path);
+                    String[] found = intervalFromOwnValues(setName, seenEl, ctx);
+                    if (found != null) return found;
+                } catch (Exception ignored) {}
+            }
+        }
+        return null;
+    }
+
+    private static String[] intervalFromOwnValues(
+            String setName, Element machineEl, BxmlTranslateContext ctx) {
+        Element valuesEl = firstChildElement(machineEl, "Values");
         if (valuesEl == null) return null;
         NodeList nl = valuesEl.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
@@ -743,24 +899,60 @@ public final class BxmlInitialisationTranslator {
         if (vars == null || value == null) {
             return;
         }
-        String setExpr = null;
+        Element setExp = null;
         for (Element valExp : directExpChildren(value)) {
-            setExpr = BxmlExpressionToAcsl.translate(valExp, ctx);
+            setExp = valExp;
             break;
         }
-        if (setExpr == null || setExpr.isBlank()) {
+        if (setExp == null) {
             return;
         }
         List<String> parts = new ArrayList<>();
         for (Element varExp : directExpChildren(vars)) {
             String v = BxmlExpressionToAcsl.translate(varExp, ctx);
-            if (v != null && !v.isBlank()) {
-                parts.add("belongs(" + v + ", " + setExpr + ")");
+            if (v == null || v.isBlank()) continue;
+            String part = becomesInMembershipEnsure(v, setExp, ctx);
+            if (part != null && !part.isBlank()) {
+                parts.add(part);
             }
         }
         if (!parts.isEmpty()) {
             ensures.add(String.join(" && ", parts));
         }
+    }
+
+    /**
+     * {@code v :: S} — traduz o operador B {@code ::} (Becomes_In) para o predicado da B2ACSLLib
+     * {@code becomes_element_of}, que tem duas sobrecargas conforme o tipo de {@code v}:
+     * <ul>
+     *   <li>{@code S} é o tipo função total B ({@code S --> T} / {@code S -->> T}): {@code v} é
+     *       função — usa {@code becomes_element_of(v, dom, rng)}
+     *       ({@code function_functions/becomes_element_of.acsl}); {@code -->} não existe como
+     *       operador ACSL, então traduzir literalmente (como o tradutor genérico de expressões
+     *       faria) produz sintaxe inválida. {@code -->>} (sobrejeção total) acrescenta
+     *       {@code is_surjective(v, rng)}.</li>
+     *   <li>{@code S} é uma expressão de conjunto literal: {@code v} é elemento simples — usa
+     *       {@code becomes_element_of(v, S)} ({@code set_functions/becomes_element_of.acsl}).</li>
+     * </ul>
+     * Espelha {@code GhostOperationsCiGenerator#ghostMembershipEnsure} para o universo NÃO-ghost —
+     * a mesma lacuna que aquele método já resolvia do lado ghost nunca tinha sido replicada aqui.
+     */
+    private static String becomesInMembershipEnsure(String v, Element setExp, BxmlTranslateContext ctx) {
+        if (BxmlExpressionToAcsl.isFunctionArrowType(setExp)
+                || BxmlExpressionToAcsl.isTotalSurjectionArrowType(setExp)) {
+            Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(setExp);
+            if (domRng[0] == null || domRng[1] == null) return null;
+            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+            String rangeSet = BxmlExpressionToAcsl.translate(domRng[1], ctx);
+            String base = "becomes_element_of(" + v + ", " + domainSet + ", " + rangeSet + ")";
+            if (BxmlExpressionToAcsl.isTotalSurjectionArrowType(setExp)) {
+                return base + " && is_surjective(" + v + ", " + rangeSet + ")";
+            }
+            return base;
+        }
+        String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
+        if (setExprText == null || setExprText.isBlank()) return null;
+        return "becomes_element_of(" + v + ", " + setExprText + ")";
     }
 
     private static void parseAssignementSub(Element assign, List<String> ensures, BxmlTranslateContext ctx) {

@@ -246,13 +246,24 @@ public final class AcslGenerator {
 
         boolean isAbstraction = isAbstractMachine(machineEl);
 
-        Set<String> abstractVariableNamesForGhost =
-                new LinkedHashSet<>(GhostOperationsCiGenerator.listAbstractVariableNames(machineEl));
-
         List<Element> mergedMachineElements = new ArrayList<>();
         for (Path p : mergePaths) {
             mergedMachineElements.add(parseMachineElement(p));
         }
+
+        // Variáveis com Concrete_Variables de MESMO NOME na implementação, tipada array/função
+        // total nessa camada (ex. "limit" em Customer E Customer_i): não criar duas variáveis ACSL
+        // (ghost abstrata + array-backed concreta) para o que o B já trata como uma só variável
+        // refinada — usar SÓ a definição array-backed da implementação, com o nome original (sem
+        // sufixo _i/_r), preservando as propriedades/invariantes da abstração aplicadas a ela. Ver
+        // BxmlMachineVariables#collapsedIntoImplementationVariableNames.
+        Set<String> collapsedVariableNames =
+                BxmlMachineVariables.collapsedIntoImplementationVariableNames(
+                        machineEl, mergedMachineElements);
+
+        Set<String> abstractVariableNamesForGhost =
+                new LinkedHashSet<>(GhostOperationsCiGenerator.listAbstractVariableNames(machineEl));
+        abstractVariableNamesForGhost.removeAll(collapsedVariableNames);
 
         List<Element> comprehensionChain = new ArrayList<>();
         comprehensionChain.add(machineEl);
@@ -288,15 +299,28 @@ public final class AcslGenerator {
         List<String> transitiveImportedMachineNames =
                 com.example.bxml.BxmlSetsTranslator.listImportedMachineNamesTransitive(
                         machineEl, mergedMachineElements, importsGraph);
+        // SEES também precisa do invariante da máquina vista como requires: uma operação pode
+        // chamar a operação de uma máquina só vista (ex. Customer__buy chama Price__pricequery,
+        // que requires Price_invariant/Price_i_invariant) — sem isto a pré-condição da chamada
+        // fica sem hipótese e o WP não consegue prová-la. SEES é transitivo tal como IMPORTS
+        // (Customer vê Price, Price vê Goods): ver listSeenMachineNamesTransitive. Ao contrário de
+        // IMPORTS, SEES é só-leitura — não precisa propagar assigns, só requires.
+        List<String> transitiveSeenMachineNames =
+                com.example.bxml.BxmlSetsTranslator.listSeenMachineNamesTransitive(
+                        machineEl, mergedMachineElements, seesGraph);
+        LinkedHashSet<String> invariantSourceMachineNames =
+                new LinkedHashSet<>(transitiveImportedMachineNames);
+        invariantSourceMachineNames.addAll(transitiveSeenMachineNames);
         List<String> importedInvariantPredicateNames =
                 BxmlInvariantTranslator.listImportedMachineInvariantPredicateNames(
-                        transitiveImportedMachineNames, bxmlDirectory);
+                        new ArrayList<>(invariantSourceMachineNames), bxmlDirectory);
         Map<String, String> varRhsOverrides =
                 BxmlMachineVariables.buildAbstractVarRhsOverrides(
                         machineEl, mergedMachineElements, importedMachineNames, bxmlDirectory);
         List<String> implementationAssignTargets = new java.util.ArrayList<>(
                 BxmlMachineVariables.listInitialisationAssignTargets(
-                        baseName, machineEl, mergedMachineElements, ctx, varRhsOverrides));
+                        baseName, machineEl, mergedMachineElements, ctx, varRhsOverrides,
+                        bxmlDirectory));
         implementationAssignTargets.addAll(
                 BxmlMachineVariables.listImportedMachineConcreteAssigns(
                         transitiveImportedMachineNames, bxmlDirectory));
@@ -314,22 +338,33 @@ public final class AcslGenerator {
             operationStateVariableNames.addAll(
                     BxmlMachineVariables.declaredVariableNames(machineEl));
         }
+        operationStateVariableNames.removeAll(collapsedVariableNames);
         Map<String, Long> knownIntegerConstants = collectAllIntegerValuations(bxmlDirectory);
         InitialisationAcsl initBare =
                 BxmlInitialisationTranslator.translate(
                         machineEl, implementationAssignTargets, ctx, knownIntegerConstants,
-                        mergedMachineElements);
+                        mergedMachineElements, bxmlDirectory);
         boolean initGhostAssert =
                 useGhostAbstraction
                         && GhostOperationsCiGenerator.initialisationAssignsAbstract(
                                 machineEl, abstractVariableNamesForGhost);
         List<String> dummyGhostVarsForInit =
                 initGhostAssert
-                        ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
+                        ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl).stream()
+                                .filter(v -> !collapsedVariableNames.contains(v))
+                                .toList()
                         : List.of();
         boolean machineHasNoImports = machineHasNoImports(machineEl, mergedMachineElements);
+        // Quando a INITIALISATION usa ghost assert (para as variáveis QUE têm camada ghost), o
+        // ensures "real" completo (initBare.ensures()) é descartado — mas isso apagaria também a
+        // especificação de variáveis SEM camada ghost (colapsadas, ex. limit): ficam sem ensures
+        // algum em lado nenhum. Filtra a mesma tradução para incluir só as cláusulas dessas
+        // variáveis — ver BxmlInitialisationTranslator#ensuresForNonGhostVariables.
         List<String> initEnsuresForContract =
-                initGhostAssert ? List.of() : new ArrayList<>(initBare.ensures());
+                initGhostAssert
+                        ? BxmlInitialisationTranslator.ensuresForNonGhostVariables(
+                                machineEl, ctx, collapsedVariableNames)
+                        : new ArrayList<>(initBare.ensures());
         InitialisationAcsl initMarked =
                 new InitialisationAcsl(
                         initBare.functionName(),
@@ -365,7 +400,8 @@ public final class AcslGenerator {
                                 useGhostAbstraction,
                                 importedOpAssigns,
                                 importedInvariantPredicateNames,
-                                varRhsOverrides)
+                                varRhsOverrides,
+                                bxmlDirectory)
                         : List.of();
 
         StringBuilder sb = new StringBuilder();
@@ -447,7 +483,7 @@ public final class AcslGenerator {
                         ? ""
                         : BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
                                 machineEl, ctx, concreteLinkRoot, abstractVariableNamesForGhost,
-                                varRhsOverrides);
+                                varRhsOverrides, bxmlDirectory, collapsedVariableNames);
         if (!varsAbstract.isBlank()) {
             sb.append(varsAbstract);
             if (!varsAbstract.endsWith("\n")) sb.append("\n");
@@ -473,6 +509,10 @@ public final class AcslGenerator {
                         ? new LinkedHashSet<>()
                         : new LinkedHashSet<>(
                                 BxmlMachineVariables.inferVariableLogicTypes(machineEl, ctx).keySet());
+        // Variáveis colapsadas na implementação (ver acima) nunca são "declaradas" pela camada
+        // abstrata (varsAbstract já as omite) — não semear aqui evita que o loop abaixo detete uma
+        // colisão inexistente e renomeie a declaração da implementação para _i/_r sem necessidade.
+        declaredVariableNames.removeAll(collapsedVariableNames);
         Map<Element, Map<String, String>> mergedVariableRenames = new LinkedHashMap<>();
         Element refinementChainParent = machineEl;
         for (Element mel : mergedMachineElements) {
@@ -482,7 +522,7 @@ public final class AcslGenerator {
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames());
             String varsMerged =
                     BxmlMachineVariables.formatAxiomaticBlock(
-                            mel, mctx, baseName, refinementChainParent, gluing);
+                            mel, mctx, baseName, refinementChainParent, gluing, bxmlDirectory);
             refinementChainParent = mel;
 
             Set<String> ownNames = BxmlMachineVariables.inferVariableLogicTypes(mel, mctx).keySet();

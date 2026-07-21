@@ -2,7 +2,7 @@
   "_meta": {
     "generator": "scripts/generate_acsl_symbol_dependency_map.py",
     "root": "src/main/resources/lib/B2ACSLLib",
-    "symbol_count": 57
+    "symbol_count": 56
   },
   "symbols": [
     "apply",
@@ -46,7 +46,6 @@
     "not_belongs",
     "pair",
     "ran",
-    "ran_witness",
     "range_restriction",
     "relation_inverse",
     "relation_singleton",
@@ -105,7 +104,6 @@
     "not_belongs": "set_functions/belongs.acsl",
     "pair": "set_functions/pair.acsl",
     "ran": "relation_functions/range.acsl",
-    "ran_witness": "relation_axioms/relation_range.acsl",
     "range_restriction": "relation_functions/range_restriction.acsl",
     "relation_inverse": "relation_functions/inverse.acsl",
     "relation_singleton": "relation_functions/singleton.acsl",
@@ -133,7 +131,8 @@
       "function_functions/array_to_function_int.acsl"
     ],
     "becomes_element_of": [
-      "function_functions/becomes_element_of.acsl"
+      "function_functions/becomes_element_of.acsl",
+      "set_functions/becomes_element_of.acsl"
     ],
     "belongs": [
       "set_functions/belongs.acsl"
@@ -249,9 +248,6 @@
       "relation_functions/range.acsl",
       "sequence_functions/range.acsl"
     ],
-    "ran_witness": [
-      "relation_axioms/relation_range.acsl"
-    ],
     "range_restriction": [
       "relation_functions/range_restriction.acsl"
     ],
@@ -318,8 +314,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran",
-      "ran_witness"
+      "ran"
     ],
     "array_to_function_int": [
       "belongs",
@@ -333,8 +328,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran",
-      "ran_witness"
+      "ran"
     ],
     "becomes_element_of": [
       "belongs",
@@ -348,8 +342,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran",
-      "ran_witness"
+      "ran"
     ],
     "card": [
       "belongs",
@@ -420,8 +413,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran",
-      "ran_witness"
+      "ran"
     ],
     "function_singleton": [
       "belongs",
@@ -444,7 +436,6 @@
       "length",
       "not_belongs",
       "ran",
-      "ran_witness",
       "set_union",
       "singleton"
     ],
@@ -469,8 +460,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran",
-      "ran_witness"
+      "ran"
     ],
     "inclusion": [
       "belongs",
@@ -501,8 +491,7 @@
       "inclusion",
       "is_functional",
       "not_belongs",
-      "ran",
-      "ran_witness"
+      "ran"
     ],
     "is_functional": [
       "belongs",
@@ -520,8 +509,7 @@
       "inclusion",
       "is_functional",
       "not_belongs",
-      "ran",
-      "ran_witness"
+      "ran"
     ],
     "is_pow_of": [
       "belongs",
@@ -552,8 +540,7 @@
       "is_functional",
       "is_partial_function",
       "not_belongs",
-      "ran",
-      "ran_witness"
+      "ran"
     ],
     "length": [
       "belongs",
@@ -586,7 +573,6 @@
       "length",
       "not_belongs",
       "ran",
-      "ran_witness",
       "second",
       "set_union",
       "singleton"
@@ -601,13 +587,7 @@
     ],
     "ran": [
       "belongs",
-      "couple",
-      "ran_witness"
-    ],
-    "ran_witness": [
-      "belongs",
-      "couple",
-      "ran"
+      "couple"
     ],
     "range_restriction": [
       "belongs",
@@ -789,9 +769,11 @@
       "sequence_functions/tail.acsl",
       "set_functions/belongs.acsl",
       "set_functions/card.acsl",
+      "set_functions/cartesian_product.acsl",
       "set_functions/empty.acsl",
       "set_functions/finite.acsl",
       "set_functions/inclusion.acsl",
+      "set_functions/interval_set.acsl",
       "set_functions/singleton.acsl",
       "set_functions/union.acsl",
       "tuple_functions/tuple_couple.acsl"
@@ -1112,6 +1094,9 @@
       "set_functions/union.acsl"
     ],
     "set_axioms/variables_axioms.acsl": [
+      "set_functions/belongs.acsl"
+    ],
+    "set_functions/becomes_element_of.acsl": [
       "set_functions/belongs.acsl"
     ],
     "set_functions/card.acsl": [
