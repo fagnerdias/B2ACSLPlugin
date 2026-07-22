@@ -33,6 +33,8 @@ import com.example.ui.WpOptionsDialog;
 import com.example.ui.WpOptionsDialog.WpOptions;
 
 import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 /**
  * Pipeline B2ACSL: BXML -> ACSL -> {@code ghost_operations.ci} -> Frama-C ({@code -acsl-import} +
@@ -60,6 +62,69 @@ public final class B2ACSLPipeline {
 
     /** Lemas admitidos da B2ACSLLib (anexados ao fim do merge Frama-C). */
     private static final String ACSL_LIB_LEMMAS_RESOURCE = B2AcslLibraryPaths.classpathResource("lemmas.acsl");
+
+    /**
+     * Nome C do operador de exponenciação inteira B ({@code **i} no BXML) — quando um projeto usa
+     * {@code **}, o código C não tem operador nativo e chama esta função auxiliar de runtime (ex.
+     * {@code b_pow.c}/{@code b_pow.h}, gerados por fora deste plugin). Sem especificação ACSL
+     * própria, WP não sabe o que {@code b_pow} calcula e não consegue provar pós-condições de
+     * operações como {@code pow_a} que dependem do seu resultado.
+     */
+    private static final String INTEGER_POWER_HELPER_FUNCTION_NAME = "b_pow";
+
+    /**
+     * Especificação ACSL (formato de esboço {@code function X: contract: ...} usado por todo o
+     * pipeline, convertido para comentário ACSL real pelo {@code -acsl-import}) para a função
+     * auxiliar de runtime {@code b_pow(op1, op2)} — {@code op1^op2} via loop, correspondendo
+     * exatamente aos nomes de parâmetros/variáveis locais do {@code b_pow.c} gerado.
+     *
+     * <p>SEM {@code include "import/math.acsl";} próprio de propósito: {@code b_pow.acsl} é sempre
+     * anexado ao FIM de {@code topLevelAcslFiles} (depois de todos os .acsl das máquinas), e
+     * qualquer máquina que use {@code **} já produz {@code integer_pow(...)} no seu PRÓPRIO
+     * contrato (via {@code BxmlExpressionToAcsl}'s "**i" → "integer_pow"), o que já dispara o
+     * include de {@code math.acsl} nesse ficheiro. Repeti-lo aqui causa
+     * {@code Duplicated axiomatics math_functions} no Frama-C — includes idênticos só são
+     * deduplicados dentro da MESMA árvore de includes, não entre ficheiros de topo distintos do
+     * {@code -acsl-import}.
+     */
+    private static final String INTEGER_POWER_HELPER_ACSL_SKETCH =
+            "axiomatic pow_bounds_lemmas {\n"
+            +     "admit lemma pow_prefix_in_INT:\n"
+            +     "\\forall integer b, e;\n"
+            +         "0 <= e && belongs(integer_pow(b, e), INT) ==>\n"
+            +         "\\forall integer k; 0 <= k <= e ==>\n"
+            +         "-2147483648 <= integer_pow(b, k) <= 2147483647;\n"
+            +     "}\n"
+            + "function b_pow:\n"
+                    + "contract:\n"
+                    + "    requires 0 <= op2;\n"
+                    + "    requires \\forall integer k; 0 <= k <= op2 ==>\n"
+                    + "        -2147483648 <= integer_pow(op1, k) <= 2147483647;\n"
+                    + "    assigns \\nothing;\n"
+                    + "    ensures \\result == integer_pow(op1, op2);\n"
+                    + "    at loop 1:\n"
+                    + "        loop invariant 0 <= i <= op2;\n"
+                    + "        loop invariant val == integer_pow(op1, i);\n"
+                    + "        loop assigns i, val;\n"
+                    + "        loop variant op2 - i;\n";
+
+    /** {@code true} se {@code node} (ou algum descendente) for {@code Binary_Exp op='**i'}. */
+    private static boolean containsIntegerPowerOperator(Node node) {
+        if (node == null) return false;
+        if (node.getNodeType() == Node.ELEMENT_NODE) {
+            Element el = (Element) node;
+            if ("Binary_Exp".equals(el.getLocalName()) && "**i".equals(el.getAttribute("op"))) {
+                return true;
+            }
+        }
+        NodeList children = node.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            if (containsIntegerPowerOperator(children.item(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private static final boolean MOCK_MODE = isMockEnabled();
 
@@ -212,6 +277,18 @@ public final class B2ACSLPipeline {
         try {
             AcslLibIncludes.resetLibraryBundleUnderOutput(acslDir);
             List<Path> acslFiles = new ArrayList<>();
+            // ** (Binary_Exp op='**i') não tem operador C nativo — verifica em TODAS as máquinas
+            // do projeto (abstratas E implementações/refinamentos, não só as que geram .acsl
+            // próprio) se alguma a usa, para decidir se b_pow.acsl (especificação da função de
+            // runtime auxiliar b_pow, sem a qual WP não prova nada sobre operações como pow_a que
+            // chamam essa função) precisa de ser gerado.
+            boolean usesIntegerPowerOperator = false;
+            for (MachineFile mf : machines) {
+                if (containsIntegerPowerOperator(AcslGenerator.parseMachineElement(mf.bxmlPath()))) {
+                    usesIntegerPowerOperator = true;
+                    break;
+                }
+            }
             Set<String> abstractMachineNames = new LinkedHashSet<>();
             Set<String> dependencyOnlyMachineNames =
                     dependencyOnlyMachineNames(seesGraph, importsGraph);
@@ -261,8 +338,14 @@ public final class B2ACSLPipeline {
             }
             List<String> topLevelImportMachines =
                     topLevelImportMachineNames(abstractMachineNames, dependencyOnlyMachineNames);
-            List<Path> topLevelAcslFiles =
-                    filterAcslFilesByMachineNames(acslFiles, topLevelImportMachines);
+            List<Path> topLevelAcslFiles = new ArrayList<>(
+                    filterAcslFilesByMachineNames(acslFiles, topLevelImportMachines));
+            if (usesIntegerPowerOperator) {
+                Path bPowAcsl = acslDir.resolve(INTEGER_POWER_HELPER_FUNCTION_NAME + ".acsl");
+                Files.writeString(bPowAcsl, INTEGER_POWER_HELPER_ACSL_SKETCH, StandardCharsets.UTF_8);
+                acslFiles.add(bPowAcsl);
+                topLevelAcslFiles.add(bPowAcsl);
+            }
             if (!topLevelImportMachines.isEmpty()) {
                 System.out.println(
                         "[B2ACSL] Importação ACSL Frama-C (raiz SEES): " + topLevelImportMachines);
