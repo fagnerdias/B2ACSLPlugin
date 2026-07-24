@@ -1,5 +1,8 @@
 package com.example.bxml;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
@@ -293,6 +296,31 @@ public final class BxmlExpressionToAcsl {
         return "|->".equals(o) || "|-&gt;".equals(o);
     }
 
+    /**
+     * Desfaz a normalização B de chamada multi-argumento {@code f(a,b,c)} → {@code f(a |-> b |->
+     * c)} (maplets aninhados à esquerda) de volta para a lista plana {@code [a, b, c]}, cada
+     * elemento já traduzido. Usado só para constantes lambda multi-argumento (ver {@link
+     * BxmlTranslateContext#multiArgLambdaConstantNames()}) — para uma variável função/relação B
+     * normal, o maplet fica como {@code couple(...)} via {@link #isMapletOp}, não é desfeito.
+     */
+    private static List<String> flattenMapletChain(Element exp, BxmlTranslateContext ctx) {
+        List<String> out = new ArrayList<>();
+        flattenMapletChainInto(exp, ctx, out);
+        return out;
+    }
+
+    private static void flattenMapletChainInto(Element exp, BxmlTranslateContext ctx, List<String> out) {
+        if (exp != null && "Binary_Exp".equals(exp.getLocalName()) && isMapletOp(exp.getAttribute("op"))) {
+            Element[] pair = twoDirectExpChildren(exp);
+            if (pair[0] != null && pair[1] != null) {
+                flattenMapletChainInto(pair[0], ctx, out);
+                out.add(translate(pair[1], ctx));
+                return;
+            }
+        }
+        out.add(translate(exp, ctx));
+    }
+
     /** B diferença de conjuntos {@code s -s t} → {@code set_difference(s, t)} (ACSL_Lib/set_functions/difference.acsl). */
     private static boolean isSetDifferenceOp(String op) {
         if (op == null) return false;
@@ -515,6 +543,18 @@ public final class BxmlExpressionToAcsl {
             return "couple(" + left + ", " + right + ")";
         }
         if (isFunctionApplicationOp(op)) {
+            // f(a,b,c) numa constante lambda multi-argumento (ex.: IS_VALID, declarada via
+            // ABSTRACT_CONSTANTS + PROPERTIES IS_VALID = %(dd,mm,aa).(...)) chega aqui já
+            // B-normalizada como f(a |-> b |-> c) — chamada direta multi-argumento f(a, b, c), NÃO
+            // function_apply(f, couple(couple(a,b),c)): a assinatura declarada para estas
+            // constantes é "logic boolean f(integer, integer, …)", não Function<A,B> (ver
+            // BxmlConstantsAndProperties#formatAbstractConstantsBlock / BxmlTranslateContext#multiArgLambdaConstantNames).
+            if ("Id".equals(pair[0].getLocalName())
+                    && ctx.multiArgLambdaConstantNames().contains(pair[0].getAttribute("value"))) {
+                String name = translateBNamedConstant(pair[0].getAttribute("value"));
+                List<String> args = flattenMapletChain(pair[1], ctx);
+                return name + "(" + String.join(", ", args) + ")";
+            }
             // f(x) em B → function_apply(f, x) em ACSL
             String left = translate(pair[0], ctx);
             String right = translate(pair[1], ctx);

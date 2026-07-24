@@ -607,9 +607,26 @@ public final class BxmlInitialisationTranslator {
             }
         }
 
-        String guardText = guardParts.isEmpty() ? "\\true" : String.join(" && ", guardParts);
-        String thenText = thenParts.isEmpty() ? "\\true" : String.join(" && ", thenParts);
+        // Cada parte (guarda ou then) pode já ser uma implicação inteira "(cond) ==> (concl)" (ex.:
+        // vinda de parseIfSubAsConditionalEnsures, quando o THEN do ANY tem um If_Sub com ambos os
+        // ramos). Em ACSL "&&" liga mais forte que "==>": sem parênteses à VOLTA de CADA implicação
+        // completa antes do join, "A ==> B && C ==> D" (2 implicações concatenadas) analisa como
+        // "(A && B) ==> (C ==> D)... " (associação errada, à direita) em vez de "(A==>B) && (C==>D)"
+        // — corrompendo silenciosamente o significado (sem erro de parse) sempre que o THEN do ANY
+        // tiver mais de uma cláusula condicional (ex.: If_Sub com Then E Else).
+        String guardText =
+                guardParts.isEmpty() ? "\\true" : String.join(" && ", parenthesizeEach(guardParts));
+        String thenText =
+                thenParts.isEmpty() ? "\\true" : String.join(" && ", parenthesizeEach(thenParts));
         return "\\exists " + String.join(", ", binders) + "; " + guardText + " && " + thenText;
+    }
+
+    private static List<String> parenthesizeEach(List<String> parts) {
+        List<String> out = new ArrayList<>(parts.size());
+        for (String p : parts) {
+            out.add("(" + p + ")");
+        }
+        return out;
     }
 
     private static String soleIdName(Element e) {
