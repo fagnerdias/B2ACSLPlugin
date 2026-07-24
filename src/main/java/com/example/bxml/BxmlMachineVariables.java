@@ -3,6 +3,7 @@ package com.example.bxml;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -1611,6 +1612,62 @@ public final class BxmlMachineVariables {
             result.addAll(loadConcreteAssignsForImportedMachine(name, bxmlDirectory));
         }
         return List.copyOf(result);
+    }
+
+    /**
+     * Converte alvos de {@code assigns} array-backed ({@code "Nome[low .. high]"}) para a forma
+     * usada por {@code \separated} ({@code "Nome + (low .. high)"}); descarta alvos sem colchetes
+     * (variáveis escalares/{@code ghost_*}, sem sentido de endereço-de-vetor para {@code
+     * \separated}).
+     */
+    public static List<String> toSeparatedPointerRanges(List<String> assignTargets) {
+        if (assignTargets == null || assignTargets.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String t : assignTargets) {
+            if (t == null) continue;
+            int open = t.indexOf('[');
+            int close = t.lastIndexOf(']');
+            if (open < 0 || close < open) continue;
+            String name = t.substring(0, open).trim();
+            String range = t.substring(open + 1, close).trim();
+            if (name.isEmpty() || range.isEmpty()) continue;
+            out.add(name + " + (" + range + ")");
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * Alvos array ({@code "Nome + (low .. high)"}) para {@code requires \separated(saída, alvo);}
+     * de parâmetros de saída (ponteiros C): variáveis array-backed da PRÓPRIA máquina mais as de
+     * todas as máquinas transitivamente {@code IMPORTS}/{@code SEES}/{@code USES} ({@code
+     * relatedMachineNames} — já resolvido pelo chamador, tipicamente a união de {@link
+     * com.example.bxml.BxmlSetsTranslator#listImportedMachineNamesTransitive} e {@link
+     * com.example.bxml.BxmlSetsTranslator#listSeenMachineNamesTransitive}). Um parâmetro de saída
+     * pode, em C, apontar para qualquer região de memória global do programa — sem separação
+     * explícita destas, o modelo de memória "typed" do WP assume-a implicitamente (ver aviso
+     * "Memory model hypotheses" do Frama-C); tornar isto explícito no contrato documenta a hipótese
+     * e permite ao chamador (e ao próprio WP) verificá-la.
+     */
+    public static List<String> listArraySeparationTargets(
+            String machineName,
+            List<Element> mergedMachineElements,
+            BxmlTranslateContext ctx,
+            Collection<String> relatedMachineNames,
+            Path bxmlDirectory) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        out.addAll(
+                toSeparatedPointerRanges(
+                        listImplementationAssignTargets(
+                                machineName, mergedMachineElements, ctx, bxmlDirectory)));
+        if (relatedMachineNames != null && !relatedMachineNames.isEmpty() && bxmlDirectory != null) {
+            out.addAll(
+                    toSeparatedPointerRanges(
+                            listImportedMachineConcreteAssigns(
+                                    new ArrayList<>(relatedMachineNames), bxmlDirectory)));
+        }
+        return List.copyOf(out);
     }
 
     /**

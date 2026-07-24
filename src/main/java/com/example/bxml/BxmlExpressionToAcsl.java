@@ -25,6 +25,10 @@ public final class BxmlExpressionToAcsl {
      * {@code card(…)}).
      */
     public static String formatEquality(Element leftExp, Element rightExp, BxmlTranslateContext ctx) {
+        String functionOverride = formatFunctionOverrideAssignment(leftExp, rightExp, ctx);
+        if (functionOverride != null) {
+            return functionOverride;
+        }
         if (isListValued(leftExp, ctx) && isRelationOrFunctionValued(rightExp, ctx)) {
             return translate(rightExp, ctx)
                     + " == list_to_function("
@@ -48,6 +52,38 @@ public final class BxmlExpressionToAcsl {
             return "equals(" + l + ", " + r + ")";
         }
         return l + " == " + r;
+    }
+
+    /**
+     * B açúcar de atribuição por sobrescrita relacional {@code f(x) := y} → {@code equals(f,
+     * overwrite(f, singleton(couple(x, y))))} (ACSL_Lib/relation_functions/overwrite.acsl), em vez
+     * do mais fraco {@code function_apply(f, x) == y} (que nada diz sobre {@code f} fora de {@code
+     * x}). Só se aplica quando o LHS é ele próprio uma aplicação funcional ({@code Binary_Exp
+     * op="("}); {@code null} caso contrário, para {@link #formatEquality} cair no caminho genérico.
+     *
+     * <p>O "f" repetido (uma vez como LHS de {@code equals}, outra dentro de {@code overwrite}) é
+     * texto ainda não distinguido entre pré/pós-estado — quem chama {@link #formatEquality} para
+     * este padrão de atribuição (ex.: {@code BxmlInitialisationTranslator#parseAssignementSub}) já
+     * embrulha a ocorrência de {@code f} usada como RHS em {@code \old(...)} via {@code
+     * wrapLhsVarsInRhsWithOld}, desde que {@code f} entre no conjunto de nomes LHS coletado
+     * (função-aplicação como alvo de atribuição também precisa ser reconhecida lá).
+     */
+    private static String formatFunctionOverrideAssignment(
+            Element leftExp, Element rightExp, BxmlTranslateContext ctx) {
+        if (leftExp == null || rightExp == null || !"Binary_Exp".equals(leftExp.getLocalName())) {
+            return null;
+        }
+        if (!isFunctionApplicationOp(leftExp.getAttribute("op"))) {
+            return null;
+        }
+        Element[] pair = twoDirectExpChildren(leftExp);
+        if (pair[0] == null || pair[1] == null) {
+            return null;
+        }
+        String f = translate(pair[0], ctx);
+        String x = translate(pair[1], ctx);
+        String y = translate(rightExp, ctx);
+        return "equals(" + f + ", overwrite(" + f + ", singleton(couple(" + x + ", " + y + "))))";
     }
 
     /**

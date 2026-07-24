@@ -401,7 +401,8 @@ public final class AcslGenerator {
                                 importedOpAssigns,
                                 importedInvariantPredicateNames,
                                 varRhsOverrides,
-                                bxmlDirectory)
+                                bxmlDirectory,
+                                new ArrayList<>(invariantSourceMachineNames))
                         : List.of();
 
         StringBuilder sb = new StringBuilder();

@@ -709,6 +709,11 @@ public final class BxmlInitialisationTranslator {
                         if (v != null && !v.isBlank()) {
                             out.add(BxmlExpressionToAcsl.translateBNamedConstant(v.trim()));
                         }
+                    } else {
+                        String fname = functionOverrideTargetName(l);
+                        if (fname != null) {
+                            out.add(fname);
+                        }
                     }
                 }
             }
@@ -980,6 +985,11 @@ public final class BxmlInitialisationTranslator {
                 if (v != null && !v.isBlank()) {
                     lhsNames.add(BxmlExpressionToAcsl.translateBNamedConstant(v.trim()));
                 }
+            } else {
+                String fname = functionOverrideTargetName(l);
+                if (fname != null) {
+                    lhsNames.add(fname);
+                }
             }
         }
         lhsNames.addAll(extraLhsVarNames);
@@ -992,6 +1002,36 @@ public final class BxmlInitialisationTranslator {
             }
             ensures.add(e);
         }
+    }
+
+    /**
+     * Nome da função sendo sobrescrita num LHS de açúcar de atribuição {@code f(x) := y} (BXML
+     * {@code Binary_Exp op="("} cujo primeiro filho é o {@code Id} de {@code f}) — usado para
+     * incluir {@code f} no conjunto de nomes LHS que precisam de {@code \old(...)} no RHS
+     * (ver {@link BxmlExpressionToAcsl#formatEquality}, que traduz esta forma para {@code
+     * equals(f, overwrite(f, singleton(couple(x, y))))}). {@code null} se {@code exp} não tiver
+     * esta forma.
+     */
+    private static String functionOverrideTargetName(Element exp) {
+        if (exp == null || !"Binary_Exp".equals(exp.getLocalName())) {
+            return null;
+        }
+        if (!"(".equals(exp.getAttribute("op").trim())) {
+            return null;
+        }
+        List<Element> children = directExpChildren(exp);
+        if (children.isEmpty()) {
+            return null;
+        }
+        Element f = children.get(0);
+        if (!"Id".equals(f.getLocalName())) {
+            return null;
+        }
+        String v = f.getAttribute("value");
+        if (v == null || v.isBlank()) {
+            return null;
+        }
+        return BxmlExpressionToAcsl.translateBNamedConstant(v.trim());
     }
 
     /**

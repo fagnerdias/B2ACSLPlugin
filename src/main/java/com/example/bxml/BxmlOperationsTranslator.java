@@ -219,8 +219,42 @@ public final class BxmlOperationsTranslator {
             List<String> requiresOnlyPredicateNames,
             Map<String, String> varRhsOverrides,
             Path bxmlDirectory) {
+        return translateOperations(machineEl, ctx, invariantPredicateNames, abstractVariableNames,
+                libScanGhostOperationBodies, rootAbstractMachineName, mergedRefinementChain,
+                gluing, useGhostAbstraction, importedOpAssigns, requiresOnlyPredicateNames,
+                varRhsOverrides, bxmlDirectory, List.of());
+    }
+
+    /**
+     * @param arraySeparationMachineNames nomes de máquinas transitivamente {@code IMPORTS}/{@code
+     *        SEES}/{@code USES} desta máquina (tipicamente a união de {@code
+     *        listImportedMachineNamesTransitive} + {@code listSeenMachineNamesTransitive} do
+     *        chamador) — usados para {@code requires \separated(saída, Array + (low .. high));} de
+     *        cada parâmetro de saída (ponteiro C) contra cada variável array-backed alcançável,
+     *        própria ou dessas máquinas. Ver {@link
+     *        BxmlMachineVariables#listArraySeparationTargets}.
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction,
+            Map<String, List<String>> importedOpAssigns,
+            List<String> requiresOnlyPredicateNames,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory,
+            List<String> arraySeparationMachineNames) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
+        List<String> separationArrayTargets =
+                BxmlMachineVariables.listArraySeparationTargets(
+                        machineName, mergedRefinementChain, ctx, arraySeparationMachineNames,
+                        bxmlDirectory);
 
         NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
         if (ops.getLength() == 0) return out;
@@ -266,6 +300,31 @@ public final class BxmlOperationsTranslator {
                 // p[..] mas o WP não tem base para validar p[1..N-1].
                 if (!funcTypedOutputs.contains(p)) {
                     requires.add("\\valid(" + p + ")");
+                }
+            }
+            // Parâmetros de saída são ponteiros C — em memória, podem em princípio apontar para
+            // qualquer região global do programa. \separated torna explícita a não-aliasing que o
+            // modelo de memória "typed" do WP já assume implicitamente (ver aviso "Memory model
+            // hypotheses" do Frama-C), tanto contra cada variável array-backed alcançável (própria
+            // máquina + IMPORTS/SEES/USES transitivos, já resolvidos pelo chamador em
+            // separationArrayTargets) quanto, com múltiplas saídas, entre si.
+            List<String> scalarOutputParams = new ArrayList<>();
+            for (String p : outputParams) {
+                if (!funcTypedOutputs.contains(p)) {
+                    scalarOutputParams.add(p);
+                }
+            }
+            if (!separationArrayTargets.isEmpty()) {
+                for (String p : scalarOutputParams) {
+                    for (String arrayTarget : separationArrayTargets) {
+                        requires.add("\\separated(" + p + ", " + arrayTarget + ")");
+                    }
+                }
+            }
+            for (int a = 0; a < scalarOutputParams.size(); a++) {
+                for (int b = a + 1; b < scalarOutputParams.size(); b++) {
+                    requires.add(
+                            "\\separated(" + scalarOutputParams.get(a) + ", " + scalarOutputParams.get(b) + ")");
                 }
             }
 

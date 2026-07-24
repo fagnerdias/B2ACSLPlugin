@@ -2,7 +2,7 @@
   "_meta": {
     "generator": "scripts/generate_acsl_symbol_dependency_map.py",
     "root": "src/main/resources/lib/B2ACSLLib",
-    "symbol_count": 56
+    "symbol_count": 57
   },
   "symbols": [
     "apply",
@@ -44,6 +44,7 @@
     "length",
     "list_to_function",
     "not_belongs",
+    "overwrite",
     "pair",
     "ran",
     "range_restriction",
@@ -102,6 +103,7 @@
     "length": "sequence_functions/length.acsl",
     "list_to_function": "sequence_functions/list_to_function.acsl",
     "not_belongs": "set_functions/belongs.acsl",
+    "overwrite": "relation_functions/overwrite.acsl",
     "pair": "set_functions/pair.acsl",
     "ran": "relation_functions/range.acsl",
     "range_restriction": "relation_functions/range_restriction.acsl",
@@ -240,6 +242,9 @@
     ],
     "not_belongs": [
       "set_functions/belongs.acsl"
+    ],
+    "overwrite": [
+      "relation_functions/overwrite.acsl"
     ],
     "pair": [
       "set_functions/pair.acsl"
@@ -580,6 +585,13 @@
     "not_belongs": [
       "belongs"
     ],
+    "overwrite": [
+      "belongs",
+      "couple",
+      "dom",
+      "first",
+      "not_belongs"
+    ],
     "pair": [
       "belongs",
       "set_union",
@@ -830,6 +842,11 @@
       "tuple_functions/accessors.acsl",
       "tuple_functions/tuple_couple.acsl"
     ],
+    "relation_axioms/relation_overwrite.acsl": [
+      "relation_functions/domain.acsl",
+      "relation_functions/overwrite.acsl",
+      "set_functions/belongs.acsl"
+    ],
     "relation_axioms/relation_range.acsl": [
       "set_functions/belongs.acsl",
       "tuple_functions/tuple_couple.acsl"
@@ -850,6 +867,9 @@
     ],
     "relation_functions/inverse.acsl": [
       "relation_axioms/relation_inverse.acsl"
+    ],
+    "relation_functions/overwrite.acsl": [
+      "relation_axioms/relation_overwrite.acsl"
     ],
     "relation_functions/range.acsl": [
       "relation_axioms/relation_range.acsl"
