@@ -109,6 +109,7 @@ public final class AcslLibIncludes {
             "relation_functions/apply.acsl",
             "relation_functions/domain_restriction.acsl",
             "relation_functions/range_restriction.acsl",
+            "relation_functions/overwrite.acsl",
             "function_functions/is_function.acsl",
             "function_functions/is_function_of.acsl",
             "function_functions/is_partial.acsl",

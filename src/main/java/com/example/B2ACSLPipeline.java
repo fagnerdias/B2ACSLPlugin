@@ -33,6 +33,8 @@ import com.example.ui.WpOptionsDialog;
 import com.example.ui.WpOptionsDialog.WpOptions;
 
 import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 /**
  * Pipeline B2ACSL: BXML -> ACSL -> {@code ghost_operations.ci} -> Frama-C ({@code -acsl-import} +
@@ -60,6 +62,69 @@ public final class B2ACSLPipeline {
 
     /** Lemas admitidos da B2ACSLLib (anexados ao fim do merge Frama-C). */
     private static final String ACSL_LIB_LEMMAS_RESOURCE = B2AcslLibraryPaths.classpathResource("lemmas.acsl");
+
+    /**
+     * Nome C do operador de exponenciação inteira B ({@code **i} no BXML) — quando um projeto usa
+     * {@code **}, o código C não tem operador nativo e chama esta função auxiliar de runtime (ex.
+     * {@code b_pow.c}/{@code b_pow.h}, gerados por fora deste plugin). Sem especificação ACSL
+     * própria, WP não sabe o que {@code b_pow} calcula e não consegue provar pós-condições de
+     * operações como {@code pow_a} que dependem do seu resultado.
+     */
+    private static final String INTEGER_POWER_HELPER_FUNCTION_NAME = "b_pow";
+
+    /**
+     * Especificação ACSL (formato de esboço {@code function X: contract: ...} usado por todo o
+     * pipeline, convertido para comentário ACSL real pelo {@code -acsl-import}) para a função
+     * auxiliar de runtime {@code b_pow(op1, op2)} — {@code op1^op2} via loop, correspondendo
+     * exatamente aos nomes de parâmetros/variáveis locais do {@code b_pow.c} gerado.
+     *
+     * <p>SEM {@code include "import/math.acsl";} próprio de propósito: {@code b_pow.acsl} é sempre
+     * anexado ao FIM de {@code topLevelAcslFiles} (depois de todos os .acsl das máquinas), e
+     * qualquer máquina que use {@code **} já produz {@code integer_pow(...)} no seu PRÓPRIO
+     * contrato (via {@code BxmlExpressionToAcsl}'s "**i" → "integer_pow"), o que já dispara o
+     * include de {@code math.acsl} nesse ficheiro. Repeti-lo aqui causa
+     * {@code Duplicated axiomatics math_functions} no Frama-C — includes idênticos só são
+     * deduplicados dentro da MESMA árvore de includes, não entre ficheiros de topo distintos do
+     * {@code -acsl-import}.
+     */
+    private static final String INTEGER_POWER_HELPER_ACSL_SKETCH =
+            "axiomatic pow_bounds_lemmas {\n"
+            +     "admit lemma pow_prefix_in_INT:\n"
+            +     "\\forall integer b, e;\n"
+            +         "0 <= e && belongs(integer_pow(b, e), INT) ==>\n"
+            +         "\\forall integer k; 0 <= k <= e ==>\n"
+            +         "-2147483648 <= integer_pow(b, k) <= 2147483647;\n"
+            +     "}\n"
+            + "function b_pow:\n"
+                    + "contract:\n"
+                    + "    requires 0 <= op2;\n"
+                    + "    requires \\forall integer k; 0 <= k <= op2 ==>\n"
+                    + "        -2147483648 <= integer_pow(op1, k) <= 2147483647;\n"
+                    + "    assigns \\nothing;\n"
+                    + "    ensures \\result == integer_pow(op1, op2);\n"
+                    + "    at loop 1:\n"
+                    + "        loop invariant 0 <= i <= op2;\n"
+                    + "        loop invariant val == integer_pow(op1, i);\n"
+                    + "        loop assigns i, val;\n"
+                    + "        loop variant op2 - i;\n";
+
+    /** {@code true} se {@code node} (ou algum descendente) for {@code Binary_Exp op='**i'}. */
+    private static boolean containsIntegerPowerOperator(Node node) {
+        if (node == null) return false;
+        if (node.getNodeType() == Node.ELEMENT_NODE) {
+            Element el = (Element) node;
+            if ("Binary_Exp".equals(el.getLocalName()) && "**i".equals(el.getAttribute("op"))) {
+                return true;
+            }
+        }
+        NodeList children = node.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            if (containsIntegerPowerOperator(children.item(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private static final boolean MOCK_MODE = isMockEnabled();
 
@@ -163,6 +228,10 @@ public final class B2ACSLPipeline {
         Path cDir = langPath.resolve("c");
         // Staging dos ficheiros da lib sob cDir (elimina cópias redundantes em target/)
         System.setProperty("b2acsl.targetAcslDir", cDir.toAbsolutePath().normalize().toString());
+        // Limpa antes do loop: GhostOperationsCiGenerator.write() ACRESCENTA (não sobrescreve) a
+        // cada chamada — ver comentário abaixo — por isso o ficheiro precisa de começar vazio a
+        // cada execução, senão conteúdo de uma run anterior ficaria duplicado.
+        Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
         boolean anyNeedsGhost = false;
         for (MachineFile mf : machines) {
             Element mr = AcslGenerator.parseMachineElement(mf.bxmlPath());
@@ -179,11 +248,22 @@ public final class B2ACSLPipeline {
                 continue;
             }
             anyNeedsGhost = true;
+            // write() ACRESCENTA ao ghost_operations.ci (não sobrescreve): num projeto com VÁRIAS
+            // máquinas a precisar de abstração ghost (ex.: Customer_estr tem Customer E Set), cada
+            // chamada usava Files.writeString sem APPEND, e só a ÚLTIMA máquina processada
+            // sobrevivia no ficheiro final — as declarações ghost_purchases/ghost_limit de Customer
+            // desapareciam silenciosamente, substituídas pelas de Set, dando "unbound logic
+            // variable ghost_purchases" no Frama-C. O bloco "axiomatic dummy_ghost { ... }" (mesmo
+            // nome/boilerplate genérico em toda chamada) que cada write() acrescenta é fundido num
+            // só logo a seguir ao loop, para não duplicar "type DSet<A>;" etc.
             GhostOperationsCiGenerator.write(
                     cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
         }
         if (!anyNeedsGhost) {
             Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
+        } else {
+            GhostOperationsCiGenerator.mergeDuplicateDummyGhostBlocks(
+                    GhostOperationsCiGenerator.targetPath(cDir));
         }
         Path ghostCiPath = GhostOperationsCiGenerator.targetPath(cDir);
         String ghostCiStripped =
@@ -197,6 +277,18 @@ public final class B2ACSLPipeline {
         try {
             AcslLibIncludes.resetLibraryBundleUnderOutput(acslDir);
             List<Path> acslFiles = new ArrayList<>();
+            // ** (Binary_Exp op='**i') não tem operador C nativo — verifica em TODAS as máquinas
+            // do projeto (abstratas E implementações/refinamentos, não só as que geram .acsl
+            // próprio) se alguma a usa, para decidir se b_pow.acsl (especificação da função de
+            // runtime auxiliar b_pow, sem a qual WP não prova nada sobre operações como pow_a que
+            // chamam essa função) precisa de ser gerado.
+            boolean usesIntegerPowerOperator = false;
+            for (MachineFile mf : machines) {
+                if (containsIntegerPowerOperator(AcslGenerator.parseMachineElement(mf.bxmlPath()))) {
+                    usesIntegerPowerOperator = true;
+                    break;
+                }
+            }
             Set<String> abstractMachineNames = new LinkedHashSet<>();
             Set<String> dependencyOnlyMachineNames =
                     dependencyOnlyMachineNames(seesGraph, importsGraph);
@@ -246,8 +338,14 @@ public final class B2ACSLPipeline {
             }
             List<String> topLevelImportMachines =
                     topLevelImportMachineNames(abstractMachineNames, dependencyOnlyMachineNames);
-            List<Path> topLevelAcslFiles =
-                    filterAcslFilesByMachineNames(acslFiles, topLevelImportMachines);
+            List<Path> topLevelAcslFiles = new ArrayList<>(
+                    filterAcslFilesByMachineNames(acslFiles, topLevelImportMachines));
+            if (usesIntegerPowerOperator) {
+                Path bPowAcsl = acslDir.resolve(INTEGER_POWER_HELPER_FUNCTION_NAME + ".acsl");
+                Files.writeString(bPowAcsl, INTEGER_POWER_HELPER_ACSL_SKETCH, StandardCharsets.UTF_8);
+                acslFiles.add(bPowAcsl);
+                topLevelAcslFiles.add(bPowAcsl);
+            }
             if (!topLevelImportMachines.isEmpty()) {
                 System.out.println(
                         "[B2ACSL] Importação ACSL Frama-C (raiz SEES): " + topLevelImportMachines);
@@ -578,6 +676,57 @@ public final class B2ACSLPipeline {
     }
 
     /**
+     * Palavras que o próprio B2ACSL usa estruturalmente no formato intermédio {@code function X:
+     * contract: requires …; ensures …;} passado ao {@code -acsl-import} (e nos blocos {@code
+     * axiomatic}/{@code ghost} gerados). Se o token reportado como erro de sintaxe for uma delas, a
+     * colisão não é curável por renomeação simples — renomear quebraria o próprio formato.
+     */
+    private static final Set<String> PROTECTED_ACSL_STRUCTURAL_WORDS =
+            Set.of(
+                    "requires", "ensures", "assigns", "contract", "function", "at", "assert",
+                    "ghost", "loop", "invariant", "variant", "axiom", "axiomatic", "predicate",
+                    "logic", "type", "include", "behavior", "reads", "admit", "lemma", "assumes",
+                    "return");
+
+    /** Casa {@code [acsl-import] ficheiro:linha: User Error: [Syntax error] <token>.} no output do Frama-C. */
+    private static final Pattern ACSL_IMPORT_SYNTAX_ERROR_TOKEN =
+            Pattern.compile("\\[acsl-import\\][^\\n]*\\[Syntax error\\]\\s*([A-Za-z_]\\w*)\\s*\\.");
+
+    private static String extractAcslImportSyntaxErrorToken(String framaCOutput) {
+        if (framaCOutput == null) {
+            return null;
+        }
+        Matcher m = ACSL_IMPORT_SYNTAX_ERROR_TOKEN.matcher(framaCOutput);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * Renomeia (fronteira de palavra, sufixo {@code _b}) todas as ocorrências de {@code badToken}
+     * nos {@code .acsl} importados e no {@code ghost_operations.ci} — identificador B (variável,
+     * parâmetro, …) que colide com uma palavra reservada do ACSL (ex.: {@code set}).
+     */
+    private static void renameReservedWordCollision(List<Path> acslImportFiles, Path ghostCi, String badToken)
+            throws IOException {
+        Pattern wordPattern =
+                Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(badToken) + "(?![A-Za-z0-9_])");
+        String replacement = badToken + "_b";
+        List<Path> targets = new ArrayList<>(acslImportFiles);
+        if (ghostCi != null && Files.isRegularFile(ghostCi)) {
+            targets.add(ghostCi);
+        }
+        for (Path p : targets) {
+            if (p == null || !Files.isRegularFile(p)) {
+                continue;
+            }
+            String text = Files.readString(p, StandardCharsets.UTF_8);
+            String renamed = wordPattern.matcher(text).replaceAll(Matcher.quoteReplacement(replacement));
+            if (!renamed.equals(text)) {
+                Files.writeString(p, renamed, StandardCharsets.UTF_8);
+            }
+        }
+    }
+
+    /**
      * {@code .acsl} para {@code -acsl-import} numa única invocação Frama-C: raízes SEES quando
      * existem; senão união (ordem estável) dos ficheiros resolvidos por cada {@code .c}.
      */
@@ -737,19 +886,57 @@ public final class B2ACSLPipeline {
         importCmd.add("-no-unicode");
         System.out.println("[B2ACSL] Frama-C acsl-import: " + String.join(" ", importCmd));
 
-        ProcessBuilder importPb = new ProcessBuilder(importCmd);
-        importPb.directory(cDir.toFile());
-        importPb.redirectOutput(mergedCode.toFile());
-        importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
+        // Alguns identificadores B (ex.: uma variável abstrata chamada "set") coincidem com
+        // palavras reservadas do ACSL — o -acsl-import falha com "[Syntax error] <token>.". Em vez
+        // de manter uma lista estática (sempre incompleta) de palavras reservadas, deteta-se o
+        // token exato reportado pelo próprio Frama-C, renomeia-se (sufixo "_b") em todos os .acsl
+        // importados e no ghost_operations.ci, e tenta-se de novo — self-healing, sem risco de
+        // adivinhar mal a lista. Só NÃO se tenta curar se o token colidir for uma das palavras
+        // estruturais que o próprio B2ACSL usa (requires/ensures/logic/…): renomeá-las corromperia
+        // o formato intermédio que o -acsl-import espera.
+        int importExitCode = -1;
+        // Tokens curados nesta ronda (ex.: "set"): ghost_operations.ci normalmente só tem a forma
+        // "dummy_set" (não colide), mas stripDummyPrefixFromMergedCode remove o prefixo "dummy_"
+        // DEPOIS do -acsl-import já ter passado, reintroduzindo a mesma palavra reservada de forma
+        // crua em merged_code.c — o -wp (invocação Frama-C separada) volta a rejeitá-la, só que com
+        // uma mensagem que já não nomeia o token ("unexpected token ','"). Por isso lembra-se aqui
+        // cada token curado para reaplicar a mesma renomeação já feita nos .acsl, depois do strip.
+        Set<String> healedReservedWords = new LinkedHashSet<>();
+        for (int attempt = 0; attempt < 5; attempt++) {
+            ProcessBuilder importPb = new ProcessBuilder(importCmd);
+            importPb.directory(cDir.toFile());
+            importPb.redirectOutput(mergedCode.toFile());
+            importPb.redirectError(ProcessBuilder.Redirect.INHERIT);
 
-        Process pImport = importPb.start();
-        boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
-        if (!importOk) {
-            pImport.destroyForcibly();
-            return 5;
+            Process pImport = importPb.start();
+            boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
+            if (!importOk) {
+                pImport.destroyForcibly();
+                return 5;
+            }
+            importExitCode = pImport.exitValue();
+            if (importExitCode == 0) {
+                break;
+            }
+            String importOutput =
+                    Files.isRegularFile(mergedCode)
+                            ? Files.readString(mergedCode, StandardCharsets.UTF_8)
+                            : "";
+            String badToken = extractAcslImportSyntaxErrorToken(importOutput);
+            if (badToken == null || PROTECTED_ACSL_STRUCTURAL_WORDS.contains(badToken)) {
+                return importExitCode;
+            }
+            System.out.println(
+                    "[B2ACSL] '"
+                            + badToken
+                            + "' colide com palavra reservada do ACSL; renomeando para '"
+                            + badToken
+                            + "_b' em todos os .acsl importados e tentando novamente...");
+            renameReservedWordCollision(acslImportFiles, ghostCi, badToken);
+            healedReservedWords.add(badToken);
         }
-        if (pImport.exitValue() != 0) {
-            return pImport.exitValue();
+        if (importExitCode != 0) {
+            return importExitCode;
         }
 
         stripLeadingFramaCNonCOutput(mergedCode);
@@ -771,6 +958,14 @@ public final class B2ACSLPipeline {
         SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
         ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
         moveMemoryDependentVariableBlocksAfterTheirGlobals(mergedCode);
+        // Última etapa: várias transformações acima (ex. placeGhostOperationSpecsAboveFunctions)
+        // fazem a SUA PRÓPRIA remoção do prefixo "dummy_" ao inserir texto lido diretamente de
+        // ghost_operations.ci, reintroduzindo tarde uma palavra reservada do ACSL (ex. "dummy_set"
+        // → "set") já curada mais cedo no .acsl fonte. Reaplica-se aqui, no fim, para cobrir
+        // qualquer reintrodução independentemente de qual passo a causou.
+        for (String healed : healedReservedWords) {
+            renameReservedWordCollision(List.of(mergedCode), null, healed);
+        }
 
         String cSourcesLabel =
                 cFiles.stream().map(p -> p.getFileName().toString()).reduce((a, b) -> a + ", " + b).orElse("");
@@ -1066,6 +1261,17 @@ public final class B2ACSLPipeline {
     private static final Pattern LABELED_LOGIC_CONST_REF =
             Pattern.compile("\\w+\\{L\\}\\s*=\\s*([A-Za-z_]\\w*)\\s*;");
 
+    /**
+     * Casa a referência a um global C dentro de {@code array_to_function_int}/{@code
+     * array_to_function_bool} (ex.: {@code array_to_function_int((int32_t *)Price__price_i, 1)}),
+     * forma típica de {@code logic Function_..._..._ name{L}= \at(array_to_function_...(...), L);}
+     * gerada para variáveis concretas array/função (ex.: {@code Price__price_i}). Diferente de
+     * {@link #LABELED_LOGIC_CONST_REF}: aqui o global está dentro de uma chamada com cast, não
+     * numa atribuição direta {@code nome{L}= GLOBAL;}.
+     */
+    private static final Pattern LABELED_ARRAY_TO_FUNCTION_REF =
+            Pattern.compile("array_to_function_\\w+\\(\\([^()]*\\)\\s*([A-Za-z_]\\w*)\\s*,");
+
     private static String moveOneMemoryDependentVariableBlockIfNeeded(String content) {
         List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
         // Nome declarado {L}= -> span que o declara, para localizar dependências entre blocos
@@ -1088,6 +1294,13 @@ public final class B2ACSLPipeline {
             Matcher refMatcher = LABELED_LOGIC_CONST_REF.matcher(sp.text);
             while (refMatcher.find()) {
                 int end = lastStaticDeclEndOutsideSpan(content, refMatcher.group(1), spans);
+                if (end > latestDepEnd) {
+                    latestDepEnd = end;
+                }
+            }
+            Matcher arrayFnMatcher = LABELED_ARRAY_TO_FUNCTION_REF.matcher(sp.text);
+            while (arrayFnMatcher.find()) {
+                int end = lastStaticDeclEndOutsideSpan(content, arrayFnMatcher.group(1), spans);
                 if (end > latestDepEnd) {
                     latestDepEnd = end;
                 }

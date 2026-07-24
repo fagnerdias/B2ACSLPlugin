@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -239,7 +240,11 @@ public final class GhostOperationsCiGenerator {
                 abstractMachineEl, mergedMachineElements);
         boolean hasAnySubOps = machineHasAnySubOperations(abstractMachineEl);
         if (!needsGhost && !hasAnySubOps) {
-            Files.deleteIfExists(target);
+            // NÃO apaga target: write() é chamado uma vez por máquina e ACRESCENTA ao mesmo
+            // ghost_operations.ci (ver comentário abaixo); apagar aqui destruiria o conteúdo já
+            // acrescentado por outras máquinas processadas antes desta no mesmo projeto. A
+            // limpeza (uma só vez, antes do loop) e a decisão "nada precisa de ghost" são
+            // responsabilidade do chamador (B2ACSLPipeline).
             return;
         }
         String machineName = abstractMachineEl.getAttribute("name");
@@ -255,13 +260,31 @@ public final class GhostOperationsCiGenerator {
                                         abstractMachineEl, mergedMachineElements, bxmlDirectory))
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
-        List<String> abstractVarNames = listAbstractVariableNames(abstractMachineEl);
+        // Variáveis colapsadas na implementação (mesmo nome abstrata/concreta, array-backed — ver
+        // BxmlMachineVariables#collapsedIntoImplementationVariableNames) não têm ghost_<v>/
+        // dummy_ghost_<v>: usam só a definição direta array-backed da camada da implementação, sem
+        // camada ghost paralela. Excluídas aqui em bloco, upstream de tudo (ghost_<v> C global,
+        // dummy_ghost_<v> axiomático, e a deteção de "atribuída" em buildGhostOperations), para não
+        // ter de replicar o filtro em cada função abaixo.
+        Set<String> collapsedVariableNames =
+                BxmlMachineVariables.collapsedIntoImplementationVariableNames(
+                        abstractMachineEl, mergedMachineElements);
+        List<String> abstractVarNames =
+                listAbstractVariableNames(abstractMachineEl).stream()
+                        .filter(v -> !collapsedVariableNames.contains(v))
+                        .toList();
         Set<String> abstractSet = new LinkedHashSet<>(abstractVarNames);
         Map<String, String> varTypes =
                 BxmlMachineVariables.inferVariableLogicTypes(abstractMachineEl, ctx);
         Set<String> concreteConstants = new LinkedHashSet<>(concreteConstantNames(abstractMachineEl));
         concreteConstants.addAll(
                 BxmlSetsTranslator.listSeenMachineConcreteConstantNames(abstractMachineEl, bxmlDirectory));
+        // Conjuntos diferidos vistos (ex. Goods_GOODS) também são globais partilhados só
+        // disponíveis via -acsl-import; tratam-se como as constantes concretas vistas acima
+        // (renomeados para dummy_<nome> no texto ghost por ghostDummyConcreteRefs).
+        concreteConstants.addAll(
+                BxmlSetsTranslator.listSeenMachineDeferredSetQualifiedNames(
+                        abstractMachineEl, bxmlDirectory));
 
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
                 BxmlSetsTranslator.listEnumeratedSetsWithSees(
@@ -280,7 +303,7 @@ public final class GhostOperationsCiGenerator {
                         enumeratedSetsForGhost,
                         abstractConstParams);
         if (ghostOps.isEmpty()) {
-            Files.deleteIfExists(target);
+            // Idem: não apagar — ver comentário no early-return acima.
             return;
         }
 
@@ -321,7 +344,76 @@ public final class GhostOperationsCiGenerator {
         }
 
         Files.createDirectories(cDir);
-        Files.writeString(cDir.resolve(GHOST_FILE), sb.toString(), StandardCharsets.UTF_8);
+        // ACRESCENTA: write() é chamado uma vez por máquina que precisa de abstração ghost no
+        // mesmo projeto (ver B2ACSLPipeline, que apaga o ficheiro uma única vez ANTES do loop
+        // sobre as máquinas). Sobrescrever aqui perderia o conteúdo de máquinas já processadas.
+        // O bloco "axiomatic dummy_ghost { ... }" (boilerplate genérico repetido por chamada) é
+        // fundido num só logo depois, em mergeDuplicateDummyGhostBlocks.
+        Files.writeString(
+                target,
+                sb.toString(),
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND);
+    }
+
+    /** Casa um bloco {@code /*@ axiomatic dummy_ghost { ... } *&#47;} inteiro (sem chavetas aninhadas dentro). */
+    private static final Pattern DUMMY_GHOST_BLOCK =
+            Pattern.compile("/\\*@\\s*axiomatic\\s+dummy_ghost\\s*\\{(.*?)\\}\\s*\\*/", Pattern.DOTALL);
+
+    /**
+     * Funde todos os blocos {@code axiomatic dummy_ghost { ... }} de {@code ghostCiPath} num só.
+     *
+     * <p>{@link #write} agora ACRESCENTA ao ficheiro (uma chamada por máquina que precisa de
+     * abstração ghost no mesmo projeto), e cada chamada inclui o seu próprio bloco {@code
+     * axiomatic dummy_ghost { ... }} — mesmo nome e, em boa parte, o MESMO boilerplate genérico
+     * ({@code type DSet<A>;}, {@code type DTuple<A,B>;}, {@code predicate dummy_equals<A>(...);},
+     * …) em toda chamada, só as linhas específicas da máquina (ex.: {@code logic DSet<integer>
+     * dummy_purchases;}) é que mudam. Sem fundir, o Frama-C rejeitaria os tipos/símbolos genéricos
+     * repetidos como já declarados. A fusão une as linhas (deduplicadas por texto, ordem de
+     * primeira ocorrência preservada) de todos os blocos num único {@code axiomatic dummy_ghost}
+     * na posição do primeiro, removendo os restantes.
+     */
+    public static void mergeDuplicateDummyGhostBlocks(Path ghostCiPath) throws IOException {
+        if (!Files.isRegularFile(ghostCiPath)) {
+            return;
+        }
+        String content = Files.readString(ghostCiPath, StandardCharsets.UTF_8);
+        Matcher m = DUMMY_GHOST_BLOCK.matcher(content);
+        List<int[]> spans = new ArrayList<>();
+        Set<String> uniqueLines = new LinkedHashSet<>();
+        while (m.find()) {
+            spans.add(new int[] {m.start(), m.end()});
+            for (String line : m.group(1).split("\n")) {
+                String trimmed = line.strip();
+                if (!trimmed.isEmpty()) {
+                    uniqueLines.add(trimmed);
+                }
+            }
+        }
+        if (spans.size() <= 1) {
+            return;
+        }
+        StringBuilder merged = new StringBuilder();
+        merged.append("/*@\n    axiomatic dummy_ghost {\n\n");
+        for (String line : uniqueLines) {
+            merged.append("        ").append(line).append("\n\n");
+        }
+        merged.append("    }\n*/\n");
+
+        StringBuilder result = new StringBuilder();
+        int cursor = 0;
+        boolean firstReplaced = false;
+        for (int[] span : spans) {
+            result.append(content, cursor, span[0]);
+            if (!firstReplaced) {
+                result.append(merged);
+                firstReplaced = true;
+            }
+            cursor = span[1];
+        }
+        result.append(content.substring(cursor));
+        Files.writeString(ghostCiPath, result.toString(), StandardCharsets.UTF_8);
     }
 
     public static boolean machineHasAnySubOperations(Element machineEl) {
@@ -385,22 +477,22 @@ public final class GhostOperationsCiGenerator {
 
                 Element anySub = BxmlInitialisationTranslator.findTopLevelAnySub(body);
                 if (anySub != null) {
-                    String forall = BxmlInitialisationTranslator.translateAnySubAsForall(anySub, ctx);
-                    if (forall == null || forall.isBlank()) continue;
+                    String existsForm = BxmlInitialisationTranslator.translateAnySubAsExists(anySub, ctx);
+                    if (existsForm == null || existsForm.isBlank()) continue;
                     List<Param> params =
                             appendOutputParametersAsPointers(listInputParameters(op), op);
-                    forall =
+                    existsForm =
                             rewriteAnySubEnsureForGhost(
-                                    forall, abstractSet, concreteConstants, op, anySub, ctx,
+                                    existsForm, abstractSet, concreteConstants, op, anySub, ctx,
                                     abstractConstParams);
-                    forall = rewriteBoolOutputPredicateTernary(forall);
-                    forall = castScalarIntGhostParamsInEnsure(forall, params);
+                    existsForm = rewriteBoolOutputPredicateTernary(existsForm);
+                    existsForm = castScalarIntGhostParamsInEnsure(existsForm, params);
                     ops.add(
                             new GhostOp(
                                     sanitizeGhostFunctionName(opName),
                                     params,
                                     assigned,
-                                    List.of(forall)));
+                                    List.of(existsForm)));
                     continue;
                 }
 
@@ -624,8 +716,12 @@ public final class GhostOperationsCiGenerator {
      *
      * <p>Em ACSL, predicados ({@code dummy_equals}, {@code dummy_belongs}, etc.) não podem ser usados
      * como condição de ternário (contexto de termo). Converte para bicondicional.
+     *
+     * <p>Visibilidade de pacote: também usada por {@link BxmlOperationsTranslator} para o mesmo
+     * padrão fora do universo ghost (ex.: {@code equals(...)} da B2ACSLLib) quando {@code
+     * bodyEnsuresOnly} passa a ser mantido no contrato real da função.
      */
-    private static String rewriteBoolOutputPredicateTernary(String ensure) {
+    static String rewriteBoolOutputPredicateTernary(String ensure) {
         if (ensure == null || ensure.isEmpty() || !ensure.contains("\\true")) return ensure;
         return ensure.replaceAll(
                 "(\\*\\w+)\\s*==\\s*\\((.+?)\\s*\\?\\s*\\\\true\\s*:\\s*\\\\false\\)",
@@ -657,6 +753,31 @@ public final class GhostOperationsCiGenerator {
         }
 
         if (!s.startsWith("equals(")) {
+            // "function_apply(v, idx) == rhs" comes from B's relational-override assignment sugar
+            // (f(x) := y, e.g. Price_i.setprice's "price(gg) := pp") via BxmlInitialisationTranslator's
+            // generic body-to-ensures translation. Since ACSL "ensures" already denotes post-state,
+            // "v" here means the NEW value — falling through to the generic rewriteAbstractIdsWithOld
+            // below would wrongly wrap it as \old(dummy_v), asserting the postcondition about the
+            // PRE-call function instead of the one just written.
+            if (s.startsWith("function_apply(")) {
+                int fnOpen = s.indexOf('(');
+                int fnClose = findMatchingClose(s, fnOpen);
+                if (fnClose > fnOpen) {
+                    String argsPart = s.substring(fnOpen + 1, fnClose);
+                    int argComma = findTopLevelComma(argsPart, 0);
+                    String rest = s.substring(fnClose + 1).trim();
+                    if (argComma >= 0 && rest.startsWith("==")) {
+                        String v = argsPart.substring(0, argComma).trim();
+                        String idx = argsPart.substring(argComma + 1).trim();
+                        String rhs = rest.substring(2).trim();
+                        if (abstractVars.contains(v)) {
+                            String idxGhost = prefixAbstractVarsForGhost(idx, abstractVars);
+                            String rhsGhost = prefixAbstractVarsForGhost(rhs, abstractVars);
+                            return "function_apply(dummy_" + v + ", " + idxGhost + ") == " + rhsGhost;
+                        }
+                    }
+                }
+            }
             Matcher belongsM = GHOST_ENSURE_BELONGS.matcher(s);
             if (belongsM.matches()) {
                 String v = stripIntegerCast(belongsM.group(1).trim());
@@ -1162,18 +1283,20 @@ public final class GhostOperationsCiGenerator {
                 Element vars = firstChildElement(sub, "Variables");
                 Element value = firstChildElement(sub, "Value");
                 if (vars == null || value == null) return;
-                String setExpr = null;
-                for (Element valExp : directExpChildren(value)) {
-                    setExpr = BxmlExpressionToAcsl.translate(valExp, ctx);
+                Element valExp = null;
+                for (Element ve : directExpChildren(value)) {
+                    valExp = ve;
                     break;
                 }
-                if (setExpr == null || setExpr.isBlank()) return;
+                if (valExp == null) return;
                 List<String> parts = new ArrayList<>();
                 for (Element varExp : directExpChildren(vars)) {
                     if (!"Id".equals(varExp.getLocalName())) continue;
                     String v = varExp.getAttribute("value");
-                    if (abstractSet.contains(v)) {
-                        parts.add("belongs(dummy_" + v + ", " + setExpr + ")");
+                    if (!abstractSet.contains(v)) continue;
+                    String part = ghostMembershipEnsure(v, valExp, ctx);
+                    if (part != null && !part.isBlank()) {
+                        parts.add(part);
                     }
                 }
                 if (!parts.isEmpty()) {
@@ -1204,6 +1327,34 @@ public final class GhostOperationsCiGenerator {
             }
             default -> { }
         }
+    }
+
+    /**
+     * {@code v :: S} no universo ghost — traduz o operador B {@code ::} (Becomes_In) para o
+     * predicado da B2ACSLLib {@code becomes_element_of}, com as mesmas duas sobrecargas que
+     * {@code BxmlInitialisationTranslator#becomesInMembershipEnsure} usa do lado NÃO-ghost
+     * (função-arrow: {@code becomes_element_of(v, dom, rng)}; conjunto literal:
+     * {@code becomes_element_of(v, S)}) — "-->" não existe como operador ACSL, então traduzir
+     * literalmente (como faz o tradutor genérico de expressões) produz sintaxe inválida.
+     * Devolve texto ainda por prefixar (dummy_/enumerado/global): o chamador
+     * ({@link #collectGhostEnsuresFromInit}) já aplica esse pós-processamento a toda a linha.
+     */
+    private static String ghostMembershipEnsure(String v, Element setExp, BxmlTranslateContext ctx) {
+        if (BxmlExpressionToAcsl.isFunctionArrowType(setExp)
+                || BxmlExpressionToAcsl.isTotalSurjectionArrowType(setExp)) {
+            Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(setExp);
+            if (domRng[0] == null || domRng[1] == null) return null;
+            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+            String rangeSet = BxmlExpressionToAcsl.translate(domRng[1], ctx);
+            String base = "becomes_element_of(dummy_" + v + ", " + domainSet + ", " + rangeSet + ")";
+            if (BxmlExpressionToAcsl.isTotalSurjectionArrowType(setExp)) {
+                return base + " && is_surjective(dummy_" + v + ", " + rangeSet + ")";
+            }
+            return base;
+        }
+        String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
+        if (setExprText == null || setExprText.isBlank()) return null;
+        return "becomes_element_of(dummy_" + v + ", " + setExprText + ")";
     }
 
     private static String ghostEnsureFromAssignment(
@@ -1256,6 +1407,11 @@ public final class GhostOperationsCiGenerator {
                 Element vars = firstChildElement(sub, "Variables");
                 if (vars == null) return;
                 for (Element id : directExpChildren(vars)) {
+                    String overridden = functionOverrideTargetName(id);
+                    if (overridden != null) {
+                        if (abstractSet.contains(overridden)) out.add(overridden);
+                        continue;
+                    }
                     if (!"Id".equals(id.getLocalName())) continue;
                     String v = id.getAttribute("value");
                     if (abstractSet.contains(v)) out.add(v);
@@ -1839,9 +1995,9 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Conjuntos globais da ACSL_Lib ({@code NAT}, {@code INT}, {@code BOOL}) → variáveis lógicas
-     * {@code dummy_NAT} / {@code dummy_INT} / {@code dummy_BOOL} declaradas em
-     * {@link DummyGhostAxiomaticBuilder}.
+     * Conjuntos globais da ACSL_Lib ({@code NAT}, {@code NAT1}, {@code INT}, {@code BOOL}) →
+     * variáveis lógicas {@code dummy_NAT} / {@code dummy_NAT1} / {@code dummy_INT} /
+     * {@code dummy_BOOL} declaradas em {@link DummyGhostAxiomaticBuilder}.
      */
     private static String prefixGlobalLogicSetsForGhost(String text) {
         if (text == null || text.isEmpty()) {
@@ -1849,6 +2005,9 @@ public final class GhostOperationsCiGenerator {
         }
         String out =
                 text.replaceAll(
+                        "(?<!dummy_)\\bNAT1\\b", Matcher.quoteReplacement("dummy_NAT1"));
+        out =
+                out.replaceAll(
                         "(?<!dummy_)\\bNAT\\b", Matcher.quoteReplacement("dummy_NAT"));
         out =
                 out.replaceAll(
@@ -1987,7 +2146,7 @@ public final class GhostOperationsCiGenerator {
      * parâmetros (na ordem de declaração no BXML); usado por contratos ghost derivados de
      * {@code ANY_Sub} (e respetivo {@code predicate ghost__<op>}).
      */
-    private static List<Param> appendOutputParametersAsPointers(
+    static List<Param> appendOutputParametersAsPointers(
             List<Param> base, Element operation) {
         List<Param> out = new ArrayList<>(base);
         if (operation == null) return out;
@@ -2027,7 +2186,7 @@ public final class GhostOperationsCiGenerator {
         return "int *";
     }
 
-    private static List<Param> listInputParameters(Element operation) {
+    static List<Param> listInputParameters(Element operation) {
         List<Param> out = new ArrayList<>();
         Element in = firstChildElement(operation, "Input_Parameters");
         if (in == null) return out;
@@ -2258,7 +2417,7 @@ public final class GhostOperationsCiGenerator {
      * Em cláusulas {@code ensures} ghost, parâmetros C {@code int} usam-se como {@code (integer)x}
      * ao serem passados a funções do universo {@code dummy_ghost} (tipos matemáticos ACSL).
      */
-    private static String castScalarIntGhostParamsInEnsure(String ensure, List<Param> params) {
+    static String castScalarIntGhostParamsInEnsure(String ensure, List<Param> params) {
         if (ensure == null || ensure.isBlank() || params == null || params.isEmpty()) {
             return ensure;
         }
@@ -2375,6 +2534,28 @@ public final class GhostOperationsCiGenerator {
         return out;
     }
 
+    /**
+     * B's relational-override assignment sugar {@code f(x) := y} (desugars to
+     * {@code f := f <+ {x |-> y}}) puts the target inside a {@code Binary_Exp op='('} (function
+     * application) as the sole {@code Variables} child, instead of a direct {@code Id} — e.g.
+     * {@code Price_i.setprice}'s {@code price(gg) := pp}. Without recognizing this shape,
+     * {@code price} was never detected as assigned, so no ghost update / concrete {@code assigns}
+     * was ever generated for the operation (fell back to {@code assigns \nothing;}). Returns the
+     * base function/variable name, or {@code null} if {@code e} isn't this shape.
+     */
+    private static String functionOverrideTargetName(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName()) || !"(".equals(e.getAttribute("op"))) {
+            return null;
+        }
+        List<Element> children = directExpChildren(e);
+        if (children.isEmpty()) return null;
+        Element first = children.get(0);
+        if ("Id".equals(first.getLocalName())) {
+            return first.getAttribute("value");
+        }
+        return functionOverrideTargetName(first);
+    }
+
     private static Element firstSubChild(Element parent) {
         NodeList nl = parent.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
@@ -2398,7 +2579,8 @@ public final class GhostOperationsCiGenerator {
         return null;
     }
 
-    private record Param(String type, String name) {}
+    /** Visibilidade de pacote: reaproveitado por {@link BxmlOperationsTranslator} (mesmo fim). */
+    record Param(String type, String name) {}
 
     private record GhostOp(
             String cName, List<Param> params, Set<String> assignsAbstract, List<String> ghostEnsures) {

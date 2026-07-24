@@ -200,6 +200,40 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Como {@link #listImportedMachineNamesFromChain(Element, List)}, mas fecha transitivamente
+     * {@code IMPORTS} (só imports, não {@code SEES}): se {@code entry_point IMPORTS array} e
+     * {@code array IMPORTS iter_services}, {@code iter_services} entra no resultado mesmo sem
+     * {@code entry_point} importá-la diretamente — B trata IMPORTS como uma cadeia de
+     * inicialização/estado que se propaga (a máquina importadora herda a necessidade de respeitar
+     * o invariante e o {@code assigns} de tudo o que a sua importada, por sua vez, importa).
+     *
+     * @param importsGraph grafo de IMPORTS do projeto inteiro ({@link BxmlImportsGraph}); se
+     *        {@code null}, cai no comportamento de um nível de {@link
+     *        #listImportedMachineNamesFromChain(Element, List)}.
+     */
+    public static List<String> listImportedMachineNamesTransitive(
+            Element rootMachineEl, List<Element> mergedMachineElements, BxmlImportsGraph importsGraph) {
+        List<String> direct = listImportedMachineNamesFromChain(rootMachineEl, mergedMachineElements);
+        if (importsGraph == null) {
+            return direct;
+        }
+        LinkedHashSet<String> reachable = new LinkedHashSet<>();
+        ArrayDeque<String> frontier = new ArrayDeque<>(direct);
+        while (!frontier.isEmpty()) {
+            String current = frontier.poll();
+            if (current == null || current.isBlank() || !reachable.add(current.trim())) {
+                continue;
+            }
+            for (String next : importsGraph.importedBy(current.trim())) {
+                if (next != null && !next.isBlank() && !reachable.contains(next.trim())) {
+                    frontier.add(next.trim());
+                }
+            }
+        }
+        return List.copyOf(reachable);
+    }
+
+    /**
      * {@code SEES} da máquina abstrata e da cadeia fundida (implementações/refinamentos), sem
      * duplicar nomes.
      */
@@ -213,6 +247,40 @@ public final class BxmlSetsTranslator {
             }
         }
         return List.copyOf(names);
+    }
+
+    /**
+     * Como {@link #listSeenMachineNamesFromChain(Element, List)}, mas fecha transitivamente
+     * {@code SEES}: se {@code Customer} vê {@code Price} e {@code Price} vê {@code Goods},
+     * {@code Goods} entra no resultado mesmo sem {@code Customer} a ver diretamente — uma operação
+     * que chama outra de uma máquina vista (ex. {@code Customer__buy} chama
+     * {@code Price__pricequery}) precisa do {@code requires} do invariante dessa máquina vista
+     * (senão a pré-condição da chamada fica sem hipótese alguma e o WP não consegue prová-la), tal
+     * como {@link #listImportedMachineNamesTransitive} já fazia para {@code IMPORTS}.
+     *
+     * @param seesGraph grafo de SEES do projeto inteiro ({@link BxmlSeesGraph}); se {@code null},
+     *        cai no comportamento de um nível de {@link #listSeenMachineNamesFromChain(Element, List)}.
+     */
+    public static List<String> listSeenMachineNamesTransitive(
+            Element rootMachineEl, List<Element> mergedMachineElements, BxmlSeesGraph seesGraph) {
+        List<String> direct = listSeenMachineNamesFromChain(rootMachineEl, mergedMachineElements);
+        if (seesGraph == null) {
+            return direct;
+        }
+        LinkedHashSet<String> reachable = new LinkedHashSet<>();
+        ArrayDeque<String> frontier = new ArrayDeque<>(direct);
+        while (!frontier.isEmpty()) {
+            String current = frontier.poll();
+            if (current == null || current.isBlank() || !reachable.add(current.trim())) {
+                continue;
+            }
+            for (String next : seesGraph.seenBy(current.trim())) {
+                if (next != null && !next.isBlank() && !reachable.contains(next.trim())) {
+                    frontier.add(next.trim());
+                }
+            }
+        }
+        return List.copyOf(reachable);
     }
 
     private static List<String> listReferencedMachineNamesFromClause(
@@ -617,6 +685,36 @@ public final class BxmlSetsTranslator {
                         result.add(name.trim());
                     }
                 }
+            } catch (Exception ignored) {
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Nomes ACSL qualificados (ex. {@code Goods_GOODS}) de conjuntos diferidos (sem
+     * {@code Enumerated_Values}) declarados nas máquinas em {@code SEES} de {@code machineEl}.
+     * Espelha {@link #listSeenMachineConcreteConstantNames}: tal como as constantes concretas
+     * vistas, estes conjuntos são globais partilhados (declarados no {@code .acsl} da máquina
+     * vista, carregado via {@code -acsl-import}) e o gerador de {@code ghost_operations.ci}
+     * precisa de os tratar como referências {@code dummy_} locais — o parser externo do
+     * {@code .ci} não partilha o ambiente lógico do {@code -acsl-import}.
+     */
+    public static List<String> listSeenMachineDeferredSetQualifiedNames(
+            Element machineEl, Path bxmlDirectory) {
+        if (machineEl == null || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return List.of();
+        }
+        List<String> seenNames = listReferencedMachineNames(machineEl);
+        List<String> result = new ArrayList<>();
+        for (String seenName : seenNames) {
+            Path p = bxmlDirectory.resolve(seenName + ".bxml");
+            if (!Files.isRegularFile(p)) {
+                continue;
+            }
+            try {
+                Element seenEl = parseMachineElement(p);
+                result.addAll(buildDeferredSetRenames(seenEl).values());
             } catch (Exception ignored) {
             }
         }

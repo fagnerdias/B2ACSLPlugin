@@ -302,16 +302,22 @@ public final class BxmlPredicateToAcsl {
             return "inclusion(" + left + ", " + right + ")";
         }
         if ("=".equals(op)) {
+            // <==> tem precedência menor que && em ACSL: sem parênteses envolvendo TODA a
+            // bicondicional, "A && flag != 0 <==> B && C" analisa como "(A && flag != 0) <==>
+            // (B && C)" em vez de "A && (flag != 0 <==> B) && C" quando este predicado é um
+            // conjunto de um Nary_Pred op='&' maior (ex.: invariante de loop). O operador nativo
+            // "<=>" do B (mais abaixo) já envolve o resultado inteiro; esta forma derivada
+            // ("v = bool(P)" -> "v <==> P") precisa do mesmo tratamento.
             if ("Boolean_Exp".equals(rightEl.getLocalName())) {
                 Element predEl = firstNonAttrElementChild(rightEl);
                 if (predEl != null) {
-                    return "(" + left + " != 0) <==> " + translatePred(predEl, ctx);
+                    return "((" + left + " != 0) <==> " + translatePred(predEl, ctx) + ")";
                 }
             }
             if ("Boolean_Exp".equals(leftEl.getLocalName())) {
                 Element predEl = firstNonAttrElementChild(leftEl);
                 if (predEl != null) {
-                    return "(" + right + " != 0) <==> " + translatePred(predEl, ctx);
+                    return "((" + right + " != 0) <==> " + translatePred(predEl, ctx) + ")";
                 }
             }
             if ("Id".equals(leftEl.getLocalName())

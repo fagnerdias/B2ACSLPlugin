@@ -3,6 +3,7 @@ package com.example.bxml;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -34,7 +35,7 @@ public final class BxmlMachineVariables {
      * declaradas ({@code name} do {@code <Machine>}).
      */
     public static String formatAxiomaticBlock(Element machineEl, BxmlTranslateContext ctx) {
-        return formatAxiomaticBlock(machineEl, ctx, null, null, Map.of(), null);
+        return formatAxiomaticBlock(machineEl, ctx, null, null, Map.of(), (Set<String>) null);
     }
 
     /**
@@ -77,6 +78,45 @@ public final class BxmlMachineVariables {
             String rootAbstractForConcreteLink,
             Set<String> abstractVarNamesForGhostRead,
             Map<String, String> varRhsOverrides) {
+        return formatAxiomaticBlockWithGhostDummyReads(
+                machineEl, ctx, rootAbstractForConcreteLink, abstractVarNamesForGhostRead,
+                varRhsOverrides, null);
+    }
+
+    /**
+     * Como {@link #formatAxiomaticBlockWithGhostDummyReads(Element, BxmlTranslateContext, String,
+     * Set, Map)}, mas com {@code bxmlDirectory} para resolver a cardinalidade de conjuntos nomeados
+     * (deferred sets como {@code GOODS}) valorados em máquinas VISTAS (SEES) — ver
+     * {@link #lookupSetCardinalityFromValues(String, Element, BxmlTranslateContext, Path)}.
+     */
+    public static String formatAxiomaticBlockWithGhostDummyReads(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractForConcreteLink,
+            Set<String> abstractVarNamesForGhostRead,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory) {
+        return formatAxiomaticBlockWithGhostDummyReads(
+                machineEl, ctx, rootAbstractForConcreteLink, abstractVarNamesForGhostRead,
+                varRhsOverrides, bxmlDirectory, Set.of());
+    }
+
+    /**
+     * Como acima, mas omitindo por completo (sem {@code reads dummy_ghost_v} NEM declaração bare)
+     * variáveis em {@code excludeVariableNames} — usado para as variáveis que
+     * {@link #collapsedIntoImplementationVariableNames} identifica como devendo colapsar numa única
+     * definição array-backed na camada da implementação (sem gerar uma camada ghost paralela para
+     * elas): a declaração delas fica inteiramente a cargo do bloco da máquina fundida
+     * correspondente, com o nome ORIGINAL (sem colisão a resolver, já que esta camada não as declara).
+     */
+    public static String formatAxiomaticBlockWithGhostDummyReads(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractForConcreteLink,
+            Set<String> abstractVarNamesForGhostRead,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory,
+            Set<String> excludeVariableNames) {
         return formatAxiomaticBlock(
                 machineEl,
                 ctx,
@@ -84,7 +124,9 @@ public final class BxmlMachineVariables {
                 null,
                 Map.of(),
                 abstractVarNamesForGhostRead,
-                varRhsOverrides == null ? Map.of() : varRhsOverrides);
+                varRhsOverrides == null ? Map.of() : varRhsOverrides,
+                bxmlDirectory,
+                excludeVariableNames);
     }
 
     /**
@@ -97,7 +139,8 @@ public final class BxmlMachineVariables {
      */
     public static String formatAxiomaticBlock(
             Element machineEl, BxmlTranslateContext ctx, String rootAbstractMachineName) {
-        return formatAxiomaticBlock(machineEl, ctx, rootAbstractMachineName, null, Map.of(), null);
+        return formatAxiomaticBlock(
+                machineEl, ctx, rootAbstractMachineName, null, Map.of(), (Set<String>) null);
     }
 
     /**
@@ -111,7 +154,25 @@ public final class BxmlMachineVariables {
             Element refinementParent,
             Map<String, String> gluing) {
         return formatAxiomaticBlock(
-                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing, null);
+                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing, null, null);
+    }
+
+    /**
+     * Como {@link #formatAxiomaticBlock(Element, BxmlTranslateContext, String, Element, Map)}, mas
+     * com {@code bxmlDirectory} para resolver a cardinalidade de conjuntos nomeados (deferred sets
+     * como {@code GOODS}) valorados em máquinas VISTAS (SEES) — ver
+     * {@link #lookupSetCardinalityFromValues(String, Element, BxmlTranslateContext, Path)}.
+     */
+    public static String formatAxiomaticBlock(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractMachineName,
+            Element refinementParent,
+            Map<String, String> gluing,
+            Path bxmlDirectory) {
+        return formatAxiomaticBlock(
+                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing, null,
+                Map.of(), bxmlDirectory);
     }
 
     private static String formatAxiomaticBlock(
@@ -134,6 +195,35 @@ public final class BxmlMachineVariables {
             Map<String, String> gluing,
             Set<String> ghostDummyReadsForAbstractVars,
             Map<String, String> varRhsOverrides) {
+        return formatAxiomaticBlock(
+                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing,
+                ghostDummyReadsForAbstractVars, varRhsOverrides, null);
+    }
+
+    private static String formatAxiomaticBlock(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractMachineName,
+            Element refinementParent,
+            Map<String, String> gluing,
+            Set<String> ghostDummyReadsForAbstractVars,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory) {
+        return formatAxiomaticBlock(
+                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing,
+                ghostDummyReadsForAbstractVars, varRhsOverrides, bxmlDirectory, Set.of());
+    }
+
+    private static String formatAxiomaticBlock(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractMachineName,
+            Element refinementParent,
+            Map<String, String> gluing,
+            Set<String> ghostDummyReadsForAbstractVars,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory,
+            Set<String> excludeVariableNames) {
         String machineName = machineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return "";
         boolean linkConcrete =
@@ -144,9 +234,14 @@ public final class BxmlMachineVariables {
                 refinementParent != null && isRefinementMachine(machineEl);
         Map<String, String> gl =
                 gluing == null ? Map.of() : gluing;
+        Map<String, String> types = inferVariableLogicTypes(machineEl, ctx);
+        if (excludeVariableNames != null && !excludeVariableNames.isEmpty()) {
+            types = new LinkedHashMap<>(types);
+            types.keySet().removeAll(excludeVariableNames);
+        }
         return formatVariablesBlock(
                 machineName,
-                inferVariableLogicTypes(machineEl, ctx),
+                types,
                 linkConcrete ? rootAbstractMachineName.trim() : null,
                 linkRefinement,
                 refinementParent,
@@ -154,7 +249,8 @@ public final class BxmlMachineVariables {
                 gl,
                 ghostDummyReadsForAbstractVars,
                 ctx,
-                varRhsOverrides);
+                varRhsOverrides,
+                bxmlDirectory);
     }
 
     private static String formatVariablesBlock(
@@ -170,7 +266,7 @@ public final class BxmlMachineVariables {
         return formatVariablesBlock(
                 blockName, types, rootAbstractForImplRhs, refinementWithParent,
                 refinementParent, refinementChild, gluing, ghostDummyReadsForAbstractVars,
-                ctx, Map.of());
+                ctx, Map.of(), null);
     }
 
     private static String formatVariablesBlock(
@@ -184,6 +280,24 @@ public final class BxmlMachineVariables {
             Set<String> ghostDummyReadsForAbstractVars,
             BxmlTranslateContext ctx,
             Map<String, String> varRhsOverrides) {
+        return formatVariablesBlock(
+                blockName, types, rootAbstractForImplRhs, refinementWithParent,
+                refinementParent, refinementChild, gluing, ghostDummyReadsForAbstractVars,
+                ctx, varRhsOverrides, null);
+    }
+
+    private static String formatVariablesBlock(
+            String blockName,
+            Map<String, String> types,
+            String rootAbstractForImplRhs,
+            boolean refinementWithParent,
+            Element refinementParent,
+            Element refinementChild,
+            Map<String, String> gluing,
+            Set<String> ghostDummyReadsForAbstractVars,
+            BxmlTranslateContext ctx,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory) {
         if (types.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic ").append(blockName).append("_variables {\n");
@@ -198,7 +312,7 @@ public final class BxmlMachineVariables {
                 logicType = relationLogicTypeToFunctionLogicType(logicType);
                 implRhs =
                         implementationRhsTotalFunctionFromArray(
-                                rootAbstractForImplRhs.trim(), var, refinementChild, ctx);
+                                rootAbstractForImplRhs.trim(), var, refinementChild, ctx, bxmlDirectory);
             }
             sb.append("    logic ").append(logicType).append(" ").append(var);
             // reads dummy_ghost_v só quando a variável não tem definição concreta (= rhs):
@@ -320,19 +434,83 @@ public final class BxmlMachineVariables {
         if (abstractMachineEl == null || mergedMachineElements == null || mergedMachineElements.isEmpty()) {
             return false;
         }
-        if (declaredVariableNames(abstractMachineEl).isEmpty()) {
+        Set<String> ownNames = declaredVariableNames(abstractMachineEl);
+        if (ownNames.isEmpty()) {
             return false;
+        }
+        // Ligação ESTRUTURAL sólida (variável representada como array/função total em memória —
+        // o invariante da própria abstrata a tipa com "-->", via concreteVariableFunctionArrowElement,
+        // o mesmo mecanismo de implementationRhsTotalFunctionFromArray/array_to_function_int).
+        boolean hasArrayBackedVariable = false;
+        for (String v : ownNames) {
+            if (concreteVariableFunctionArrowElement(abstractMachineEl, v) != null) {
+                hasArrayBackedVariable = true;
+                break;
+            }
         }
         for (Element mel : mergedMachineElements) {
             if (!isImplementationMachine(mel)) {
                 continue;
             }
-            if (declaredVariableNames(mel).isEmpty()
-                    && BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
+            if (!declaredVariableNames(mel).isEmpty()) {
+                continue;
+            }
+            // Sem Concrete_Variables próprias: a implementação manipula a variável abstrata
+            // diretamente OU herda o estado de uma máquina importada via invariante de colagem
+            // (ex. "loopnn == nn" em Mult_i, ligando o "nn" de Mult ao "loopnn" de Body). Sem
+            // IMPORTS não há ambiguidade nenhuma (não existe outra máquina para se colar) — qualifica
+            // sempre. Com IMPORTS, só qualifica se houver ligação array-backed sólida: uma variável
+            // cuja única "ligação" é invariante de colagem com OUTRA máquina não tem representação
+            // concreta própria nenhuma — defini-la diretamente como a variável da outra máquina
+            // tornaria essa invariante de colagem uma tautologia (nn == loopnn == Body__loopnn,
+            // nunca prova nada sobre a sincronização real); precisa continuar ghost, com a colagem
+            // verificada como obrigação de prova de verdade.
+            if (hasArrayBackedVariable || BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Variáveis abstratas cuja implementação declara {@code Concrete_Variables} com o MESMO NOME
+     * (namespaces B são por máquina — reusar o nome é o padrão normal quando a implementação é um
+     * refinamento direto da variável abstrata, ex. {@code limit} tanto em {@code Customer} quanto
+     * em {@code Customer_i}), e cuja própria implementação a tipa como array/função total
+     * ({@code v : lo..hi --> T} no {@code <Invariant>} da implementação, via
+     * {@link #concreteVariableFunctionArrowElement}).
+     *
+     * <p>Diferente de {@link #anyImplementationUsesAbstractVariablesOnly} (implementação SEM
+     * {@code Concrete_Variables} próprias — reusa o estado abstrato diretamente) — este caso é o
+     * oposto: a implementação TEM a sua própria variável concreta, mas com o nome idêntico ao da
+     * abstrata (não um nome distinto como {@code price}/{@code price_i}, onde o autor B escolheu
+     * deliberadamente duas identidades ligadas por uma invariante de colagem explícita — nesse caso
+     * mantém-se ghost + array-backed como duas entidades). Quando o nome é o mesmo, não há
+     * invariante de colagem separada no B fonte (a igualdade é implícita ao partilhar o nome) — só
+     * faz sentido UMA variável ACSL: a definição direta a partir do array, sem camada ghost redundante
+     * (evita o padrão duplo "logic ... v reads dummy_ghost_v;" + "logic ... v_i = array_to_function…"
+     * nunca ligados por um {@code equals(v_i, v)} explícito, que nem sequer era gerado).
+     */
+    public static Set<String> collapsedIntoImplementationVariableNames(
+            Element abstractMachineEl, List<Element> mergedMachineElements) {
+        Set<String> out = new LinkedHashSet<>();
+        if (abstractMachineEl == null || mergedMachineElements == null || mergedMachineElements.isEmpty()) {
+            return out;
+        }
+        Set<String> ownNames = declaredVariableNames(abstractMachineEl);
+        if (ownNames.isEmpty()) {
+            return out;
+        }
+        for (Element mel : mergedMachineElements) {
+            if (!isImplementationMachine(mel)) continue;
+            for (String v : declaredVariableNames(mel)) {
+                if (!ownNames.contains(v)) continue;
+                if (concreteVariableFunctionArrowElement(mel, v) != null) {
+                    out.add(v);
+                }
+            }
+        }
+        return out;
     }
 
     /**
@@ -415,6 +593,19 @@ public final class BxmlMachineVariables {
             Set<String> assignedAbstractNames,
             Map<String, String> gluing,
             BxmlTranslateContext ctx) {
+        return listConcreteAssignTargetsForAbstractMutation(
+                rootAbstractMachineName, rootMachine, mergedOrdered, assignedAbstractNames, gluing,
+                ctx, null);
+    }
+
+    public static List<String> listConcreteAssignTargetsForAbstractMutation(
+            String rootAbstractMachineName,
+            Element rootMachine,
+            List<Element> mergedOrdered,
+            Set<String> assignedAbstractNames,
+            Map<String, String> gluing,
+            BxmlTranslateContext ctx,
+            Path bxmlDirectory) {
         if (rootAbstractMachineName == null
                 || rootAbstractMachineName.isBlank()
                 || rootMachine == null
@@ -444,7 +635,9 @@ public final class BxmlMachineVariables {
                     for (String c : BxmlConnectionAcsl.introducedStateVariableIds(mel)) {
                         if (invIds.contains(c)) {
                             String base = rootAbstractMachineName.trim() + "__" + c;
-                            String ranged = implementationAssignTargetWithRange(base, c, mel, ctx);
+                            String ranged =
+                                    implementationAssignTargetWithRange(
+                                            base, c, mel, ctx, bxmlDirectory);
                             targets.add(ranged == null ? base : ranged);
                         }
                     }
@@ -688,8 +881,21 @@ public final class BxmlMachineVariables {
             List<Element> mergedMachineElements,
             BxmlTranslateContext ctx,
             Map<String, String> varRhsOverrides) {
+        return listInitialisationAssignTargets(
+                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx, varRhsOverrides,
+                null);
+    }
+
+    public static List<String> listInitialisationAssignTargets(
+            String abstractMachineName,
+            Element abstractMachineEl,
+            List<Element> mergedMachineElements,
+            BxmlTranslateContext ctx,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory) {
         List<String> fromImpl =
-                listImplementationAssignTargets(abstractMachineName, mergedMachineElements, ctx);
+                listImplementationAssignTargets(
+                        abstractMachineName, mergedMachineElements, ctx, bxmlDirectory);
         if (!fromImpl.isEmpty()) {
             return fromImpl;
         }
@@ -712,6 +918,14 @@ public final class BxmlMachineVariables {
             String abstractMachineName,
             List<Element> mergedMachineElements,
             BxmlTranslateContext ctx) {
+        return listImplementationAssignTargets(abstractMachineName, mergedMachineElements, ctx, null);
+    }
+
+    public static List<String> listImplementationAssignTargets(
+            String abstractMachineName,
+            List<Element> mergedMachineElements,
+            BxmlTranslateContext ctx,
+            Path bxmlDirectory) {
         if (abstractMachineName == null || abstractMachineName.isBlank()) return List.of();
         List<String> out = new ArrayList<>();
         for (Element mel : mergedMachineElements) {
@@ -728,7 +942,8 @@ public final class BxmlMachineVariables {
                 String v = e.getAttribute("value");
                 if (v != null && !v.isBlank()) {
                     String base = abstractMachineName + "__" + v;
-                    String ranged = implementationAssignTargetWithRange(base, v, mel, ctx);
+                    String ranged =
+                            implementationAssignTargetWithRange(base, v, mel, ctx, bxmlDirectory);
                     out.add(ranged == null ? base : ranged);
                 }
             }
@@ -756,6 +971,15 @@ public final class BxmlMachineVariables {
 
     private static String implementationAssignTargetWithRange(
             String baseTarget, String varName, Element implMachineEl, BxmlTranslateContext ctx) {
+        return implementationAssignTargetWithRange(baseTarget, varName, implMachineEl, ctx, null);
+    }
+
+    private static String implementationAssignTargetWithRange(
+            String baseTarget,
+            String varName,
+            Element implMachineEl,
+            BxmlTranslateContext ctx,
+            Path bxmlDirectory) {
         if (baseTarget == null || varName == null || implMachineEl == null || ctx == null) {
             return null;
         }
@@ -765,8 +989,9 @@ public final class BxmlMachineVariables {
         }
         String range = arrayDomainRangeAcsl(arrow, ctx);
         if (range == null || range.isBlank()) {
-            // Domínio é um conjunto nomeado (Id) — tenta resolver via <Values> da implementação.
-            range = resolveNamedSetDomainRange(arrow, implMachineEl, ctx);
+            // Domínio é um conjunto nomeado (Id) — tenta resolver via <Values> da implementação
+            // (ou, se ausente, das máquinas VISTAS — ver resolveNamedSetDomainRange).
+            range = resolveNamedSetDomainRange(arrow, implMachineEl, ctx, bxmlDirectory);
         }
         if (range == null || range.isBlank()) {
             return baseTarget + "[..]";
@@ -806,6 +1031,18 @@ public final class BxmlMachineVariables {
      */
     private static String resolveNamedSetDomainRange(
             Element arrowEl, Element implMachineEl, BxmlTranslateContext ctx) {
+        return resolveNamedSetDomainRange(arrowEl, implMachineEl, ctx, null);
+    }
+
+    /**
+     * Como acima, mas quando o conjunto nomeado não está valorado na própria {@code implMachineEl}
+     * (ex. {@code GOODS} visto por {@code Price}/{@code Price_i} mas valorado em {@code Goods_i}),
+     * procura também nas máquinas VISTAS (SEES) — mesmo problema e mesma solução de
+     * {@link #lookupSetCardinalityFromValues(String, Element, BxmlTranslateContext, Path)}, mas
+     * devolvendo o intervalo {@code "low .. high"} em vez da cardinalidade.
+     */
+    private static String resolveNamedSetDomainRange(
+            Element arrowEl, Element implMachineEl, BxmlTranslateContext ctx, Path bxmlDirectory) {
         if (arrowEl == null || implMachineEl == null || ctx == null) return null;
         Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
         if (domRng[0] == null) return null;
@@ -814,7 +1051,26 @@ public final class BxmlMachineVariables {
         String setName = domain.getAttribute("value");
         if (setName == null || setName.isBlank()) return null;
 
-        Element valuesEl = firstChildElement(implMachineEl, "Values");
+        String local = rangeFromOwnValues(setName, implMachineEl, ctx);
+        if (local != null || bxmlDirectory == null) {
+            return local;
+        }
+        for (String seenName : BxmlSetsTranslator.listReferencedMachineNames(implMachineEl)) {
+            for (String suffix : new String[] {"_i", "_imp", ""}) {
+                Path path = bxmlDirectory.resolve(seenName + suffix + ".bxml");
+                if (!Files.exists(path)) continue;
+                try {
+                    Element seenEl = BxmlSetsTranslator.parseMachineElement(path);
+                    String found = rangeFromOwnValues(setName, seenEl, ctx);
+                    if (found != null) return found;
+                } catch (Exception ignored) {}
+            }
+        }
+        return null;
+    }
+
+    private static String rangeFromOwnValues(String setName, Element machineEl, BxmlTranslateContext ctx) {
+        Element valuesEl = firstChildElement(machineEl, "Values");
         if (valuesEl == null) return null;
 
         // Procura <Valuation ident='setName'>
@@ -1122,9 +1378,10 @@ public final class BxmlMachineVariables {
             String rootAbstractName,
             String varName,
             Element implMachineEl,
-            BxmlTranslateContext ctx) {
+            BxmlTranslateContext ctx,
+            Path bxmlDirectory) {
         Element arrow = concreteVariableFunctionArrowElement(implMachineEl, varName);
-        String len = arrow != null ? arrayDomainCardinalityAcsl(arrow, ctx, implMachineEl) : null;
+        String len = arrow != null ? arrayDomainCardinalityAcsl(arrow, ctx, implMachineEl, bxmlDirectory) : null;
         if (len == null || len.isBlank()) {
             len = "1";
         }
@@ -1135,9 +1392,14 @@ public final class BxmlMachineVariables {
         return funcName + "(" + cast + q + "), " + len + ")";
     }
 
-    /** Cardinalidade do intervalo/domínio de {@code -->}; consulta a secção VALUES para conjuntos nomeados. */
+    /**
+     * Cardinalidade do intervalo/domínio de {@code -->}; consulta a secção VALUES para conjuntos
+     * nomeados — primeiro na própria máquina, depois (se {@code bxmlDirectory} não for nulo) nas
+     * máquinas vistas (SEES), pois um deferred set (ex. {@code GOODS}) é tipicamente valorado na
+     * implementação de OUTRA máquina (ex. {@code Goods_i}), não na máquina que o usa.
+     */
     private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx,
-            Element implMachineEl) {
+            Element implMachineEl, Path bxmlDirectory) {
         if (arrowEl == null || ctx == null) {
             return null;
         }
@@ -1156,7 +1418,7 @@ public final class BxmlMachineVariables {
         }
         if ("Id".equals(domain.getLocalName()) && implMachineEl != null) {
             String setName = domain.getAttribute("value");
-            String card = lookupSetCardinalityFromValues(setName, implMachineEl, ctx);
+            String card = lookupSetCardinalityFromValues(setName, implMachineEl, ctx, bxmlDirectory);
             if (card != null) return card;
         }
         return null;
@@ -1164,7 +1426,7 @@ public final class BxmlMachineVariables {
 
     /** Cardinalidade do intervalo/domínio de {@code -->} (ex. {@code 0..maximum} → {@code (maximum + 1)}). */
     private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx) {
-        return arrayDomainCardinalityAcsl(arrowEl, ctx, null);
+        return arrayDomainCardinalityAcsl(arrowEl, ctx, null, null);
     }
 
     /** Verdadeiro se o codomínio da seta {@code -->} for {@code BOOL}. */
@@ -1176,8 +1438,8 @@ public final class BxmlMachineVariables {
         return "Id".equals(codomain.getLocalName()) && "BOOL".equals(codomain.getAttribute("value"));
     }
 
-    /** Procura {@code <Valuation ident='setName'>} na secção {@code <Values>} e retorna a cardinalidade. */
-    private static String lookupSetCardinalityFromValues(String setName, Element machineEl,
+    /** Procura {@code <Valuation ident='setName'>} só na {@code <Values>} da própria {@code machineEl}. */
+    private static String lookupSetCardinalityFromOwnValues(String setName, Element machineEl,
             BxmlTranslateContext ctx) {
         if (setName == null || setName.isBlank() || machineEl == null) return null;
         NodeList children = machineEl.getChildNodes();
@@ -1203,6 +1465,35 @@ public final class BxmlMachineVariables {
                     }
                 }
                 break;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Como {@link #lookupSetCardinalityFromOwnValues(String, Element, BxmlTranslateContext)}, mas
+     * quando não encontra na própria {@code machineEl} e {@code bxmlDirectory} não é nulo, procura
+     * também nas máquinas vistas (SEES) de {@code machineEl} — um deferred set (ex. {@code GOODS},
+     * visto por {@code Price}/{@code Price_i}) é tipicamente valorado na implementação de OUTRA
+     * máquina (ex. {@code Goods_i}), nunca na máquina que só o usa. Sem isto, a cardinalidade fica
+     * por resolver e o chamador cai no fallback errado de tamanho {@code 1} — ver
+     * {@link #implementationRhsTotalFunctionFromArray}.
+     */
+    private static String lookupSetCardinalityFromValues(String setName, Element machineEl,
+            BxmlTranslateContext ctx, Path bxmlDirectory) {
+        String local = lookupSetCardinalityFromOwnValues(setName, machineEl, ctx);
+        if (local != null || bxmlDirectory == null || machineEl == null) {
+            return local;
+        }
+        for (String seenName : BxmlSetsTranslator.listReferencedMachineNames(machineEl)) {
+            for (String suffix : new String[] {"_i", "_imp", ""}) {
+                Path path = bxmlDirectory.resolve(seenName + suffix + ".bxml");
+                if (!Files.exists(path)) continue;
+                try {
+                    Element seenEl = BxmlSetsTranslator.parseMachineElement(path);
+                    String found = lookupSetCardinalityFromOwnValues(setName, seenEl, ctx);
+                    if (found != null) return found;
+                } catch (Exception ignored) {}
             }
         }
         return null;
@@ -1312,11 +1603,71 @@ public final class BxmlMachineVariables {
         if (importedMachineNames == null || importedMachineNames.isEmpty() || bxmlDirectory == null) {
             return List.of();
         }
-        List<String> result = new ArrayList<>();
+        // LinkedHashSet: loadConcreteAssignsForImportedMachine agora expande IMPORTS
+        // transitivamente, então uma máquina importada transitivamente por duas vias diferentes
+        // (ex.: "array" e, separadamente, "iter_services" já vindo do fecho transitivo de quem
+        // chama) não deve gerar "assigns X;" duplicado.
+        LinkedHashSet<String> result = new LinkedHashSet<>();
         for (String name : importedMachineNames) {
             result.addAll(loadConcreteAssignsForImportedMachine(name, bxmlDirectory));
         }
-        return result;
+        return List.copyOf(result);
+    }
+
+    /**
+     * Converte alvos de {@code assigns} array-backed ({@code "Nome[low .. high]"}) para a forma
+     * usada por {@code \separated} ({@code "Nome + (low .. high)"}); descarta alvos sem colchetes
+     * (variáveis escalares/{@code ghost_*}, sem sentido de endereço-de-vetor para {@code
+     * \separated}).
+     */
+    public static List<String> toSeparatedPointerRanges(List<String> assignTargets) {
+        if (assignTargets == null || assignTargets.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String t : assignTargets) {
+            if (t == null) continue;
+            int open = t.indexOf('[');
+            int close = t.lastIndexOf(']');
+            if (open < 0 || close < open) continue;
+            String name = t.substring(0, open).trim();
+            String range = t.substring(open + 1, close).trim();
+            if (name.isEmpty() || range.isEmpty()) continue;
+            out.add(name + " + (" + range + ")");
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * Alvos array ({@code "Nome + (low .. high)"}) para {@code requires \separated(saída, alvo);}
+     * de parâmetros de saída (ponteiros C): variáveis array-backed da PRÓPRIA máquina mais as de
+     * todas as máquinas transitivamente {@code IMPORTS}/{@code SEES}/{@code USES} ({@code
+     * relatedMachineNames} — já resolvido pelo chamador, tipicamente a união de {@link
+     * com.example.bxml.BxmlSetsTranslator#listImportedMachineNamesTransitive} e {@link
+     * com.example.bxml.BxmlSetsTranslator#listSeenMachineNamesTransitive}). Um parâmetro de saída
+     * pode, em C, apontar para qualquer região de memória global do programa — sem separação
+     * explícita destas, o modelo de memória "typed" do WP assume-a implicitamente (ver aviso
+     * "Memory model hypotheses" do Frama-C); tornar isto explícito no contrato documenta a hipótese
+     * e permite ao chamador (e ao próprio WP) verificá-la.
+     */
+    public static List<String> listArraySeparationTargets(
+            String machineName,
+            List<Element> mergedMachineElements,
+            BxmlTranslateContext ctx,
+            Collection<String> relatedMachineNames,
+            Path bxmlDirectory) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        out.addAll(
+                toSeparatedPointerRanges(
+                        listImplementationAssignTargets(
+                                machineName, mergedMachineElements, ctx, bxmlDirectory)));
+        if (relatedMachineNames != null && !relatedMachineNames.isEmpty() && bxmlDirectory != null) {
+            out.addAll(
+                    toSeparatedPointerRanges(
+                            listImportedMachineConcreteAssigns(
+                                    new ArrayList<>(relatedMachineNames), bxmlDirectory)));
+        }
+        return List.copyOf(out);
     }
 
     /**
@@ -1494,6 +1845,21 @@ public final class BxmlMachineVariables {
     }
 
     private static List<String> loadConcreteAssignsForImportedMachine(String machineName, Path bxmlDirectory) {
+        return loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory, new LinkedHashSet<>());
+    }
+
+    /**
+     * @param visited nomes de máquina já expandidos nesta chamada (evita recursão infinita se o
+     *        grafo de IMPORTS tiver um ciclo, o que B não permite mas não custa proteger contra).
+     *        IMPORTS é transitivo: os alvos de {@code machineName} incluem também os de tudo que
+     *        {@code machineName} importa (ex.: {@code array} importa {@code iter_services} — quem
+     *        chama {@code array__set_array_value} de fora precisa do assigns de ambas).
+     */
+    private static List<String> loadConcreteAssignsForImportedMachine(
+            String machineName, Path bxmlDirectory, Set<String> visited) {
+        if (machineName == null || machineName.isBlank() || !visited.add(machineName.trim())) {
+            return List.of();
+        }
         Element abstractEl = null;
         Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
         if (Files.exists(abstractPath)) {
@@ -1514,12 +1880,41 @@ public final class BxmlMachineVariables {
 
         if (implEl == null) return List.of();
 
-        List<String> result = new ArrayList<>(listImplementationAssignTargets(machineName, List.of(implEl), null));
+        // ctx da PRÓPRIA máquina importada (não null): implementationAssignTargetWithRange precisa
+        // dele para resolver o domínio da variável concreta (array/função total) e gerar
+        // "Raiz__v[..]" — com ctx null, cai sempre no alvo sem colchetes ("Raiz__v"), que o
+        // Frama-C rejeita como "not an assignable left value" quando v é, de facto, um array.
+        BxmlTranslateContext implCtx = BxmlTranslateContext.forMachine(implEl);
+        List<String> result =
+                new ArrayList<>(
+                        listImplementationAssignTargets(
+                                machineName, List.of(implEl), implCtx, bxmlDirectory));
+
+        // Implementação sem Concrete_Variables próprias (usa a variável abstrata diretamente, ex.
+        // "array"/"array_i" — mesmo caso de anyImplementationUsesAbstractVariablesOnly): os alvos
+        // vêm da declaração da ABSTRATA, e a fatia [low..high] (quando a variável é array/função
+        // total) também é resolvida pelo invariante da ABSTRATA — a implementação não tem
+        // <Invariant> ao nível da máquina (o único <Invariant> em array_i.bxml, p.ex., é o de um
+        // loop dentro de <Operations>, não filho direto de <Machine>: firstChildElement não o acha).
+        if (result.isEmpty() && abstractEl != null) {
+            for (String v : declaredVariableNames(abstractEl)) {
+                String base = machineName + "__" + v;
+                String ranged =
+                        implementationAssignTargetWithRange(
+                                base, v, abstractEl, implCtx, bxmlDirectory);
+                result.add(ranged == null ? base : ranged);
+            }
+        }
 
         if (abstractEl != null && needsGhostAbstraction(abstractEl, List.of(implEl))) {
             for (String v : GhostOperationsCiGenerator.listAbstractVariableNames(abstractEl)) {
                 result.add("ghost_" + v);
             }
+        }
+
+        for (String transitiveImport : BxmlSetsTranslator.listImportedMachineNames(implEl)) {
+            result.addAll(
+                    loadConcreteAssignsForImportedMachine(transitiveImport, bxmlDirectory, visited));
         }
 
         return result;

@@ -1,5 +1,6 @@
 package com.example.bxml;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -192,8 +193,68 @@ public final class BxmlOperationsTranslator {
             Map<String, List<String>> importedOpAssigns,
             List<String> requiresOnlyPredicateNames,
             Map<String, String> varRhsOverrides) {
+        return translateOperations(machineEl, ctx, invariantPredicateNames, abstractVariableNames,
+                libScanGhostOperationBodies, rootAbstractMachineName, mergedRefinementChain,
+                gluing, useGhostAbstraction, importedOpAssigns, requiresOnlyPredicateNames,
+                varRhsOverrides, null);
+    }
+
+    /**
+     * @param bxmlDirectory diretório das fontes {@code .bxml} — necessário para resolver a fatia
+     *        {@code [low .. high]} dos {@code assigns} de conjuntos nomeados (deferred sets como
+     *        {@code GOODS}) valorados em máquinas VISTAS (SEES), não na própria implementação — ver
+     *        {@link BxmlMachineVariables#listConcreteAssignTargetsForAbstractMutation}.
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction,
+            Map<String, List<String>> importedOpAssigns,
+            List<String> requiresOnlyPredicateNames,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory) {
+        return translateOperations(machineEl, ctx, invariantPredicateNames, abstractVariableNames,
+                libScanGhostOperationBodies, rootAbstractMachineName, mergedRefinementChain,
+                gluing, useGhostAbstraction, importedOpAssigns, requiresOnlyPredicateNames,
+                varRhsOverrides, bxmlDirectory, List.of());
+    }
+
+    /**
+     * @param arraySeparationMachineNames nomes de máquinas transitivamente {@code IMPORTS}/{@code
+     *        SEES}/{@code USES} desta máquina (tipicamente a união de {@code
+     *        listImportedMachineNamesTransitive} + {@code listSeenMachineNamesTransitive} do
+     *        chamador) — usados para {@code requires \separated(saída, Array + (low .. high));} de
+     *        cada parâmetro de saída (ponteiro C) contra cada variável array-backed alcançável,
+     *        própria ou dessas máquinas. Ver {@link
+     *        BxmlMachineVariables#listArraySeparationTargets}.
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction,
+            Map<String, List<String>> importedOpAssigns,
+            List<String> requiresOnlyPredicateNames,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory,
+            List<String> arraySeparationMachineNames) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
+        List<String> separationArrayTargets =
+                BxmlMachineVariables.listArraySeparationTargets(
+                        machineName, mergedRefinementChain, ctx, arraySeparationMachineNames,
+                        bxmlDirectory);
 
         NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
         if (ops.getLength() == 0) return out;
@@ -241,6 +302,31 @@ public final class BxmlOperationsTranslator {
                     requires.add("\\valid(" + p + ")");
                 }
             }
+            // Parâmetros de saída são ponteiros C — em memória, podem em princípio apontar para
+            // qualquer região global do programa. \separated torna explícita a não-aliasing que o
+            // modelo de memória "typed" do WP já assume implicitamente (ver aviso "Memory model
+            // hypotheses" do Frama-C), tanto contra cada variável array-backed alcançável (própria
+            // máquina + IMPORTS/SEES/USES transitivos, já resolvidos pelo chamador em
+            // separationArrayTargets) quanto, com múltiplas saídas, entre si.
+            List<String> scalarOutputParams = new ArrayList<>();
+            for (String p : outputParams) {
+                if (!funcTypedOutputs.contains(p)) {
+                    scalarOutputParams.add(p);
+                }
+            }
+            if (!separationArrayTargets.isEmpty()) {
+                for (String p : scalarOutputParams) {
+                    for (String arrayTarget : separationArrayTargets) {
+                        requires.add("\\separated(" + p + ", " + arrayTarget + ")");
+                    }
+                }
+            }
+            for (int a = 0; a < scalarOutputParams.size(); a++) {
+                for (int b = a + 1; b < scalarOutputParams.size(); b++) {
+                    requires.add(
+                            "\\separated(" + scalarOutputParams.get(a) + ", " + scalarOutputParams.get(b) + ")");
+                }
+            }
 
             List<String> ensures = new ArrayList<>();
             Element body = firstChildElement(child, "Body");
@@ -248,7 +334,30 @@ public final class BxmlOperationsTranslator {
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
             }
             applyStarPrefixToEnsures(ensures, outputParams);
+            // Antes de rewriteEnsuresBoolOutputEquality (que só troca o LHS "*p" por "(integer)(*p !=
+            // 0)"): "*p == (pred ? \true : \false)" pode ter um predicado da lib (ex.: equals(...))
+            // na condição do ternário, que o Frama-C rejeita ("symbol X is a predicate, not a
+            // function") — precisa virar bicondicional ANTES, enquanto o LHS ainda é "*p" (o regex
+            // desta função exige esse formato). Mesma correção já usada no lado ghost; só nunca
+            // apareceu aqui porque este ensures era descartado do contrato real (ver abaixo).
+            for (int ei = 0; ei < ensures.size(); ei++) {
+                ensures.set(ei, GhostOperationsCiGenerator.rewriteBoolOutputPredicateTernary(ensures.get(ei)));
+            }
             rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, ctx);
+            // Parâmetros de entrada escalares (C "int") ficam sem cast no ensures cru — comparados
+            // com um Set<integer> (ex. "singleton(bb)" dentro de "equals(books, ...)") o Frama-C
+            // infere o tipo lógico do parâmetro a partir do seu uso e rejeita ("invalid cast from
+            // Set<Biblioteca__BOOK> to Set<integer>"). O lado ghost já resolve isto com o mesmo
+            // "(integer)bb"; reaproveitado aqui pelo mesmo motivo do bloco acima.
+            List<GhostOperationsCiGenerator.Param> scalarCastParams =
+                    GhostOperationsCiGenerator.appendOutputParametersAsPointers(
+                            GhostOperationsCiGenerator.listInputParameters(child), child);
+            for (int ei = 0; ei < ensures.size(); ei++) {
+                ensures.set(
+                        ei,
+                        GhostOperationsCiGenerator.castScalarIntGhostParamsInEnsure(
+                                ensures.get(ei), scalarCastParams));
+            }
             removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
             List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
             for (String inv : invariantPredicateNames) {
@@ -277,16 +386,18 @@ public final class BxmlOperationsTranslator {
                     }
                 }
             }
-            if (useGhostAbstraction
-                    && assignsAbstract
-                    && invariantPredicateNames != null
-                    && !invariantPredicateNames.isEmpty()) {
-                Set<String> invariantOnly = new HashSet<>(invariantPredicateNames);
-                ensures.removeIf(e -> !invariantOnly.contains(e));
-            }
+            // ensures mantém o conteúdo funcional do corpo (bodyEnsuresOnly, já acrescentado acima)
+            // MESMO quando a operação também ganha um predicado ghost — quem chama esta função só
+            // vê o contrato real (o "at return: assert ghost__…" é interno ao corpo), então sem
+            // isto o chamador só sabia do invariante genérico, não do que a operação de facto faz.
+            // Usa abstractVariableNames (já filtrado pelo chamador, sem as variáveis colapsadas na
+            // implementação — ver BxmlMachineVariables#collapsedIntoImplementationVariableNames),
+            // não a lista COMPLETA de variáveis abstratas: uma variável colapsada não tem
+            // dummy_ghost_<v> declarado (não há camada ghost paralela para ela), então referenciá-la
+            // aqui geraria "unbound logic variable" no Frama-C.
             List<String> dummyGhostEnsureVars =
-                    useGhostAbstraction && assignsAbstract
-                            ? GhostOperationsCiGenerator.listAbstractVariableNames(machineEl)
+                    useGhostAbstraction && assignsAbstract && abstractVariableNames != null
+                            ? new ArrayList<>(abstractVariableNames)
                             : List.of();
 
             List<String> connectionConcreteAssigns = List.of();
@@ -306,7 +417,8 @@ public final class BxmlOperationsTranslator {
                                     mergedRefinementChain,
                                     assignedAbs,
                                     gluing,
-                                    ctx);
+                                    ctx,
+                                    bxmlDirectory);
                     if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
                         connectionConcreteAssigns =
                                 BxmlMachineVariables.listImplementationAssignTargetsForAbstractVariables(
