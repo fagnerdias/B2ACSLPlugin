@@ -230,6 +230,11 @@ public final class AcslGenerator {
         Files.createDirectories(outputDir);
         String baseName = machine.getMachineName();
         Path acslFile = outputDir.resolve(baseName + ".acsl");
+        // Âmbito desta chamada: tipos de codomínio-tupla (ver TupleCodomainTypeRegistry) descobertos
+        // ao inferir os tipos das variáveis desta máquina (mais abaixo) são escritos num .acsl
+        // próprio dela e incluídos localmente, perto do fim desta função — limpa aqui para não
+        // herdar entradas de uma máquina anterior processada no mesmo processo.
+        com.example.bxml.TupleCodomainTypeRegistry.clear();
         boolean libCarrier =
                 libIncludeCarrierMachineName != null
                         && !libIncludeCarrierMachineName.isBlank()
@@ -582,7 +587,8 @@ public final class AcslGenerator {
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
                             mel, ctx.comprehensions(), gluing, machineEl)
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames());
-            String valuesMerged = BxmlConstantsAndProperties.formatValuesBlock(mel, mctx);
+            String valuesMerged =
+                    BxmlConstantsAndProperties.formatValuesBlock(mel, mctx, machineEl);
             if (!valuesMerged.isBlank()) {
                 sb.append(valuesMerged);
                 if (!valuesMerged.endsWith("\n")) sb.append("\n");
@@ -693,7 +699,41 @@ public final class AcslGenerator {
             appendAcslMachineIncludes(legacy, importsIncludes);
             machineDependencyIncludes = legacy.toString();
         }
+        // Tipos de codomínio-tupla (ver TupleCodomainTypeRegistry/BxmlTypeRegistry#powCartesianProductToAcslRelationType)
+        // descobertos ao inferir os tipos das variáveis desta máquina — sem alias estático possível
+        // (explosão combinatória de tipo x aridade), escritos num .acsl próprio desta máquina e
+        // incluídos localmente (confirmado que -acsl-import aceita "type X = Y;" alcançado via
+        // include). Agrupados dentro de UM axiomatic block (em vez de declarações soltas): a
+        // impressão do Frama-C ("-acsl-import ... -print") reordena declarações "type X = Y;"
+        // soltas de forma NÃO DETERMINÍSTICA entre execuções (confirmado empiricamente: mesmo jar,
+        // mesmo input, Function_X às vezes impresso antes de Relation_X apesar do ficheiro-fonte
+        // sempre os ter na mesma ordem) — quando isso acontece, o Frama-C falha a unificar o
+        // sinónimo Function_X=Relation_X na resolução de sobrecarga de function_apply. Um
+        // axiomatic block imprime o seu conteúdo em ordem estável (como o "axiomatic new_types" da
+        // própria lib, nunca visto reordenado nas várias execuções desta sessão).
+        Map<String, String> extraTupleTypes =
+                com.example.bxml.TupleCodomainTypeRegistry.snapshotAndClear();
+        String tupleTypesInclude = "";
+        if (!extraTupleTypes.isEmpty()) {
+            Path tupleTypesFile = outputDir.resolve(baseName + "_tuple_types.acsl");
+            StringBuilder tupleTypesContent = new StringBuilder();
+            tupleTypesContent.append("axiomatic ").append(baseName).append("_tuple_types {\n");
+            for (Map.Entry<String, String> e : extraTupleTypes.entrySet()) {
+                tupleTypesContent
+                        .append("  type ")
+                        .append(e.getKey())
+                        .append(" = ")
+                        .append(e.getValue())
+                        .append(";\n");
+            }
+            tupleTypesContent.append("}\n");
+            Files.writeString(tupleTypesFile, tupleTypesContent.toString());
+            tupleTypesInclude = "include \"" + baseName + "_tuple_types.acsl\";\n";
+        }
         StringBuilder preambleIncludes = new StringBuilder();
+        if (!tupleTypesInclude.isEmpty()) {
+            preambleIncludes.append(tupleTypesInclude);
+        }
         if (!omitLibIncludesFromPreamble && !libIncludes.isEmpty()) {
             preambleIncludes.append(libIncludes);
         }

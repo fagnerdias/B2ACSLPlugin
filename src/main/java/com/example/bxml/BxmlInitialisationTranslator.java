@@ -355,15 +355,10 @@ public final class BxmlInitialisationTranslator {
             return local;
         }
         for (String seenName : BxmlSetsTranslator.listReferencedMachineNames(implMachineEl)) {
-            for (String suffix : new String[] {"_i", "_imp", ""}) {
-                Path path = bxmlDirectory.resolve(seenName + suffix + ".bxml");
-                if (!Files.exists(path)) continue;
-                try {
-                    Element seenEl = BxmlSetsTranslator.parseMachineElement(path);
-                    String[] found = intervalFromOwnValues(setName, seenEl, ctx);
-                    if (found != null) return found;
-                } catch (Exception ignored) {}
-            }
+            Element seenEl = BxmlSetsTranslator.findImplementationMachineElement(seenName, bxmlDirectory);
+            if (seenEl == null) continue;
+            String[] found = intervalFromOwnValues(setName, seenEl, ctx);
+            if (found != null) return found;
         }
         return null;
     }

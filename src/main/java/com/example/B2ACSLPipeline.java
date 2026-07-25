@@ -950,6 +950,7 @@ public final class B2ACSLPipeline {
         placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
         liftPureGhostEnsuresToOperationContracts(mergedCode);
         reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
+        moveTupleCodomainAxiomaticBlocksAfterNewTypes(mergedCode);
         appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
         SpecificationAxiomaticInstantiator.monomorphizeGenericAcslBlocks(
                 mergedCode, specificationUsedTypes);
@@ -1221,6 +1222,75 @@ public final class B2ACSLPipeline {
         String sepAfter = block.endsWith("\n") ? "" : "\n";
         String result = without.substring(0, insertAt) + sepBefore + block + sepAfter + without.substring(insertAt);
         Files.writeString(mergedC, result, StandardCharsets.UTF_8);
+    }
+
+    private static final Pattern TUPLE_TYPES_AXIOMATIC_HEADER =
+            Pattern.compile("axiomatic\\s+\\w*_tuple_types\\s*\\{");
+
+    /**
+     * Move cada bloco {@code axiomatic <machine>_tuple_types { ... }} (ver
+     * {@code AcslGenerator#generateAcsl}/{@code TupleCodomainTypeRegistry}, tipos de codomínio-tupla
+     * descobertos por máquina) para logo após {@code axiomatic new_types} — que
+     * {@link #moveNewTypesAxiomaticBlockAfterPreamble} já fixou no preâmbulo. Sem isto, o bloco fica
+     * onde {@link #reorderLibAxiomaticBlocksPerAcslLibIncludesOrder} o deixar (não é um nome
+     * conhecido de {@code AcslLibIncludes}, cai numa posição tardia arbitrária) — tarde demais para
+     * os blocos genéricos da lib (ex. {@code Relation_domain}, {@code tuple_couple}) que a
+     * referenciam já monomorphizados para este tipo, dando {@code no such type} no Frama-C.
+     */
+    private static void moveTupleCodomainAxiomaticBlocksAfterNewTypes(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        int newTypesIdx = content.indexOf(AXIOMATIC_NEW_TYPES_MARKER);
+        if (newTypesIdx < 0) {
+            return;
+        }
+        int newTypesOpenBrace = content.indexOf('{', newTypesIdx);
+        if (newTypesOpenBrace < 0) {
+            return;
+        }
+        int newTypesCloseBrace = findMatchingBrace(content, newTypesOpenBrace);
+        if (newTypesCloseBrace < 0) {
+            return;
+        }
+        int newTypesCommentEnd = content.indexOf("*/", newTypesCloseBrace);
+        if (newTypesCommentEnd < 0) {
+            return;
+        }
+        int insertAt = skipNewlineAfter(newTypesCommentEnd + 2, content);
+
+        boolean changed = false;
+        Matcher m = TUPLE_TYPES_AXIOMATIC_HEADER.matcher(content);
+        while (m.find(insertAt)) {
+            int headerIdx = m.start();
+            int blockStart = content.lastIndexOf("/*@", headerIdx);
+            if (blockStart < 0 || blockStart < insertAt) {
+                break;
+            }
+            int openBrace = content.indexOf('{', headerIdx);
+            if (openBrace < 0) break;
+            int closeBrace = findMatchingBrace(content, openBrace);
+            if (closeBrace < 0) break;
+            int commentEnd = content.indexOf("*/", closeBrace);
+            if (commentEnd < 0) break;
+            int blockEnd = skipNewlineAfter(commentEnd + 2, content);
+
+            if (blockStart == insertAt) {
+                insertAt = blockEnd;
+                m = TUPLE_TYPES_AXIOMATIC_HEADER.matcher(content);
+                continue;
+            }
+
+            String block = content.substring(blockStart, blockEnd);
+            String without = content.substring(0, blockStart) + content.substring(blockEnd);
+            String sepBefore = insertAt > 0 && without.charAt(insertAt - 1) != '\n' ? "\n" : "";
+            String sepAfter = block.endsWith("\n") ? "" : "\n";
+            content = without.substring(0, insertAt) + sepBefore + block + sepAfter + without.substring(insertAt);
+            insertAt = insertAt + sepBefore.length() + block.length() + sepAfter.length();
+            changed = true;
+            m = TUPLE_TYPES_AXIOMATIC_HEADER.matcher(content);
+        }
+        if (changed) {
+            Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+        }
     }
 
     /**
@@ -2077,6 +2147,17 @@ public final class B2ACSLPipeline {
         return result.toString();
     }
 
+    /**
+     * Conjuntos lógicos globais da ACSL_Lib ({@code set_functions/variables.acsl}) referenciados
+     * como identificador NU (sem parênteses), ex.: {@code inclusion(s, BOOL)} — {@link
+     * #LEMMA_LIB_STYLE_CALL} só apanha dependências no estilo chamada ({@code nome(}), então um
+     * lema cuja única chamada permitida (ex.: {@code inclusion}) esconde uma dependência de {@code
+     * BOOL} escapava ao filtro por completo, sobrevivendo mesmo em projetos (ex.:
+     * BirthdayRegister) que nunca usam boolean em lado nenhum — "BOOL" nunca fica {@code allowed},
+     * mas o lema não era rejeitado, dando "unbound logic variable BOOL" no Frama-C.
+     */
+    private static final List<String> BARE_GLOBAL_LOGIC_SET_NAMES = List.of("BOOL", "NAT1", "NAT", "INT");
+
     private static boolean lemmaBodyUsesDisallowedLibCall(String admitLemmaChunk, Set<String> allowed) {
         Matcher m = LEMMA_LIB_STYLE_CALL.matcher(admitLemmaChunk);
         while (m.find()) {
@@ -2085,6 +2166,14 @@ public final class B2ACSLPipeline {
                 continue;
             }
             return true;
+        }
+        for (String bareName : BARE_GLOBAL_LOGIC_SET_NAMES) {
+            if (allowed.contains(bareName)) {
+                continue;
+            }
+            if (Pattern.compile("\\b" + bareName + "\\b").matcher(admitLemmaChunk).find()) {
+                return true;
+            }
         }
         return false;
     }

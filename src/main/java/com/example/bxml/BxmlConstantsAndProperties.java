@@ -2,6 +2,7 @@ package com.example.bxml;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -219,6 +220,22 @@ public final class BxmlConstantsAndProperties {
      * (filhos {@code Valuation} com {@code ident} e expressão filha, p.ex. {@code Integer_Literal}).
      */
     public static String formatValuesBlock(Element machineEl, BxmlTranslateContext ctx) {
+        return formatValuesBlock(machineEl, ctx, machineEl);
+    }
+
+    /**
+     * Como {@link #formatValuesBlock(Element, BxmlTranslateContext)}, mas com
+     * {@code deferredSetsSourceMachineEl} explícito — a máquina cujo {@code <Sets>} tem os
+     * conjuntos deferred DECLARADOS (a abstrata; a implementação que valora normalmente não
+     * redeclara {@code <Sets>}). Só um {@code ident} que seja de facto um conjunto deferred
+     * declarado ali (ex.: {@code DAY}) recebe o prefixo {@code abstractMachineName_}; um
+     * {@code CONCRETE_CONSTANTS}/{@code ABSTRACT_CONSTANTS} Set-tipado que também é valorado em
+     * {@code Values} (ex.: {@code PERSON = 0..MAX_PERSON} em BirthdayRegister) é declarado SEM
+     * prefixo (ver {@link #formatConcreteConstantsBlock}/{@link #formatAbstractConstantsBlock}) —
+     * prefixá-lo aqui geraria uma referência a um nome nunca declarado ("unbound logic variable").
+     */
+    public static String formatValuesBlock(
+            Element machineEl, BxmlTranslateContext ctx, Element deferredSetsSourceMachineEl) {
         Element block = firstChildElement(machineEl, "Values");
         if (block == null) return "";
 
@@ -234,6 +251,8 @@ public final class BxmlConstantsAndProperties {
             if (t != null && !t.isBlank()) abstractMachineName = t.trim();
         }
 
+        Set<String> deferredSetNames = deferredSetNames(deferredSetsSourceMachineEl);
+
         List<String> axioms = new ArrayList<>();
         NodeList ch = block.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -248,7 +267,8 @@ public final class BxmlConstantsAndProperties {
             Element valueExp = firstValuationValueExpression(e);
             if (valueExp == null) continue;
 
-            String equality = formatValuationEquality(ident, valueExp, ctx, abstractMachineName);
+            String qualifyAs = deferredSetNames.contains(ident) ? abstractMachineName : null;
+            String equality = formatValuationEquality(ident, valueExp, ctx, qualifyAs);
             if (equality == null || equality.isBlank()) continue;
             String axiomName = machineName + "_values_" + ident;
             axioms.add("    axiom " + axiomName + ": " + equality + ";");
@@ -336,6 +356,34 @@ public final class BxmlConstantsAndProperties {
     private static String qualifySetIdent(String ident, String abstractMachineName) {
         if (abstractMachineName == null || abstractMachineName.isBlank()) return ident;
         return abstractMachineName + "_" + ident;
+    }
+
+    /** Nomes de conjuntos deferred declarados em {@code <Sets>} (própria ou enumerada). */
+    private static Set<String> deferredSetNames(Element machineEl) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        if (machineEl == null) return out;
+        Element setsEl = firstChildElement(machineEl, "Sets");
+        if (setsEl == null) return out;
+        NodeList ch = setsEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element setEl = (Element) n;
+            if (!"Set".equals(setEl.getLocalName())) continue;
+            NodeList setChildren = setEl.getChildNodes();
+            for (int j = 0; j < setChildren.getLength(); j++) {
+                Node sn = setChildren.item(j);
+                if (sn.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element idEl = (Element) sn;
+                if (!"Id".equals(idEl.getLocalName())) continue;
+                String name = idEl.getAttribute("value");
+                if (name != null && !name.isBlank()) {
+                    out.add(name.trim());
+                }
+                break;
+            }
+        }
+        return out;
     }
 
     private static Element[] intervalBounds(Element binaryExp) {

@@ -174,8 +174,12 @@ public final class BxmlExpressionToAcsl {
     private static boolean isListValuedId(Element idEl, BxmlTranslateContext ctx) {
         String name = idEl.getAttribute("value");
         String t = ctx.variableLogicTypes().get(name);
-        if (t != null && t.startsWith("\\list")) {
-            return true;
+        // t != null é uma resposta AUTORITATIVA (inclui a deteção de "v : seq(T)"/"v : iseq(T)" do
+        // invariante, que o fallback por typref abaixo NÃO conhece — esse fallback só olha o tipo B
+        // cru, onde uma sequência é POW(INTEGER*T), indistinguível de uma relação genérica). Confiar
+        // nela SEMPRE que presente (mesmo quando diz "não é lista") evita cair no fallback errado.
+        if (t != null) {
+            return t.startsWith("\\list");
         }
         String trAttr = idEl.getAttribute("typref");
         if (trAttr == null || trAttr.isBlank()) {
@@ -216,8 +220,14 @@ public final class BxmlExpressionToAcsl {
     private static boolean isRelationOrFunctionValuedId(Element idEl, BxmlTranslateContext ctx) {
         String name = idEl.getAttribute("value");
         String t = ctx.variableLogicTypes().get(name);
-        if (isRelationLikeVariableType(t)) {
-            return true;
+        // t != null é uma resposta AUTORITATIVA (ver comentário análogo em isListValuedId) — sem
+        // isto, uma variável \list<...> conhecida (ex.: "queue : seq(ELEM)") caía no fallback por
+        // typref, que via o tipo B cru POW(INTEGER*INTEGER) (a codificação de "seq" em B) e
+        // classificava erradamente "queue" como relação — acionando o wrap list_to_function(...)
+        // errado em "queue == queue <- ee" e gerando "incompatible types DRelation<...> and
+        // \list<integer>" no Frama-C.
+        if (t != null) {
+            return isRelationLikeVariableType(t);
         }
         String trAttr = idEl.getAttribute("typref");
         if (trAttr == null || trAttr.isBlank()) {
@@ -276,6 +286,17 @@ public final class BxmlExpressionToAcsl {
         }
         String o = op.trim();
         return "-->".equals(o) || "--&gt;".equals(o);
+    }
+
+    /** Tipo conjunto de funções parciais B {@code S +-> T} em {@code Binary_Exp}. */
+    public static boolean isPartialFunctionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return "+->".equals(o) || "+-&gt;".equals(o);
     }
 
     /** Tipo conjunto de funções surjetivas totais B {@code S -->> T} em {@code Binary_Exp}. */

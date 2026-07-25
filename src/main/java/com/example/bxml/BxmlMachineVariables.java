@@ -1056,15 +1056,10 @@ public final class BxmlMachineVariables {
             return local;
         }
         for (String seenName : BxmlSetsTranslator.listReferencedMachineNames(implMachineEl)) {
-            for (String suffix : new String[] {"_i", "_imp", ""}) {
-                Path path = bxmlDirectory.resolve(seenName + suffix + ".bxml");
-                if (!Files.exists(path)) continue;
-                try {
-                    Element seenEl = BxmlSetsTranslator.parseMachineElement(path);
-                    String found = rangeFromOwnValues(setName, seenEl, ctx);
-                    if (found != null) return found;
-                } catch (Exception ignored) {}
-            }
+            Element seenEl = BxmlSetsTranslator.findImplementationMachineElement(seenName, bxmlDirectory);
+            if (seenEl == null) continue;
+            String found = rangeFromOwnValues(setName, seenEl, ctx);
+            if (found != null) return found;
         }
         return null;
     }
@@ -1486,15 +1481,10 @@ public final class BxmlMachineVariables {
             return local;
         }
         for (String seenName : BxmlSetsTranslator.listReferencedMachineNames(machineEl)) {
-            for (String suffix : new String[] {"_i", "_imp", ""}) {
-                Path path = bxmlDirectory.resolve(seenName + suffix + ".bxml");
-                if (!Files.exists(path)) continue;
-                try {
-                    Element seenEl = BxmlSetsTranslator.parseMachineElement(path);
-                    String found = lookupSetCardinalityFromOwnValues(setName, seenEl, ctx);
-                    if (found != null) return found;
-                } catch (Exception ignored) {}
-            }
+            Element seenEl = BxmlSetsTranslator.findImplementationMachineElement(seenName, bxmlDirectory);
+            if (seenEl == null) continue;
+            String found = lookupSetCardinalityFromOwnValues(setName, seenEl, ctx);
+            if (found != null) return found;
         }
         return null;
     }
@@ -1733,17 +1723,7 @@ public final class BxmlMachineVariables {
     private static Set<String> loadOperationNamesCallingRandOps(
             String machineName, Path bxmlDirectory) {
         // Carregar implementação
-        Element implEl = null;
-        for (String suffix : new String[]{"_i", "_imp"}) {
-            Path path = bxmlDirectory.resolve(machineName + suffix + ".bxml");
-            if (!Files.exists(path)) continue;
-            try {
-                Element el = BxmlSetsTranslator.parseMachineElement(path);
-                if (!"implementation".equalsIgnoreCase(el.getAttribute("type"))) continue;
-                implEl = el;
-                break;
-            } catch (Exception ignored) {}
-        }
+        Element implEl = BxmlSetsTranslator.findImplementationMachineElement(machineName, bxmlDirectory);
         if (implEl == null) return Set.of();
 
         // Operações rand das máquinas importadas pela implementação
@@ -1866,17 +1846,7 @@ public final class BxmlMachineVariables {
             try { abstractEl = BxmlSetsTranslator.parseMachineElement(abstractPath); } catch (Exception ignored) {}
         }
 
-        Element implEl = null;
-        for (String suffix : new String[]{"_i", "_imp"}) {
-            Path path = bxmlDirectory.resolve(machineName + suffix + ".bxml");
-            if (!Files.exists(path)) continue;
-            try {
-                Element el = BxmlSetsTranslator.parseMachineElement(path);
-                if (!"implementation".equalsIgnoreCase(el.getAttribute("type"))) continue;
-                implEl = el;
-                break;
-            } catch (Exception ignored) {}
-        }
+        Element implEl = BxmlSetsTranslator.findImplementationMachineElement(machineName, bxmlDirectory);
 
         if (implEl == null) return List.of();
 

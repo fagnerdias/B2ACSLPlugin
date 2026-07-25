@@ -1,5 +1,6 @@
 package com.example.bxml;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -9,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -941,6 +943,49 @@ public final class BxmlSetsTranslator {
         }
         String t = abs.getTextContent();
         return t == null || t.isBlank();
+    }
+
+    /**
+     * Encontra o ficheiro {@code .bxml} de IMPLEMENTAÇÃO de {@code abstractMachineName} em
+     * {@code bxmlDirectory}, identificando-o pelo próprio conteúdo BXML ({@code type='implementation'}
+     * e {@code <Abstraction>} apontando para o nome da máquina abstrata) em vez de por convenção de
+     * nome de ficheiro. Sufixos de nome de ficheiro ({@code "_i"}, {@code "_imp"}, {@code "I"}, …)
+     * variam por projeto — ex.: BirthdayRegister usa {@code ContextI}/{@code RegisterI} (sem
+     * separador), diferente de outros exemplos que usam {@code Foo_i} — qualquer lista fixa de
+     * sufixos fica incompleta mais cedo ou mais tarde (confirmado: a cardinalidade de {@code PERSON}
+     * nunca resolvia para BirthdayRegister porque {@code "Context_i.bxml"}/{@code "Context_imp.bxml"}
+     * nunca existiram, só {@code "ContextI.bxml"}).
+     */
+    static Element findImplementationMachineElement(String abstractMachineName, Path bxmlDirectory) {
+        if (abstractMachineName == null || abstractMachineName.isBlank()
+                || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return null;
+        }
+        List<Path> candidates;
+        try (Stream<Path> files = Files.list(bxmlDirectory)) {
+            candidates = files
+                    .filter(p -> p.getFileName().toString().endsWith(".bxml"))
+                    .sorted()
+                    .toList();
+        } catch (IOException e) {
+            return null;
+        }
+        for (Path p : candidates) {
+            try {
+                Element el = parseMachineElement(p);
+                if (!"implementation".equalsIgnoreCase(el.getAttribute("type"))) {
+                    continue;
+                }
+                Element abs = firstChildElement(el, "Abstraction");
+                String absName = abs != null ? abs.getTextContent().trim() : null;
+                if (abstractMachineName.equals(absName)) {
+                    return el;
+                }
+            } catch (Exception ignored) {
+                // ficheiro malformado ou não-BXML; ignora e tenta o próximo
+            }
+        }
+        return null;
     }
 
     /** Raiz {@code <Machine>} com parser namespace-aware (BXML 1.0 com {@code xmlns}). */

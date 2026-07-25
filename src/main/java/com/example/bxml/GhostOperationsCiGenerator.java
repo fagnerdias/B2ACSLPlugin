@@ -370,9 +370,20 @@ public final class GhostOperationsCiGenerator {
      * ({@code type DSet<A>;}, {@code type DTuple<A,B>;}, {@code predicate dummy_equals<A>(...);},
      * …) em toda chamada, só as linhas específicas da máquina (ex.: {@code logic DSet<integer>
      * dummy_purchases;}) é que mudam. Sem fundir, o Frama-C rejeitaria os tipos/símbolos genéricos
-     * repetidos como já declarados. A fusão une as linhas (deduplicadas por texto, ordem de
-     * primeira ocorrência preservada) de todos os blocos num único {@code axiomatic dummy_ghost}
-     * na posição do primeiro, removendo os restantes.
+     * repetidos como já declarados. A fusão une os PARÁGRAFOS (blocos separados por linha em
+     * branco — cada {@code type ...;}/{@code predicate ...;}/{@code logic ...;}/{@code axiom
+     * ...;} inteiro, mesmo multi-linha) de todos os blocos num único {@code axiomatic dummy_ghost}
+     * na posição do primeiro (deduplicados por texto, ordem de primeira ocorrência preservada),
+     * removendo os restantes.
+     *
+     * <p>Deduplicar por PARÁGRAFO (não por linha crua, como antes): um axioma multi-linha de
+     * conjunto enumerado com 2+ valores (ex.: {@code dummy_belongs(a,S) && dummy_belongs(b,S) &&
+     * \forall ...}) repete a linha solta {@code "&&"} entre cada conjunto — deduplicar por LINHA
+     * tratava essa {@code "&&"} repetida como "boilerplate já visto" e apagava-a, corrompendo
+     * silenciosamente a fórmula (sem erro de parse na maior parte dos casos, mas aqui gerava
+     * {@code "unexpected token '\forall'"} por faltar o conector antes dele). Só disparava com 2+
+     * blocos a fundir ({@code spans.size() > 1}, i.e. 2+ máquinas com abstração ghost no mesmo
+     * projeto) — daí nunca ter aparecido antes desta sessão.
      */
     public static void mergeDuplicateDummyGhostBlocks(Path ghostCiPath) throws IOException {
         if (!Files.isRegularFile(ghostCiPath)) {
@@ -381,13 +392,13 @@ public final class GhostOperationsCiGenerator {
         String content = Files.readString(ghostCiPath, StandardCharsets.UTF_8);
         Matcher m = DUMMY_GHOST_BLOCK.matcher(content);
         List<int[]> spans = new ArrayList<>();
-        Set<String> uniqueLines = new LinkedHashSet<>();
+        Set<String> uniqueParagraphs = new LinkedHashSet<>();
         while (m.find()) {
             spans.add(new int[] {m.start(), m.end()});
-            for (String line : m.group(1).split("\n")) {
-                String trimmed = line.strip();
+            for (String paragraph : m.group(1).split("\n\\s*\n")) {
+                String trimmed = paragraph.strip();
                 if (!trimmed.isEmpty()) {
-                    uniqueLines.add(trimmed);
+                    uniqueParagraphs.add(trimmed);
                 }
             }
         }
@@ -396,8 +407,8 @@ public final class GhostOperationsCiGenerator {
         }
         StringBuilder merged = new StringBuilder();
         merged.append("/*@\n    axiomatic dummy_ghost {\n\n");
-        for (String line : uniqueLines) {
-            merged.append("        ").append(line).append("\n\n");
+        for (String paragraph : uniqueParagraphs) {
+            merged.append("        ").append(paragraph).append("\n\n");
         }
         merged.append("    }\n*/\n");
 
