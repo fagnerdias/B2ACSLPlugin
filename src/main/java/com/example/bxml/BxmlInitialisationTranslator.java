@@ -1162,11 +1162,6 @@ public final class BxmlInitialisationTranslator {
             loopSpecs = loopSpecs == null ? List.of() : List.copyOf(loopSpecs);
         }
 
-        /** Compatibilidade com chamadas que ainda usam o campo singular (agora lista). */
-        public CartesianProductLoopSpec loopSpec() {
-            return loopSpecs.isEmpty() ? null : loopSpecs.get(0);
-        }
-
         public String toContractText() {
             boolean hasContent = !ensures.isEmpty()
                     || !dummyGhostEnsureVarNames.isEmpty()

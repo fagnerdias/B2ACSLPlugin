@@ -1652,14 +1652,8 @@ public final class B2ACSLPipeline {
             Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+([A-Za-z_]\\w*)\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
     private static final Pattern ACSL_OPERATION_CONTRACT_FUNCTION =
             Pattern.compile("(?m)^\\s*function\\s+([A-Za-z_]\\w*)\\s*:");
-    private static final Pattern GHOST_INITIALISATION_BLOCK_IN_CI =
-            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+\\w+__initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
-    private static final Pattern GHOST_INITIALISATION_BLOCK_IN_MERGED =
-            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+\\w+__initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/\\s*");
     private static final Pattern INITIALISATION_FUNCTION_DEFINITION =
             Pattern.compile("\\bvoid\\s+[A-Za-z_]\\w*__INITIALISATION\\s*\\([^;{}]*\\)\\s*\\{");
-    private static final Pattern INITIALISATION_GHOST_CALL_PATTERN =
-            Pattern.compile("/\\*@\\s*ghost\\s+\\w+__initialisation\\s*\\(\\s*\\)\\s*;\\s*\\*/");
 
     /**
      * Novo passo pré-WP: move especificações ghost de operações para imediatamente acima da função C
@@ -1914,117 +1908,6 @@ public final class B2ACSLPipeline {
                                 + Pattern.quote(opSuffix)
                                 + "\\s*\\([^;{}]*\\)\\s*;\\s*\\*/\\s*");
         return ghostCall.matcher(content).replaceAll("");
-    }
-
-    /**
-     * Garante especificamente o bloco ghost de {@code initialisation} imediatamente acima de
-     * {@code Deck__INITIALISATION} (ou equivalente), mesmo se etapas anteriores falharem em casos
-     * degenerados do merge.
-     */
-    private static void enforceInitialisationGhostSpecPlacement(Path mergedC, Path ghostCi) throws IOException {
-        if (!Files.isRegularFile(ghostCi)) {
-            return;
-        }
-        String ghostText =
-                GhostOperationsCiGenerator.normalizeIntegerBoolComparisonsInMergedGhostSpecs(
-                        GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
-                                Files.readString(ghostCi, StandardCharsets.UTF_8)));
-        Matcher gm = GHOST_INITIALISATION_BLOCK_IN_CI.matcher(ghostText);
-        if (!gm.find()) {
-            return;
-        }
-        String initGhostBlock = gm.group().stripTrailing() + "\n\n";
-
-        String merged = Files.readString(mergedC, StandardCharsets.UTF_8);
-        merged = GHOST_INITIALISATION_BLOCK_IN_MERGED.matcher(merged).replaceAll("");
-
-        int insertAt = findInitialisationAnchorBeforeDefinition(merged);
-        if (insertAt < 0) {
-            insertAt = findInitialisationAnchorFromGhostCall(merged);
-        }
-        if (insertAt < 0) {
-            Files.writeString(mergedC, merged, StandardCharsets.UTF_8);
-            return;
-        }
-        merged = merged.substring(0, insertAt) + initGhostBlock + merged.substring(insertAt);
-        Files.writeString(mergedC, merged, StandardCharsets.UTF_8);
-    }
-
-    private static int findInitialisationAnchorBeforeDefinition(String content) {
-        Matcher def = INITIALISATION_FUNCTION_DEFINITION.matcher(content);
-        if (!def.find()) {
-            return -1;
-        }
-        int idx = def.start();
-        int specStart = content.lastIndexOf("/*@", idx);
-        if (specStart >= 0) {
-            int specEnd = content.indexOf("*/", specStart);
-            if (specEnd >= 0 && specEnd < idx) {
-                String between = content.substring(specEnd + 2, idx).trim();
-                if (between.isEmpty()) {
-                    idx = specStart;
-                }
-            }
-        }
-        int lineStart = content.lastIndexOf('\n', idx);
-        return lineStart < 0 ? 0 : lineStart + 1;
-    }
-
-    /**
-     * Fallback robusto: localiza o marcador {@code ghost initialisation();} no corpo da função e
-     * recua até a definição de {@code __INITIALISATION}, ancorando acima da especificação contígua.
-     */
-    private static int findInitialisationAnchorFromGhostCall(String content) {
-        Matcher callMatcher = INITIALISATION_GHOST_CALL_PATTERN.matcher(content);
-        if (!callMatcher.find()) {
-            return -1;
-        }
-        int callIdx = callMatcher.start();
-        Matcher def = INITIALISATION_FUNCTION_DEFINITION.matcher(content);
-        int defStart = -1;
-        while (def.find()) {
-            if (def.start() > callIdx) {
-                break;
-            }
-            defStart = def.start();
-        }
-        if (defStart < 0) {
-            return -1;
-        }
-        int idx = defStart;
-        int specStart = content.lastIndexOf("/*@", idx);
-        if (specStart >= 0) {
-            int specEnd = content.indexOf("*/", specStart);
-            if (specEnd >= 0 && specEnd < idx) {
-                String between = content.substring(specEnd + 2, idx).trim();
-                if (between.isEmpty()) {
-                    idx = specStart;
-                }
-            }
-        }
-        int lineStart = content.lastIndexOf('\n', idx);
-        return lineStart < 0 ? 0 : lineStart + 1;
-    }
-
-    /**
-     * Garante a ordem canónica imediatamente antes da definição de função:
-     * bloco ghost da operação -> bloco de especificação da função -> definição com corpo.
-     */
-    private static void normalizeGhostBlockOrderBeforeFunctionDefinitions(Path mergedC) throws IOException {
-        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
-        Pattern p =
-                Pattern.compile(
-                        "(?s)(/\\*@\\s*(?!ghost\\b)[\\s\\S]*?\\*/\\s*)" // spec normal
-                                + "(/\\*@\\s*ghost\\b[\\s\\S]*?\\*/\\s*)" // spec ghost
-                                + "(void\\s+[A-Za-z_]\\w*__\\w+\\s*\\([^;{}]*\\)\\s*\\{)"); // definição
-        Matcher m = p.matcher(content);
-        StringBuilder sb = new StringBuilder();
-        while (m.find()) {
-            String replacement = m.group(2) + m.group(1) + m.group(3);
-            m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
-        }
-        m.appendTail(sb);
-        Files.writeString(mergedC, sb.toString(), StandardCharsets.UTF_8);
     }
 
     /**
@@ -2919,17 +2802,4 @@ public final class B2ACSLPipeline {
         return findPreambleInsertIndex(cut);
     }
 
-    private static void deleteRecursive(Path dir) {
-        try {
-            if (Files.exists(dir)) {
-                try (var stream = Files.walk(dir)) {
-                    stream.sorted(Comparator.reverseOrder()).forEach(p -> {
-                        try {
-                            Files.deleteIfExists(p);
-                        } catch (IOException ignored) {}
-                    });
-                }
-            }
-        } catch (IOException ignored) {}
-    }
 }

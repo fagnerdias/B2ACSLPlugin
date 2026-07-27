@@ -415,25 +415,6 @@ public final class SpecificationAxiomaticInstantiator {
             "^\\s*(?:admit\\s+)?(?:predicate|logic|axiom|lemma)\\s+");
 
     /**
-     * Divide o corpo do axiomatic em grupos de linhas, cada grupo pertencendo a uma aridade
-     * de parâmetros de tipo.  Declarações multi-linha são mantidas unidas antes da
-     * detecção de aridade.
-     */
-    private static Map<Integer, List<String>> groupLinesByArity(String body) {
-        // 1. Agrupa linhas em declarações lógicas completas
-        List<List<String>> logicalDecls = splitIntoLogicalDeclarations(body);
-
-        // 2. Para cada declaração completa, detecta a aridade e acumula as linhas
-        Map<Integer, List<String>> groups = new LinkedHashMap<>();
-        for (List<String> declLines : logicalDecls) {
-            String full = String.join("\n", declLines);
-            int arity = detectArityFromFullDecl(full);
-            groups.computeIfAbsent(arity, k -> new ArrayList<>()).addAll(declLines);
-        }
-        return groups;
-    }
-
-    /**
      * Divide as linhas do corpo em segmentos onde cada segmento é uma declaração lógica
      * completa (e.g., {@code predicate …;}, {@code axiom …;}).
      */

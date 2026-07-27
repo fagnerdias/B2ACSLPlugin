@@ -46,11 +46,6 @@ public final class WpOptionsDialog {
             boolean counterExamples,
             boolean splitGoals) {
 
-        /** Primeiro provedor (compatibilidade). */
-        public String prover() {
-            return provers == null || provers.isEmpty() ? DEFAULT_WP_PROVER : provers.get(0);
-        }
-
         /** Argumento único para {@code -wp-prover} (lista separada por vírgulas). */
         public String proversArgument() {
             if (provers == null || provers.isEmpty()) {

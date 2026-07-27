@@ -256,28 +256,12 @@ public final class VerificationReportData {
         return extraTimeouts;
     }
 
-    public boolean smokeTestsPresent() {
-        return wpSmokeTestsPresent;
-    }
-
-    public int smokeTestsPassed() {
-        return wpSmokeTestsPassed;
-    }
-
-    public int smokeTestsTotal() {
-        return wpSmokeTestsTotal;
-    }
-
     /** Texto do cartão de resumo, ex. {@code 4 / 4} ou {@code —} se não houver smoke tests no log. */
     public String smokeTestsDisplay() {
         if (!wpSmokeTestsPresent) {
             return "—";
         }
         return wpSmokeTestsPassed + " / " + wpSmokeTestsTotal;
-    }
-
-    public List<String> details() {
-        return List.copyOf(details);
     }
 
     public String detailsAsText() {

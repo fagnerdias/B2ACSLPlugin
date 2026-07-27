@@ -541,20 +541,6 @@ public final class BxmlSetsTranslator {
         return topologicalSortDependencies(reachable, deps);
     }
 
-    /**
-     * {@code include "Dep.acsl";} apenas na raiz do grafo: fecho transitivo de {@code SEES}/{@code
-     * IMPORTS} em ordem topológica. Máquinas só dependentes não repetem includes.
-     */
-    public static String formatTransitiveDependencyIncludeBlock(
-            String rootMachineName,
-            BxmlSeesGraph seesGraph,
-            BxmlImportsGraph importsGraph,
-            Path bxmlDirectory) {
-        return formatMachineAcslIncludeBlock(
-                transitiveDependencyMachineNames(rootMachineName, seesGraph, importsGraph),
-                bxmlDirectory);
-    }
-
     private static void mergeDependencyList(
             Map<String, List<String>> merged, String viewer, List<String> deps) {
         if (viewer == null || viewer.isBlank() || deps == null || deps.isEmpty()) {

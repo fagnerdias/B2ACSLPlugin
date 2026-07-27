@@ -191,12 +191,6 @@ final class DummyGhostAxiomaticBuilder {
         return sb.toString();
     }
 
-    /** Símbolos da lib cujo uso ghost aparece como {@code dummy_<nome>}. */
-    static Set<String> libSymbolsUsedInGhostText(String ghostText) {
-        DummyGhostAxiomaticBuilder b = new DummyGhostAxiomaticBuilder(AcslLibSymbolDependencyMap.instance());
-        return new LinkedHashSet<>(b.collectGhostNameToLibSymbol(ghostText, Set.of()).values());
-    }
-
     private static void appendBaseDummyTypes(StringBuilder sb) {
         sb.append("        type DSet<A>;\n\n");
         sb.append("        type DTuple<A, B>;\n\n");

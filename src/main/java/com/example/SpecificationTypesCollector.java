@@ -85,49 +85,6 @@ public final class SpecificationTypesCollector {
         return List.copyOf(out);
     }
 
-    /** Lê entradas de {@link #OUTPUT_FILE_NAME} (ignora comentários {@code #}). */
-    public static List<String> readTypesList(Path typesFile) throws IOException {
-        if (typesFile == null || !Files.isRegularFile(typesFile)) {
-            return List.of();
-        }
-        List<String> out = new ArrayList<>();
-        for (String line : Files.readAllLines(typesFile, StandardCharsets.UTF_8)) {
-            String t = line.trim();
-            if (t.isEmpty() || t.startsWith("#")) {
-                continue;
-            }
-            out.add(t);
-        }
-        return List.copyOf(out);
-    }
-
-    /**
-     * Texto auxiliar para descoberta de ficheiros da lib a partir dos tipos listados
-     * ({@link #collectUsedTypes}).
-     */
-    public static String scanAugmentationFromUsedTypes(List<String> usedTypes) {
-        if (usedTypes == null || usedTypes.isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (String t : usedTypes) {
-            if (t.contains("→")) {
-                continue;
-            }
-            sb.append(t).append(' ');
-            if (t.startsWith("Set") || t.contains("Set<")) {
-                sb.append("belongs empty singleton set_union card equals inclusion is_finite disjoint NAT INT BOOL ");
-            }
-            if (t.contains("list") || t.contains("\\list")) {
-                sb.append("is_seq_of ran length iseq list_to_function ");
-            }
-            if (t.contains("Relation") || t.contains("Function")) {
-                sb.append("domain range apply domain_restriction ");
-            }
-        }
-        return sb.toString();
-    }
-
     /**
      * Grava a lista de tipos em {@code outputPath} (um tipo por linha; entradas BXML com {@code →}).
      */

@@ -11,7 +11,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -153,31 +152,8 @@ public final class AcslLibSymbolDependencyMap {
     }
 
     /**
-     * União de {@link #directIncludeClosureForSymbol(String)} para cada símbolo.
-     */
-    public Set<String> directIncludeClosureForSymbols(Collection<String> symbols) {
-        if (symbols == null || symbols.isEmpty()) {
-            return Set.of();
-        }
-        LinkedHashSet<String> out = new LinkedHashSet<>();
-        for (String symbol : symbols) {
-            if (symbol != null && !symbol.isBlank()) {
-                out.addAll(directIncludeClosureForSymbol(symbol));
-            }
-        }
-        return out;
-    }
-
-    /**
      * União de {@link #directIncludeClosureForSymbol} para cada símbolo, expandindo também as
      * dependências de símbolo transitivas (útil para resolução completa via grafo de símbolos).
-     */
-    public Set<String> transitiveLibRelativePathsForSymbol(String symbol) {
-        return transitiveLibRelativePathsForSymbols(List.of(symbol));
-    }
-
-    /**
-     * União de {@link #transitiveLibRelativePathsForSymbol(String)} para cada símbolo.
      */
     public Set<String> transitiveLibRelativePathsForSymbols(Collection<String> symbols) {
         if (symbols == null || symbols.isEmpty()) {
@@ -285,21 +261,4 @@ public final class AcslLibSymbolDependencyMap {
         return out;
     }
 
-    /** Expõe o grafo de dependência direta (imutável) para testes ou ferramentas. */
-    public Map<String, List<String>> rawDependencies() {
-        return dependencies.entrySet().stream()
-                .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> List.copyOf(e.getValue())));
-    }
-
-    /** Expõe includes diretos por ficheiro. */
-    public Map<String, List<String>> rawIncludesFrom() {
-        return includesFrom.entrySet().stream()
-                .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> List.copyOf(e.getValue())));
-    }
-
-    static void resetForTests() {
-        synchronized (AcslLibSymbolDependencyMap.class) {
-            instance = null;
-        }
-    }
 }

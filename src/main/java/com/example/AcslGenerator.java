@@ -57,9 +57,8 @@ import com.example.model.Machine;
  * ({@link BxmlConstantsAndProperties}); em seguida
  * {@code include "connection.acsl"} se existir refinamento fundido na abstração ({@link BxmlConnectionAcsl},
  * só elo abstração→refinamento); na raiz de importação Frama-C ({@code SEES}/{@code IMPORTS}), um único
- * bloco {@code include "Dep.acsl"} com o fecho transitivo em ordem topológica
- * ({@link BxmlSetsTranslator#formatTransitiveDependencyIncludeBlock}); máquinas só dependentes não
- * repetem includes.
+ * bloco {@code include "Dep.acsl"} com o fecho transitivo em ordem topológica; máquinas só
+ * dependentes não repetem includes.
  *
  * <p>Variáveis: um bloco {@code axiomatic NomeMaquina_variables} por máquina (abstrata e cada
  * refinamento/implementação fundido), tipos inferidos quando possível ({@link BxmlMachineVariables});
@@ -954,23 +953,6 @@ public final class AcslGenerator {
     }
 
 
-
-    /** Encontra todos os BXMLs de implementação/refinamento que têm {@code machineName} como abstração. */
-    private static List<Element> findImplementationElements(String machineName, Path bxmlDirectory) {
-        List<Element> out = new ArrayList<>();
-        try (var stream = Files.list(bxmlDirectory)) {
-            for (Path p : stream.filter(f -> f.getFileName().toString().endsWith(".bxml"))
-                    .sorted().toList()) {
-                try {
-                    Element el = parseMachineElement(p);
-                    if (getAbstractionReferenceName(el).map(machineName::equals).orElse(false)) {
-                        out.add(el);
-                    }
-                } catch (Exception ignored) {}
-            }
-        } catch (Exception ignored) {}
-        return out;
-    }
 
     /**
      * Varre todos os arquivos {@code *_i.bxml} no diretório e coleta valuations de constantes inteiras
