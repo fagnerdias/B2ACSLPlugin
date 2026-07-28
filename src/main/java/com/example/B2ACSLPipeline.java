@@ -17,6 +17,7 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -27,6 +28,7 @@ import com.example.bxml.BxmlSeesGraph;
 import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.model.Machine;
 import com.example.ui.FormalVerificationReportDialog;
+import com.example.ui.VerificationProgressDialog;
 import com.example.ui.VerificationReportData;
 import com.example.analysis.LoopUnrollLevelEstimator;
 import com.example.ui.WpOptionsDialog;
@@ -989,6 +991,12 @@ public final class B2ACSLPipeline {
         } else {
             wpFunctionsToRun = operationFunctionNames;
         }
+        List<String> wpSourceNames = new ArrayList<>();
+        for (String functionName : wpFunctionsToRun) {
+            wpSourceNames.add(wpSourceName(mergedCode, functionName, cSourcesLabel));
+        }
+        VerificationProgressDialog progress = VerificationProgressDialog.show(projectName, wpSourceNames);
+
         int failingExitCode = 0;
         for (String functionName : wpFunctionsToRun) {
             List<String> wpCmd =
@@ -997,19 +1005,23 @@ public final class B2ACSLPipeline {
             wpPb.directory(cDir.toFile());
             wpPb.redirectErrorStream(true);
 
-            ProcessResult wpResult = runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS);
-            String sourceName =
-                    functionName == null
-                            ? mergedCode.getFileName().toString() + " (" + cSourcesLabel + ")"
-                            : functionName + " (" + mergedCode.getFileName().toString() + ")";
+            String sourceName = wpSourceName(mergedCode, functionName, cSourcesLabel);
+            progress.markRunning(sourceName);
+            progress.appendLogHeader(sourceName);
+
+            ProcessResult wpResult =
+                    runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS, progress::appendLogLine);
             reportData.absorbOutput(wpResult.output(), sourceName);
             if (!wpResult.completed()) {
                 reportData.addTimeout(
                         "Timeout while executing WP"
                                 + (functionName == null ? "" : " for function " + functionName)
                                 + " (600s limit).");
+                progress.markCompleted(
+                        sourceName, VerificationProgressDialog.Status.TIMEOUT, 0, 0, "timed out (600s)");
+                progress.finish(false);
                 showVerificationReport(
-                        projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+                        projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);
                 return 6;
             }
             if (wpResult.exitCode() != 0) {
@@ -1021,14 +1033,63 @@ public final class B2ACSLPipeline {
                 if (failingExitCode == 0) {
                     failingExitCode = wpResult.exitCode();
                 }
+                progress.markCompleted(
+                        sourceName,
+                        VerificationProgressDialog.Status.FAILED,
+                        0,
+                        0,
+                        "WP exit code " + wpResult.exitCode());
+            } else {
+                markCompletedFromSummary(progress, reportData, sourceName);
             }
         }
         if (failingExitCode != 0) {
-            showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+            progress.finish(false);
+            showVerificationReport(
+                    projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);
             return failingExitCode;
         }
-        showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+        progress.finish(true);
+        showVerificationReport(
+                projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);
         return 0;
+    }
+
+    private static String wpSourceName(Path mergedCode, String functionName, String cSourcesLabel) {
+        return functionName == null
+                ? mergedCode.getFileName().toString() + " (" + cSourcesLabel + ")"
+                : functionName + " (" + mergedCode.getFileName().toString() + ")";
+    }
+
+    /**
+     * Classifica o resultado de uma função/operação já absorvida em {@code reportData} (WP
+     * terminou com exit code 0) e atualiza a janela de progresso de acordo com as contagens de
+     * goals provados/total daquela fonte especificamente.
+     */
+    private static void markCompletedFromSummary(
+            VerificationProgressDialog progress, VerificationReportData reportData, String sourceName) {
+        VerificationReportData.FunctionSummary summary =
+                reportData.functionSummaries().stream()
+                        .filter(s -> s.functionName().equals(sourceName))
+                        .findFirst()
+                        .orElse(null);
+        if (summary == null || summary.totalGoals() == 0) {
+            progress.markCompleted(sourceName, VerificationProgressDialog.Status.PROVED, 0, 0, "no goals");
+            return;
+        }
+        int proved = summary.provedGoals();
+        int total = summary.totalGoals();
+        VerificationProgressDialog.Status status;
+        if (proved >= total) {
+            status = VerificationProgressDialog.Status.PROVED;
+        } else if (summary.timeouts() > 0 && summary.failures() == 0) {
+            status = VerificationProgressDialog.Status.TIMEOUT;
+        } else if (proved > 0) {
+            status = VerificationProgressDialog.Status.PARTIAL;
+        } else {
+            status = VerificationProgressDialog.Status.FAILED;
+        }
+        progress.markCompleted(sourceName, status, proved, total, null);
     }
 
     private static List<String> buildWpCommand(
@@ -1105,7 +1166,7 @@ public final class B2ACSLPipeline {
     private record ProcessResult(boolean completed, int exitCode, String output) {}
 
     private static ProcessResult runProcessWithCapturedOutput(
-            ProcessBuilder processBuilder, long timeout, TimeUnit timeoutUnit)
+            ProcessBuilder processBuilder, long timeout, TimeUnit timeoutUnit, Consumer<String> lineConsumer)
             throws IOException, InterruptedException {
         Process process = processBuilder.start();
         StringBuilder output = new StringBuilder();
@@ -1121,6 +1182,9 @@ public final class B2ACSLPipeline {
                                 while ((line = br.readLine()) != null) {
                                     output.append(line).append('\n');
                                     System.out.println(line);
+                                    if (lineConsumer != null) {
+                                        lineConsumer.accept(line);
+                                    }
                                 }
                             } catch (IOException e) {
                                 output.append("[B2ACSL] Falha ao ler saida do processo: ")
@@ -1143,7 +1207,12 @@ public final class B2ACSLPipeline {
     }
 
     private static void showVerificationReport(
-            String projectName, String analyzedFileName, long startNanos, VerificationReportData reportData) {
+            String projectName,
+            String analyzedFileName,
+            long startNanos,
+            VerificationReportData reportData,
+            VerificationProgressDialog progress) {
+        progress.close();
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
         FormalVerificationReportDialog.show(projectName, analyzedFileName, elapsedMs, reportData);
     }

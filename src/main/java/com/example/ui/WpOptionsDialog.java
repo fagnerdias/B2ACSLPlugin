@@ -2,22 +2,29 @@ package com.example.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.HeadlessException;
 import java.awt.Insets;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
+import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -151,49 +158,75 @@ public final class WpOptionsDialog {
 
             root.add(content, BorderLayout.CENTER);
 
-            Object[] options = {"Cancel", "Run Verification"};
-            while (true) {
-                int result =
-                        JOptionPane.showOptionDialog(
-                                null,
-                                root,
-                                "Frama-C WP Configuration",
-                                JOptionPane.DEFAULT_OPTION,
-                                JOptionPane.PLAIN_MESSAGE,
-                                null,
-                                options,
-                                options[1]);
-                if (result != 1) {
-                    return null;
-                }
+            JButton cancelButton = new JButton("Cancel");
+            JButton runButton = new JButton("Run Verification");
+            JPanel buttonBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 8));
+            buttonBar.add(cancelButton);
+            buttonBar.add(runButton);
+            root.add(buttonBar, BorderLayout.SOUTH);
 
-                List<String> selectedProvers = selectedProvers(cvc5Box, altErgoBox, z3Box);
-                if (selectedProvers.isEmpty()) {
-                    JOptionPane.showMessageDialog(
-                            root,
-                            "Select at least one prover.",
-                            "Frama-C WP Configuration",
-                            JOptionPane.WARNING_MESSAGE);
-                    continue;
-                }
+            JFrame frame = new JFrame("Frama-C WP Configuration");
+            frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
 
-                String project = projectField.getText();
-                int timeout = ((Number) timeoutSpinner.getValue()).intValue();
-                String output = (String) outputCombo.getSelectedItem();
-                return buildWpOptions(
-                        project,
-                        selectedProvers,
-                        timeout,
-                        output,
-                        loopSimplificationBox.isSelected(),
-                        smokeTestsBox.isSelected(),
-                        verifyPerOperationBox.isSelected(),
-                        counterExamplesBox.isSelected(),
-                        splitGoalsBox.isSelected());
-            }
-        } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
+            CountDownLatch latch = new CountDownLatch(1);
+            WpOptions[] resultHolder = new WpOptions[1];
+            Runnable cancel =
+                    () -> {
+                        resultHolder[0] = null;
+                        frame.dispose();
+                        latch.countDown();
+                    };
+            cancelButton.addActionListener(e -> cancel.run());
+            frame.addWindowListener(
+                    new WindowAdapter() {
+                        @Override
+                        public void windowClosing(WindowEvent e) {
+                            cancel.run();
+                        }
+                    });
+            runButton.addActionListener(
+                    e -> {
+                        List<String> selectedProvers = selectedProvers(cvc5Box, altErgoBox, z3Box);
+                        if (selectedProvers.isEmpty()) {
+                            JOptionPane.showMessageDialog(
+                                    frame,
+                                    "Select at least one prover.",
+                                    "Frama-C WP Configuration",
+                                    JOptionPane.WARNING_MESSAGE);
+                            return;
+                        }
+                        String project = projectField.getText();
+                        int timeout = ((Number) timeoutSpinner.getValue()).intValue();
+                        String output = (String) outputCombo.getSelectedItem();
+                        resultHolder[0] =
+                                buildWpOptions(
+                                        project,
+                                        selectedProvers,
+                                        timeout,
+                                        output,
+                                        loopSimplificationBox.isSelected(),
+                                        smokeTestsBox.isSelected(),
+                                        verifyPerOperationBox.isSelected(),
+                                        counterExamplesBox.isSelected(),
+                                        splitGoalsBox.isSelected());
+                        frame.dispose();
+                        latch.countDown();
+                    });
+
+            frame.setContentPane(root);
+            frame.pack();
+            frame.setMinimumSize(frame.getSize());
+            frame.setLocationRelativeTo(null);
+            frame.setVisible(true);
+
+            latch.await();
+            return resultHolder[0];
+        } catch (UnsatisfiedLinkError | NoClassDefFoundError | HeadlessException e) {
             System.err.println(
                     "[B2ACSL] GUI is unavailable in this native runtime; using headless WP options.");
+            return readHeadlessOptions(defaultProjectName);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             return readHeadlessOptions(defaultProjectName);
         }
     }
