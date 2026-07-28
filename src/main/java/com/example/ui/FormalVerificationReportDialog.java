@@ -3,18 +3,24 @@ package com.example.ui;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
+import java.awt.HeadlessException;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.CountDownLatch;
 
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
+import javax.swing.JButton;
 import javax.swing.JFileChooser;
-import javax.swing.JDialog;
+import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -40,34 +46,82 @@ public final class FormalVerificationReportDialog {
         }
 
         try {
-            JPanel root = new JPanel(new BorderLayout(12, 12));
-            root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-
-            JPanel center = new JPanel();
-            center.setLayout(new BoxLayout(center, BoxLayout.Y_AXIS));
-            center.add(buildSummary(reportData));
-            JPanel perFunction = buildPerFunctionSummary(reportData);
-            if (perFunction != null) {
-                center.add(perFunction);
-            }
-
-            root.add(buildHeader(projectName, analyzedFileName, elapsedMs), BorderLayout.NORTH);
-            root.add(center, BorderLayout.CENTER);
-            root.add(buildDetails(reportData), BorderLayout.SOUTH);
-
-            Object[] options = {"Close", "Save Full Output (.txt)"};
-            while (true) {
-                int choice = showResultDialog(root, options);
-                if (choice != 1) {
-                    break;
-                }
-                saveFullOutput(projectName, reportData.fullOutputAsText());
-            }
-        } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
+            runReportFrame(projectName, analyzedFileName, elapsedMs, reportData);
+        } catch (UnsatisfiedLinkError | NoClassDefFoundError | HeadlessException e) {
             System.err.println(
                     "[B2ACSL] GUI is unavailable in this native runtime; printing verification report in console.");
             printHeadlessReport(projectName, analyzedFileName, elapsedMs, reportData);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            printHeadlessReport(projectName, analyzedFileName, elapsedMs, reportData);
         }
+    }
+
+    /**
+     * Constrói e exibe o relatório numa janela real (JFrame), com botões próprios de
+     * Close/Save no lugar dos botões do JOptionPane — assim a janela ganha minimizar/maximizar
+     * como qualquer outra janela do SO. Bloqueia a thread chamadora (via latch) até o usuário
+     * fechar a janela, pois o processo termina (System.exit) logo após este método retornar.
+     */
+    private static void runReportFrame(
+            String projectName, String analyzedFileName, long elapsedMs, VerificationReportData reportData)
+            throws InterruptedException {
+        JPanel root = new JPanel(new BorderLayout(12, 12));
+        root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+
+        JPanel center = new JPanel();
+        center.setLayout(new BoxLayout(center, BoxLayout.Y_AXIS));
+        center.add(buildSummary(reportData));
+        JPanel perFunction = buildPerFunctionSummary(reportData);
+        if (perFunction != null) {
+            center.add(perFunction);
+        }
+
+        root.add(buildHeader(projectName, analyzedFileName, elapsedMs), BorderLayout.NORTH);
+        root.add(center, BorderLayout.CENTER);
+        root.add(buildDetails(reportData), BorderLayout.SOUTH);
+
+        JScrollPane scrollPane = new JScrollPane(root);
+        scrollPane.setBorder(BorderFactory.createEmptyBorder());
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        scrollPane.getHorizontalScrollBar().setUnitIncrement(16);
+
+        JButton saveButton = new JButton("Save Full Output (.txt)");
+        JButton closeButton = new JButton("Close");
+        JPanel buttonBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 8));        
+        buttonBar.add(closeButton);
+        buttonBar.add(saveButton);
+
+        JPanel contentPane = new JPanel(new BorderLayout());
+        contentPane.add(scrollPane, BorderLayout.CENTER);
+        contentPane.add(buttonBar, BorderLayout.SOUTH);
+
+        JFrame frame = new JFrame("Verification Report");
+        frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+
+        CountDownLatch latch = new CountDownLatch(1);
+        Runnable finish =
+                () -> {
+                    frame.dispose();
+                    latch.countDown();
+                };
+        closeButton.addActionListener(e -> finish.run());
+        frame.addWindowListener(
+                new WindowAdapter() {
+                    @Override
+                    public void windowClosing(WindowEvent e) {
+                        finish.run();
+                    }
+                });
+        saveButton.addActionListener(e -> saveFullOutput(projectName, reportData.fullOutputAsText()));
+
+        frame.setContentPane(contentPane);
+        frame.setMinimumSize(new Dimension(900, 600));
+        frame.setSize(new Dimension(1100, 760));
+        frame.setLocationRelativeTo(null);
+        frame.setVisible(true);
+
+        latch.await();
     }
 
     private static boolean isUiAvailable() {
@@ -168,39 +222,6 @@ public final class FormalVerificationReportDialog {
 
         detailsPanel.add(new JScrollPane(detailsArea), BorderLayout.CENTER);
         return detailsPanel;
-    }
-
-    private static int showResultDialog(JPanel root, Object[] options) {
-        JScrollPane scrollPane = new JScrollPane(root);
-        scrollPane.setBorder(BorderFactory.createEmptyBorder());
-        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
-        scrollPane.getHorizontalScrollBar().setUnitIncrement(16);
-        scrollPane.setPreferredSize(new Dimension(1100, 720));
-
-        JOptionPane optionPane =
-                new JOptionPane(
-                        scrollPane,
-                        JOptionPane.INFORMATION_MESSAGE,
-                        JOptionPane.DEFAULT_OPTION,
-                        null,
-                        options,
-                        options[0]);
-        JDialog dialog = optionPane.createDialog(null, "Verification Report");
-        dialog.setResizable(true);
-        dialog.setMinimumSize(new Dimension(900, 600));
-        dialog.pack();
-        dialog.setVisible(true);
-
-        Object value = optionPane.getValue();
-        if (value instanceof Integer index) {
-            return index;
-        }
-        for (int i = 0; i < options.length; i++) {
-            if (options[i].equals(value)) {
-                return i;
-            }
-        }
-        return JOptionPane.CLOSED_OPTION;
     }
 
     private static JPanel buildPerFunctionSummary(VerificationReportData reportData) {

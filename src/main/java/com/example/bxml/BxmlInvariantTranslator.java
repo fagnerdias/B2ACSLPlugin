@@ -111,15 +111,11 @@ public final class BxmlInvariantTranslator {
             } catch (Exception ignored) {}
         }
 
-        for (String suffix : new String[]{"_i", "_imp"}) {
-            Path implPath = bxmlDirectory.resolve(machineName + suffix + ".bxml");
-            if (!Files.exists(implPath)) continue;
+        Element implEl = BxmlSetsTranslator.findImplementationMachineElement(machineName, bxmlDirectory);
+        if (implEl != null) {
             try {
-                Element implEl = BxmlSetsTranslator.parseMachineElement(implPath);
-                if (!"implementation".equalsIgnoreCase(implEl.getAttribute("type"))) continue;
                 BxmlTranslateContext ctx = BxmlTranslateContext.forMachine(implEl, Map.of());
                 result.addAll(listInvariantPredicateNames(implEl, ctx));
-                break;
             } catch (Exception ignored) {}
         }
 

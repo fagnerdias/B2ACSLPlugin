@@ -17,6 +17,7 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -27,6 +28,7 @@ import com.example.bxml.BxmlSeesGraph;
 import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.model.Machine;
 import com.example.ui.FormalVerificationReportDialog;
+import com.example.ui.VerificationProgressDialog;
 import com.example.ui.VerificationReportData;
 import com.example.analysis.LoopUnrollLevelEstimator;
 import com.example.ui.WpOptionsDialog;
@@ -950,6 +952,7 @@ public final class B2ACSLPipeline {
         placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
         liftPureGhostEnsuresToOperationContracts(mergedCode);
         reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
+        moveTupleCodomainAxiomaticBlocksAfterNewTypes(mergedCode);
         appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
         SpecificationAxiomaticInstantiator.monomorphizeGenericAcslBlocks(
                 mergedCode, specificationUsedTypes);
@@ -988,6 +991,12 @@ public final class B2ACSLPipeline {
         } else {
             wpFunctionsToRun = operationFunctionNames;
         }
+        List<String> wpSourceNames = new ArrayList<>();
+        for (String functionName : wpFunctionsToRun) {
+            wpSourceNames.add(wpSourceName(mergedCode, functionName, cSourcesLabel));
+        }
+        VerificationProgressDialog progress = VerificationProgressDialog.show(projectName, wpSourceNames);
+
         int failingExitCode = 0;
         for (String functionName : wpFunctionsToRun) {
             List<String> wpCmd =
@@ -996,19 +1005,23 @@ public final class B2ACSLPipeline {
             wpPb.directory(cDir.toFile());
             wpPb.redirectErrorStream(true);
 
-            ProcessResult wpResult = runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS);
-            String sourceName =
-                    functionName == null
-                            ? mergedCode.getFileName().toString() + " (" + cSourcesLabel + ")"
-                            : functionName + " (" + mergedCode.getFileName().toString() + ")";
+            String sourceName = wpSourceName(mergedCode, functionName, cSourcesLabel);
+            progress.markRunning(sourceName);
+            progress.appendLogHeader(sourceName);
+
+            ProcessResult wpResult =
+                    runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS, progress::appendLogLine);
             reportData.absorbOutput(wpResult.output(), sourceName);
             if (!wpResult.completed()) {
                 reportData.addTimeout(
                         "Timeout while executing WP"
                                 + (functionName == null ? "" : " for function " + functionName)
                                 + " (600s limit).");
+                progress.markCompleted(
+                        sourceName, VerificationProgressDialog.Status.TIMEOUT, 0, 0, "timed out (600s)");
+                progress.finish(false);
                 showVerificationReport(
-                        projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+                        projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);
                 return 6;
             }
             if (wpResult.exitCode() != 0) {
@@ -1020,14 +1033,63 @@ public final class B2ACSLPipeline {
                 if (failingExitCode == 0) {
                     failingExitCode = wpResult.exitCode();
                 }
+                progress.markCompleted(
+                        sourceName,
+                        VerificationProgressDialog.Status.FAILED,
+                        0,
+                        0,
+                        "WP exit code " + wpResult.exitCode());
+            } else {
+                markCompletedFromSummary(progress, reportData, sourceName);
             }
         }
         if (failingExitCode != 0) {
-            showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+            progress.finish(false);
+            showVerificationReport(
+                    projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);
             return failingExitCode;
         }
-        showVerificationReport(projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData);
+        progress.finish(true);
+        showVerificationReport(
+                projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);
         return 0;
+    }
+
+    private static String wpSourceName(Path mergedCode, String functionName, String cSourcesLabel) {
+        return functionName == null
+                ? mergedCode.getFileName().toString() + " (" + cSourcesLabel + ")"
+                : functionName + " (" + mergedCode.getFileName().toString() + ")";
+    }
+
+    /**
+     * Classifica o resultado de uma função/operação já absorvida em {@code reportData} (WP
+     * terminou com exit code 0) e atualiza a janela de progresso de acordo com as contagens de
+     * goals provados/total daquela fonte especificamente.
+     */
+    private static void markCompletedFromSummary(
+            VerificationProgressDialog progress, VerificationReportData reportData, String sourceName) {
+        VerificationReportData.FunctionSummary summary =
+                reportData.functionSummaries().stream()
+                        .filter(s -> s.functionName().equals(sourceName))
+                        .findFirst()
+                        .orElse(null);
+        if (summary == null || summary.totalGoals() == 0) {
+            progress.markCompleted(sourceName, VerificationProgressDialog.Status.PROVED, 0, 0, "no goals");
+            return;
+        }
+        int proved = summary.provedGoals();
+        int total = summary.totalGoals();
+        VerificationProgressDialog.Status status;
+        if (proved >= total) {
+            status = VerificationProgressDialog.Status.PROVED;
+        } else if (summary.timeouts() > 0 && summary.failures() == 0) {
+            status = VerificationProgressDialog.Status.TIMEOUT;
+        } else if (proved > 0) {
+            status = VerificationProgressDialog.Status.PARTIAL;
+        } else {
+            status = VerificationProgressDialog.Status.FAILED;
+        }
+        progress.markCompleted(sourceName, status, proved, total, null);
     }
 
     private static List<String> buildWpCommand(
@@ -1104,7 +1166,7 @@ public final class B2ACSLPipeline {
     private record ProcessResult(boolean completed, int exitCode, String output) {}
 
     private static ProcessResult runProcessWithCapturedOutput(
-            ProcessBuilder processBuilder, long timeout, TimeUnit timeoutUnit)
+            ProcessBuilder processBuilder, long timeout, TimeUnit timeoutUnit, Consumer<String> lineConsumer)
             throws IOException, InterruptedException {
         Process process = processBuilder.start();
         StringBuilder output = new StringBuilder();
@@ -1120,6 +1182,9 @@ public final class B2ACSLPipeline {
                                 while ((line = br.readLine()) != null) {
                                     output.append(line).append('\n');
                                     System.out.println(line);
+                                    if (lineConsumer != null) {
+                                        lineConsumer.accept(line);
+                                    }
                                 }
                             } catch (IOException e) {
                                 output.append("[B2ACSL] Falha ao ler saida do processo: ")
@@ -1142,7 +1207,12 @@ public final class B2ACSLPipeline {
     }
 
     private static void showVerificationReport(
-            String projectName, String analyzedFileName, long startNanos, VerificationReportData reportData) {
+            String projectName,
+            String analyzedFileName,
+            long startNanos,
+            VerificationReportData reportData,
+            VerificationProgressDialog progress) {
+        progress.close();
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
         FormalVerificationReportDialog.show(projectName, analyzedFileName, elapsedMs, reportData);
     }
@@ -1221,6 +1291,75 @@ public final class B2ACSLPipeline {
         String sepAfter = block.endsWith("\n") ? "" : "\n";
         String result = without.substring(0, insertAt) + sepBefore + block + sepAfter + without.substring(insertAt);
         Files.writeString(mergedC, result, StandardCharsets.UTF_8);
+    }
+
+    private static final Pattern TUPLE_TYPES_AXIOMATIC_HEADER =
+            Pattern.compile("axiomatic\\s+\\w*_tuple_types\\s*\\{");
+
+    /**
+     * Move cada bloco {@code axiomatic <machine>_tuple_types { ... }} (ver
+     * {@code AcslGenerator#generateAcsl}/{@code TupleCodomainTypeRegistry}, tipos de codomínio-tupla
+     * descobertos por máquina) para logo após {@code axiomatic new_types} — que
+     * {@link #moveNewTypesAxiomaticBlockAfterPreamble} já fixou no preâmbulo. Sem isto, o bloco fica
+     * onde {@link #reorderLibAxiomaticBlocksPerAcslLibIncludesOrder} o deixar (não é um nome
+     * conhecido de {@code AcslLibIncludes}, cai numa posição tardia arbitrária) — tarde demais para
+     * os blocos genéricos da lib (ex. {@code Relation_domain}, {@code tuple_couple}) que a
+     * referenciam já monomorphizados para este tipo, dando {@code no such type} no Frama-C.
+     */
+    private static void moveTupleCodomainAxiomaticBlocksAfterNewTypes(Path mergedC) throws IOException {
+        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
+        int newTypesIdx = content.indexOf(AXIOMATIC_NEW_TYPES_MARKER);
+        if (newTypesIdx < 0) {
+            return;
+        }
+        int newTypesOpenBrace = content.indexOf('{', newTypesIdx);
+        if (newTypesOpenBrace < 0) {
+            return;
+        }
+        int newTypesCloseBrace = findMatchingBrace(content, newTypesOpenBrace);
+        if (newTypesCloseBrace < 0) {
+            return;
+        }
+        int newTypesCommentEnd = content.indexOf("*/", newTypesCloseBrace);
+        if (newTypesCommentEnd < 0) {
+            return;
+        }
+        int insertAt = skipNewlineAfter(newTypesCommentEnd + 2, content);
+
+        boolean changed = false;
+        Matcher m = TUPLE_TYPES_AXIOMATIC_HEADER.matcher(content);
+        while (m.find(insertAt)) {
+            int headerIdx = m.start();
+            int blockStart = content.lastIndexOf("/*@", headerIdx);
+            if (blockStart < 0 || blockStart < insertAt) {
+                break;
+            }
+            int openBrace = content.indexOf('{', headerIdx);
+            if (openBrace < 0) break;
+            int closeBrace = findMatchingBrace(content, openBrace);
+            if (closeBrace < 0) break;
+            int commentEnd = content.indexOf("*/", closeBrace);
+            if (commentEnd < 0) break;
+            int blockEnd = skipNewlineAfter(commentEnd + 2, content);
+
+            if (blockStart == insertAt) {
+                insertAt = blockEnd;
+                m = TUPLE_TYPES_AXIOMATIC_HEADER.matcher(content);
+                continue;
+            }
+
+            String block = content.substring(blockStart, blockEnd);
+            String without = content.substring(0, blockStart) + content.substring(blockEnd);
+            String sepBefore = insertAt > 0 && without.charAt(insertAt - 1) != '\n' ? "\n" : "";
+            String sepAfter = block.endsWith("\n") ? "" : "\n";
+            content = without.substring(0, insertAt) + sepBefore + block + sepAfter + without.substring(insertAt);
+            insertAt = insertAt + sepBefore.length() + block.length() + sepAfter.length();
+            changed = true;
+            m = TUPLE_TYPES_AXIOMATIC_HEADER.matcher(content);
+        }
+        if (changed) {
+            Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+        }
     }
 
     /**
@@ -1582,14 +1721,8 @@ public final class B2ACSLPipeline {
             Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+([A-Za-z_]\\w*)\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
     private static final Pattern ACSL_OPERATION_CONTRACT_FUNCTION =
             Pattern.compile("(?m)^\\s*function\\s+([A-Za-z_]\\w*)\\s*:");
-    private static final Pattern GHOST_INITIALISATION_BLOCK_IN_CI =
-            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+\\w+__initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
-    private static final Pattern GHOST_INITIALISATION_BLOCK_IN_MERGED =
-            Pattern.compile("(?s)/\\*@\\s*ghost\\b.*?\\bvoid\\s+\\w+__initialisation\\s*\\([^;{}]*\\)\\s*;\\s*\\*/\\s*");
     private static final Pattern INITIALISATION_FUNCTION_DEFINITION =
             Pattern.compile("\\bvoid\\s+[A-Za-z_]\\w*__INITIALISATION\\s*\\([^;{}]*\\)\\s*\\{");
-    private static final Pattern INITIALISATION_GHOST_CALL_PATTERN =
-            Pattern.compile("/\\*@\\s*ghost\\s+\\w+__initialisation\\s*\\(\\s*\\)\\s*;\\s*\\*/");
 
     /**
      * Novo passo pré-WP: move especificações ghost de operações para imediatamente acima da função C
@@ -1847,117 +1980,6 @@ public final class B2ACSLPipeline {
     }
 
     /**
-     * Garante especificamente o bloco ghost de {@code initialisation} imediatamente acima de
-     * {@code Deck__INITIALISATION} (ou equivalente), mesmo se etapas anteriores falharem em casos
-     * degenerados do merge.
-     */
-    private static void enforceInitialisationGhostSpecPlacement(Path mergedC, Path ghostCi) throws IOException {
-        if (!Files.isRegularFile(ghostCi)) {
-            return;
-        }
-        String ghostText =
-                GhostOperationsCiGenerator.normalizeIntegerBoolComparisonsInMergedGhostSpecs(
-                        GhostOperationsCiGenerator.stripDummyPrefixForMergedGhostSpecs(
-                                Files.readString(ghostCi, StandardCharsets.UTF_8)));
-        Matcher gm = GHOST_INITIALISATION_BLOCK_IN_CI.matcher(ghostText);
-        if (!gm.find()) {
-            return;
-        }
-        String initGhostBlock = gm.group().stripTrailing() + "\n\n";
-
-        String merged = Files.readString(mergedC, StandardCharsets.UTF_8);
-        merged = GHOST_INITIALISATION_BLOCK_IN_MERGED.matcher(merged).replaceAll("");
-
-        int insertAt = findInitialisationAnchorBeforeDefinition(merged);
-        if (insertAt < 0) {
-            insertAt = findInitialisationAnchorFromGhostCall(merged);
-        }
-        if (insertAt < 0) {
-            Files.writeString(mergedC, merged, StandardCharsets.UTF_8);
-            return;
-        }
-        merged = merged.substring(0, insertAt) + initGhostBlock + merged.substring(insertAt);
-        Files.writeString(mergedC, merged, StandardCharsets.UTF_8);
-    }
-
-    private static int findInitialisationAnchorBeforeDefinition(String content) {
-        Matcher def = INITIALISATION_FUNCTION_DEFINITION.matcher(content);
-        if (!def.find()) {
-            return -1;
-        }
-        int idx = def.start();
-        int specStart = content.lastIndexOf("/*@", idx);
-        if (specStart >= 0) {
-            int specEnd = content.indexOf("*/", specStart);
-            if (specEnd >= 0 && specEnd < idx) {
-                String between = content.substring(specEnd + 2, idx).trim();
-                if (between.isEmpty()) {
-                    idx = specStart;
-                }
-            }
-        }
-        int lineStart = content.lastIndexOf('\n', idx);
-        return lineStart < 0 ? 0 : lineStart + 1;
-    }
-
-    /**
-     * Fallback robusto: localiza o marcador {@code ghost initialisation();} no corpo da função e
-     * recua até a definição de {@code __INITIALISATION}, ancorando acima da especificação contígua.
-     */
-    private static int findInitialisationAnchorFromGhostCall(String content) {
-        Matcher callMatcher = INITIALISATION_GHOST_CALL_PATTERN.matcher(content);
-        if (!callMatcher.find()) {
-            return -1;
-        }
-        int callIdx = callMatcher.start();
-        Matcher def = INITIALISATION_FUNCTION_DEFINITION.matcher(content);
-        int defStart = -1;
-        while (def.find()) {
-            if (def.start() > callIdx) {
-                break;
-            }
-            defStart = def.start();
-        }
-        if (defStart < 0) {
-            return -1;
-        }
-        int idx = defStart;
-        int specStart = content.lastIndexOf("/*@", idx);
-        if (specStart >= 0) {
-            int specEnd = content.indexOf("*/", specStart);
-            if (specEnd >= 0 && specEnd < idx) {
-                String between = content.substring(specEnd + 2, idx).trim();
-                if (between.isEmpty()) {
-                    idx = specStart;
-                }
-            }
-        }
-        int lineStart = content.lastIndexOf('\n', idx);
-        return lineStart < 0 ? 0 : lineStart + 1;
-    }
-
-    /**
-     * Garante a ordem canónica imediatamente antes da definição de função:
-     * bloco ghost da operação -> bloco de especificação da função -> definição com corpo.
-     */
-    private static void normalizeGhostBlockOrderBeforeFunctionDefinitions(Path mergedC) throws IOException {
-        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
-        Pattern p =
-                Pattern.compile(
-                        "(?s)(/\\*@\\s*(?!ghost\\b)[\\s\\S]*?\\*/\\s*)" // spec normal
-                                + "(/\\*@\\s*ghost\\b[\\s\\S]*?\\*/\\s*)" // spec ghost
-                                + "(void\\s+[A-Za-z_]\\w*__\\w+\\s*\\([^;{}]*\\)\\s*\\{)"); // definição
-        Matcher m = p.matcher(content);
-        StringBuilder sb = new StringBuilder();
-        while (m.find()) {
-            String replacement = m.group(2) + m.group(1) + m.group(3);
-            m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
-        }
-        m.appendTail(sb);
-        Files.writeString(mergedC, sb.toString(), StandardCharsets.UTF_8);
-    }
-
-    /**
      * Passo 6: reordena no merge os blocos {@code /*@ axiomatic X { ... } star-slash} que declaram
      * {@code logic} ou {@code predicate}, quando {@code X} pertence a
      * {@link AcslLibIncludes#orderedLibFunctionAxiomaticNames()}; coloca {@code mapping_function} após
@@ -2077,6 +2099,17 @@ public final class B2ACSLPipeline {
         return result.toString();
     }
 
+    /**
+     * Conjuntos lógicos globais da ACSL_Lib ({@code set_functions/variables.acsl}) referenciados
+     * como identificador NU (sem parênteses), ex.: {@code inclusion(s, BOOL)} — {@link
+     * #LEMMA_LIB_STYLE_CALL} só apanha dependências no estilo chamada ({@code nome(}), então um
+     * lema cuja única chamada permitida (ex.: {@code inclusion}) esconde uma dependência de {@code
+     * BOOL} escapava ao filtro por completo, sobrevivendo mesmo em projetos (ex.:
+     * BirthdayRegister) que nunca usam boolean em lado nenhum — "BOOL" nunca fica {@code allowed},
+     * mas o lema não era rejeitado, dando "unbound logic variable BOOL" no Frama-C.
+     */
+    private static final List<String> BARE_GLOBAL_LOGIC_SET_NAMES = List.of("BOOL", "NAT1", "NAT", "INT");
+
     private static boolean lemmaBodyUsesDisallowedLibCall(String admitLemmaChunk, Set<String> allowed) {
         Matcher m = LEMMA_LIB_STYLE_CALL.matcher(admitLemmaChunk);
         while (m.find()) {
@@ -2085,6 +2118,14 @@ public final class B2ACSLPipeline {
                 continue;
             }
             return true;
+        }
+        for (String bareName : BARE_GLOBAL_LOGIC_SET_NAMES) {
+            if (allowed.contains(bareName)) {
+                continue;
+            }
+            if (Pattern.compile("\\b" + bareName + "\\b").matcher(admitLemmaChunk).find()) {
+                return true;
+            }
         }
         return false;
     }
@@ -2830,17 +2871,4 @@ public final class B2ACSLPipeline {
         return findPreambleInsertIndex(cut);
     }
 
-    private static void deleteRecursive(Path dir) {
-        try {
-            if (Files.exists(dir)) {
-                try (var stream = Files.walk(dir)) {
-                    stream.sorted(Comparator.reverseOrder()).forEach(p -> {
-                        try {
-                            Files.deleteIfExists(p);
-                        } catch (IOException ignored) {}
-                    });
-                }
-            }
-        } catch (IOException ignored) {}
-    }
 }

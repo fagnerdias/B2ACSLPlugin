@@ -89,28 +89,6 @@ public record BxmlTranslateContext(
                 machineName);
     }
 
-    /**
-     * Retorna uma cópia deste contexto com os nomes de constantes lambda multi-argumento
-     * substituídos (ex.: {@code IS_VALID}, declarada via {@code ABSTRACT_CONSTANTS IS_VALID} +
-     * {@code PROPERTIES IS_VALID = %(dd,mm,aa).(...)}) — {@code f(a,b,c)} chamando um destes nomes
-     * traduz para a chamada direta multi-argumento {@code f(a, b, c)} (assinatura declarada por
-     * {@link BxmlConstantsAndProperties#formatAbstractConstantsBlock}), não para {@code
-     * function_apply(f, couple(couple(a,b),c))} (o caminho genérico para variáveis de tipo função/
-     * relação B).
-     */
-    public BxmlTranslateContext withMultiArgLambdaConstantNames(Set<String> names) {
-        return new BxmlTranslateContext(
-                types,
-                comprehensions,
-                variableLogicTypes,
-                lambdaRegistry,
-                enumValueRenames,
-                enumeratedSetRenames,
-                enumeratedSetNames,
-                names == null ? Set.of() : names,
-                machineName);
-    }
-
     private static String machineNameFrom(Element machineEl) {
         if (machineEl == null) {
             return "";

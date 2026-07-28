@@ -153,13 +153,6 @@ public final class BxmlImportsGraph {
         return importerToImported.getOrDefault(importer.trim(), List.of());
     }
 
-    public List<String> importersOf(String imported) {
-        if (imported == null) {
-            return List.of();
-        }
-        return importedToImporters.getOrDefault(imported.trim(), List.of());
-    }
-
     public boolean isReferencedByImports(String machineName) {
         return machineName != null && importedToImporters.containsKey(machineName.trim());
     }
@@ -171,9 +164,5 @@ public final class BxmlImportsGraph {
 
     public Map<String, List<String>> importerToImportedMap() {
         return importerToImported;
-    }
-
-    public Map<String, List<String>> importedToImportersMap() {
-        return importedToImporters;
     }
 }

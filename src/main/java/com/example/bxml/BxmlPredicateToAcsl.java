@@ -271,6 +271,19 @@ public final class BxmlPredicateToAcsl {
                 String rangeSet = functionArrowRangeSet(domRng[1], ctx);
                 return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")";
             }
+            // f : (S +-> T) — função PARCIAL (ACSL_Lib function_functions/is_partial.acsl); mesma
+            // forma que S --> T acima, só troca is_total_function por is_partial_function. Faltava
+            // por completo antes (nenhum isPartialFunctionArrowType existia): caía no fallback
+            // genérico belongs(f, translate(S +-> T)), e translateBinary não tem caso para "+->",
+            // deixando o operador B cru vazar para o texto ACSL ("[Syntax error] ->.").
+            if (BxmlExpressionToAcsl.isPartialFunctionArrowType(rightEl)) {
+                Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+                if (domRng[0] == null || domRng[1] == null) return "";
+                String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+                String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+                return "is_partial_function(" + fun + ", " + domainSet + ", " + rangeSet + ")";
+            }
             // f : (S -->> T) — função total surjetiva (ACSL_Lib function_functions/is_total.acsl + is_surjective.acsl)
             if (BxmlExpressionToAcsl.isTotalSurjectionArrowType(rightEl)) {
                 Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);

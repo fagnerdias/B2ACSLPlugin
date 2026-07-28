@@ -191,12 +191,6 @@ final class DummyGhostAxiomaticBuilder {
         return sb.toString();
     }
 
-    /** Símbolos da lib cujo uso ghost aparece como {@code dummy_<nome>}. */
-    static Set<String> libSymbolsUsedInGhostText(String ghostText) {
-        DummyGhostAxiomaticBuilder b = new DummyGhostAxiomaticBuilder(AcslLibSymbolDependencyMap.instance());
-        return new LinkedHashSet<>(b.collectGhostNameToLibSymbol(ghostText, Set.of()).values());
-    }
-
     private static void appendBaseDummyTypes(StringBuilder sb) {
         sb.append("        type DSet<A>;\n\n");
         sb.append("        type DTuple<A, B>;\n\n");
@@ -339,20 +333,45 @@ final class DummyGhostAxiomaticBuilder {
         return null;
     }
 
+    /**
+     * Alguns símbolos da lib têm MAIS DE UM ficheiro definidor — sobrecargas por aridade/tipo (ex.
+     * {@code becomes_element_of}: 3 args genérico {@code Function<A,B>} em {@code
+     * function_functions/}, 2 args concreto {@code integer} em {@code set_functions/}). Antes só se
+     * emitia a assinatura do {@code definingFile} "canónico" (o primeiro), então um projeto cujo
+     * texto ghost só usasse a OUTRA sobrecarga (ex.: {@code ee :: ELEM} → forma de 2 args) ficava
+     * sem a declaração dummy certa — Frama-C via a chamada de 2 args contra a assinatura de 3 args
+     * declarada e rejeitava com "incompatible types". Usa {@link
+     * AcslLibSymbolDependencyMap#allFilesForSymbol} (já usado para resolução de includes do lado
+     * não-ghost) e emite uma declaração dummy por ficheiro — ACSL permite sobrecarga por
+     * aridade/tipo, tal como o lado não-ghost já faz com dois blocos {@code axiomatic} separados.
+     */
     private String loadDummySignature(String libSymbol, String ghostName) {
-        String rel = symMap.definingFile(libSymbol);
-        if (rel == null || rel.isBlank()) {
+        List<String> files = symMap.allFilesForSymbol(libSymbol);
+        if (files.isEmpty()) {
             return null;
         }
-        String text = readLibFile(rel);
-        if (text == null || text.isBlank()) {
+        List<String> decls = new ArrayList<>();
+        for (String rel : files) {
+            if (rel == null || rel.isBlank()) {
+                continue;
+            }
+            String text = readLibFile(rel);
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            String signature = extractSignature(text, libSymbol);
+            if (signature == null || signature.isBlank()) {
+                continue;
+            }
+            String rewritten = rewriteSignatureForDummy(signature, libSymbol, ghostName);
+            if (rewritten != null && !rewritten.isBlank() && !decls.contains(rewritten)) {
+                decls.add(rewritten);
+            }
+        }
+        if (decls.isEmpty()) {
             return null;
         }
-        String signature = extractSignature(text, libSymbol);
-        if (signature == null || signature.isBlank()) {
-            return null;
-        }
-        return rewriteSignatureForDummy(signature, libSymbol, ghostName);
+        return String.join("\n\n        ", decls);
     }
 
     private static String extractSignature(String libText, String symbolName) {
@@ -477,6 +496,26 @@ final class DummyGhostAxiomaticBuilder {
         if (t.startsWith("Set<") && t.endsWith(">")) {
             String elem = t.substring(4, t.length() - 1).trim();
             return "DSet<" + elem + ">";
+        }
+        // Nome achatado (ver BxmlTypeRegistry#powCartesianProductToAcslRelationType /
+        // #flattenGenericTypeExprToIdentifier) para um codomínio tupla de N>=2 elementos, qualquer
+        // mistura de inteiro/booleano — tem múltiplos segmentos com "Tuple" maiúsculo, não pode
+        // passar por acslTypeParamName/split("_",2) como o caso simples abaixo; desfaz o
+        // achatamento e reconstrói a forma ghost diretamente (DTuple aninhado à esquerda, mesma
+        // associação usada no lado real). Ao contrário do lado real, o universo ghost aceita
+        // instanciação genérica inline sem precisar de nenhum alias pré-declarado.
+        Matcher tupleCodomainMatch = BxmlTypeRegistry.TUPLE_CODOMAIN_RELATION_NAME.matcher(t);
+        if (tupleCodomainMatch.matches()) {
+            String domain = tupleCodomainMatch.group(1);
+            List<String> leaves = new ArrayList<>();
+            for (String leaf : tupleCodomainMatch.group(3).split("_")) {
+                if (!leaf.isBlank()) leaves.add(leaf);
+            }
+            String codomain = leaves.get(0);
+            for (int i = 1; i < leaves.size(); i++) {
+                codomain = "DTuple<" + codomain + ", " + leaves.get(i) + ">";
+            }
+            return "DRelation<" + domain + ", " + codomain + " >";
         }
         if (t.startsWith("Relation_") || t.startsWith("Function_")) {
             String suffix =

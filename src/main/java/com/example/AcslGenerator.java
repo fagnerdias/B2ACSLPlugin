@@ -57,9 +57,8 @@ import com.example.model.Machine;
  * ({@link BxmlConstantsAndProperties}); em seguida
  * {@code include "connection.acsl"} se existir refinamento fundido na abstração ({@link BxmlConnectionAcsl},
  * só elo abstração→refinamento); na raiz de importação Frama-C ({@code SEES}/{@code IMPORTS}), um único
- * bloco {@code include "Dep.acsl"} com o fecho transitivo em ordem topológica
- * ({@link BxmlSetsTranslator#formatTransitiveDependencyIncludeBlock}); máquinas só dependentes não
- * repetem includes.
+ * bloco {@code include "Dep.acsl"} com o fecho transitivo em ordem topológica; máquinas só
+ * dependentes não repetem includes.
  *
  * <p>Variáveis: um bloco {@code axiomatic NomeMaquina_variables} por máquina (abstrata e cada
  * refinamento/implementação fundido), tipos inferidos quando possível ({@link BxmlMachineVariables});
@@ -230,6 +229,11 @@ public final class AcslGenerator {
         Files.createDirectories(outputDir);
         String baseName = machine.getMachineName();
         Path acslFile = outputDir.resolve(baseName + ".acsl");
+        // Âmbito desta chamada: tipos de codomínio-tupla (ver TupleCodomainTypeRegistry) descobertos
+        // ao inferir os tipos das variáveis desta máquina (mais abaixo) são escritos num .acsl
+        // próprio dela e incluídos localmente, perto do fim desta função — limpa aqui para não
+        // herdar entradas de uma máquina anterior processada no mesmo processo.
+        com.example.bxml.TupleCodomainTypeRegistry.clear();
         boolean libCarrier =
                 libIncludeCarrierMachineName != null
                         && !libIncludeCarrierMachineName.isBlank()
@@ -582,7 +586,8 @@ public final class AcslGenerator {
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
                             mel, ctx.comprehensions(), gluing, machineEl)
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames());
-            String valuesMerged = BxmlConstantsAndProperties.formatValuesBlock(mel, mctx);
+            String valuesMerged =
+                    BxmlConstantsAndProperties.formatValuesBlock(mel, mctx, machineEl);
             if (!valuesMerged.isBlank()) {
                 sb.append(valuesMerged);
                 if (!valuesMerged.endsWith("\n")) sb.append("\n");
@@ -693,7 +698,41 @@ public final class AcslGenerator {
             appendAcslMachineIncludes(legacy, importsIncludes);
             machineDependencyIncludes = legacy.toString();
         }
+        // Tipos de codomínio-tupla (ver TupleCodomainTypeRegistry/BxmlTypeRegistry#powCartesianProductToAcslRelationType)
+        // descobertos ao inferir os tipos das variáveis desta máquina — sem alias estático possível
+        // (explosão combinatória de tipo x aridade), escritos num .acsl próprio desta máquina e
+        // incluídos localmente (confirmado que -acsl-import aceita "type X = Y;" alcançado via
+        // include). Agrupados dentro de UM axiomatic block (em vez de declarações soltas): a
+        // impressão do Frama-C ("-acsl-import ... -print") reordena declarações "type X = Y;"
+        // soltas de forma NÃO DETERMINÍSTICA entre execuções (confirmado empiricamente: mesmo jar,
+        // mesmo input, Function_X às vezes impresso antes de Relation_X apesar do ficheiro-fonte
+        // sempre os ter na mesma ordem) — quando isso acontece, o Frama-C falha a unificar o
+        // sinónimo Function_X=Relation_X na resolução de sobrecarga de function_apply. Um
+        // axiomatic block imprime o seu conteúdo em ordem estável (como o "axiomatic new_types" da
+        // própria lib, nunca visto reordenado nas várias execuções desta sessão).
+        Map<String, String> extraTupleTypes =
+                com.example.bxml.TupleCodomainTypeRegistry.snapshotAndClear();
+        String tupleTypesInclude = "";
+        if (!extraTupleTypes.isEmpty()) {
+            Path tupleTypesFile = outputDir.resolve(baseName + "_tuple_types.acsl");
+            StringBuilder tupleTypesContent = new StringBuilder();
+            tupleTypesContent.append("axiomatic ").append(baseName).append("_tuple_types {\n");
+            for (Map.Entry<String, String> e : extraTupleTypes.entrySet()) {
+                tupleTypesContent
+                        .append("  type ")
+                        .append(e.getKey())
+                        .append(" = ")
+                        .append(e.getValue())
+                        .append(";\n");
+            }
+            tupleTypesContent.append("}\n");
+            Files.writeString(tupleTypesFile, tupleTypesContent.toString());
+            tupleTypesInclude = "include \"" + baseName + "_tuple_types.acsl\";\n";
+        }
         StringBuilder preambleIncludes = new StringBuilder();
+        if (!tupleTypesInclude.isEmpty()) {
+            preambleIncludes.append(tupleTypesInclude);
+        }
         if (!omitLibIncludesFromPreamble && !libIncludes.isEmpty()) {
             preambleIncludes.append(libIncludes);
         }
@@ -914,23 +953,6 @@ public final class AcslGenerator {
     }
 
 
-
-    /** Encontra todos os BXMLs de implementação/refinamento que têm {@code machineName} como abstração. */
-    private static List<Element> findImplementationElements(String machineName, Path bxmlDirectory) {
-        List<Element> out = new ArrayList<>();
-        try (var stream = Files.list(bxmlDirectory)) {
-            for (Path p : stream.filter(f -> f.getFileName().toString().endsWith(".bxml"))
-                    .sorted().toList()) {
-                try {
-                    Element el = parseMachineElement(p);
-                    if (getAbstractionReferenceName(el).map(machineName::equals).orElse(false)) {
-                        out.add(el);
-                    }
-                } catch (Exception ignored) {}
-            }
-        } catch (Exception ignored) {}
-        return out;
-    }
 
     /**
      * Varre todos os arquivos {@code *_i.bxml} no diretório e coleta valuations de constantes inteiras

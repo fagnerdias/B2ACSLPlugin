@@ -370,9 +370,20 @@ public final class GhostOperationsCiGenerator {
      * ({@code type DSet<A>;}, {@code type DTuple<A,B>;}, {@code predicate dummy_equals<A>(...);},
      * …) em toda chamada, só as linhas específicas da máquina (ex.: {@code logic DSet<integer>
      * dummy_purchases;}) é que mudam. Sem fundir, o Frama-C rejeitaria os tipos/símbolos genéricos
-     * repetidos como já declarados. A fusão une as linhas (deduplicadas por texto, ordem de
-     * primeira ocorrência preservada) de todos os blocos num único {@code axiomatic dummy_ghost}
-     * na posição do primeiro, removendo os restantes.
+     * repetidos como já declarados. A fusão une os PARÁGRAFOS (blocos separados por linha em
+     * branco — cada {@code type ...;}/{@code predicate ...;}/{@code logic ...;}/{@code axiom
+     * ...;} inteiro, mesmo multi-linha) de todos os blocos num único {@code axiomatic dummy_ghost}
+     * na posição do primeiro (deduplicados por texto, ordem de primeira ocorrência preservada),
+     * removendo os restantes.
+     *
+     * <p>Deduplicar por PARÁGRAFO (não por linha crua, como antes): um axioma multi-linha de
+     * conjunto enumerado com 2+ valores (ex.: {@code dummy_belongs(a,S) && dummy_belongs(b,S) &&
+     * \forall ...}) repete a linha solta {@code "&&"} entre cada conjunto — deduplicar por LINHA
+     * tratava essa {@code "&&"} repetida como "boilerplate já visto" e apagava-a, corrompendo
+     * silenciosamente a fórmula (sem erro de parse na maior parte dos casos, mas aqui gerava
+     * {@code "unexpected token '\forall'"} por faltar o conector antes dele). Só disparava com 2+
+     * blocos a fundir ({@code spans.size() > 1}, i.e. 2+ máquinas com abstração ghost no mesmo
+     * projeto) — daí nunca ter aparecido antes desta sessão.
      */
     public static void mergeDuplicateDummyGhostBlocks(Path ghostCiPath) throws IOException {
         if (!Files.isRegularFile(ghostCiPath)) {
@@ -381,13 +392,13 @@ public final class GhostOperationsCiGenerator {
         String content = Files.readString(ghostCiPath, StandardCharsets.UTF_8);
         Matcher m = DUMMY_GHOST_BLOCK.matcher(content);
         List<int[]> spans = new ArrayList<>();
-        Set<String> uniqueLines = new LinkedHashSet<>();
+        Set<String> uniqueParagraphs = new LinkedHashSet<>();
         while (m.find()) {
             spans.add(new int[] {m.start(), m.end()});
-            for (String line : m.group(1).split("\n")) {
-                String trimmed = line.strip();
+            for (String paragraph : m.group(1).split("\n\\s*\n")) {
+                String trimmed = paragraph.strip();
                 if (!trimmed.isEmpty()) {
-                    uniqueLines.add(trimmed);
+                    uniqueParagraphs.add(trimmed);
                 }
             }
         }
@@ -396,8 +407,8 @@ public final class GhostOperationsCiGenerator {
         }
         StringBuilder merged = new StringBuilder();
         merged.append("/*@\n    axiomatic dummy_ghost {\n\n");
-        for (String line : uniqueLines) {
-            merged.append("        ").append(line).append("\n\n");
+        for (String paragraph : uniqueParagraphs) {
+            merged.append("        ").append(paragraph).append("\n\n");
         }
         merged.append("    }\n*/\n");
 
@@ -539,10 +550,6 @@ public final class GhostOperationsCiGenerator {
     private static final Pattern SET_COMPREHENSION_INDEX =
             Pattern.compile("dummy_set_comprehension_(\\d+)");
 
-    /** ACSL sem prefixo ghost; no {@code dummy_ghost} usam-se {@link #dummySetComprehensionRef}. */
-    private static final Pattern SET_COMPREHENSION_INDEX_UNPREFIXED =
-            Pattern.compile("^(?:\\w+__)?set_comprehension_(\\d+)$");
-
     /** Para contar índices em ensures completos (subexpressão). */
     private static final Pattern SET_COMPREHENSION_INDEX_IN_TEXT =
             Pattern.compile("(?:\\w+__)?set_comprehension_(\\d+)");
@@ -609,23 +616,6 @@ public final class GhostOperationsCiGenerator {
             }
         }
         return m;
-    }
-
-    /**
-     * Segundo argumento de {@code domain_restriction(..., S)} no axiomatic ghost: nomes de set
-     * comprehension vêm do tradutor como {@code set_comprehension_k}; aqui alinham-se a
-     * {@code dummy_set_comprehension_k} declarado em {@link DummyGhostAxiomaticBuilder}.
-     */
-    private static String dummySetComprehensionRef(String domainRestrictionSecondArg) {
-        if (domainRestrictionSecondArg == null) {
-            return "";
-        }
-        String s = domainRestrictionSecondArg.trim();
-        Matcher um = SET_COMPREHENSION_INDEX_UNPREFIXED.matcher(s);
-        if (um.matches()) {
-            return "dummy_" + s;
-        }
-        return s;
     }
 
     /** Nomes em {@code Concrete_Constants} (ordem de declaração no BXML). */
@@ -1942,25 +1932,6 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Nomes de variáveis abstratas a partir das declarações {@code //@ ghost T ghost_<v>;} em
-     * {@code ghost_operations.ci}.
-     */
-    public static List<String> listAbstractVarNamesFromGhostCi(Path ghostCi) throws IOException {
-        if (ghostCi == null || !Files.isRegularFile(ghostCi)) {
-            return List.of();
-        }
-        Pattern decl = Pattern.compile("//@\\s+ghost\\s+\\w+\\s+ghost_([A-Za-z_]\\w*)\\s*;");
-        List<String> out = new ArrayList<>();
-        for (String line : Files.readAllLines(ghostCi, StandardCharsets.UTF_8)) {
-            Matcher m = decl.matcher(line.trim());
-            if (m.find()) {
-                out.add(m.group(1));
-            }
-        }
-        return out;
-    }
-
-    /**
      * Conjuntos enumerados B → {@code dummy_<Maquina>__<Conjunto>} nos {@code ensures} ghost (ex.
      * {@code belongs(v, PRESSURE)} → {@code belongs(v, dummy_Airlock_pressure_bs__PRESSURE)}).
      */
@@ -2479,31 +2450,6 @@ public final class GhostOperationsCiGenerator {
             case "real" -> "double";
             default -> "int";
         };
-    }
-
-    /**
-     * Gera bloco {@code axiomatic MachineName_abstract_vars} com declarações
-     * {@code logic TYPE v reads dummy_ghost_v;} para cada variável abstrata.
-     * Necessário em {@code ghost_operations.ci} para que as variáveis lógicas
-     * fiquem em escopo ao analisar os contratos das funções ghost.
-     */
-    private static String formatAbstractVarsAxiomaticBlock(
-            String machineName, List<String> abstractVarNames, Map<String, String> varTypes) {
-        if (abstractVarNames == null || abstractVarNames.isEmpty()) return "";
-        StringBuilder sb = new StringBuilder();
-        sb.append("/*@\n");
-        sb.append("    axiomatic ").append(machineName).append("_abstract_vars {\n");
-        for (String v : abstractVarNames) {
-            // Use ghost_v (C ghost variable declared in this file) as reads dependency,
-            // since dummy_ghost_v (from Mult.acsl) is not in scope here.
-            sb.append("        logic ")
-              .append(ghostLogicTypeFromInferred(varTypes.get(v)))
-              .append(" ").append(v)
-              .append(" reads ghost_").append(v).append(";\n");
-        }
-        sb.append("    }\n");
-        sb.append("*/\n");
-        return sb.toString();
     }
 
     /** Tipo {@code logic} ACSL para {@code dummy_ghost_<v>} / variáveis ghost. */

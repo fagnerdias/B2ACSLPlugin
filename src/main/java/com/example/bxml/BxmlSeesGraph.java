@@ -121,14 +121,6 @@ public final class BxmlSeesGraph {
         return viewerToSeen.getOrDefault(viewer.trim(), List.of());
     }
 
-    /** Máquinas abstratas que declaram {@code SEES} para {@code seen} (pode ser vazio). */
-    public List<String> viewersOf(String seen) {
-        if (seen == null) {
-            return List.of();
-        }
-        return seenToViewers.getOrDefault(seen.trim(), List.of());
-    }
-
     /** {@code true} se alguma máquina do projeto a referencia em {@code <Sees>}. */
     public boolean isReferencedBySees(String machineName) {
         return machineName != null && seenToViewers.containsKey(machineName.trim());
@@ -167,9 +159,5 @@ public final class BxmlSeesGraph {
 
     public Map<String, List<String>> viewerToSeenMap() {
         return viewerToSeen;
-    }
-
-    public Map<String, List<String>> seenToViewersMap() {
-        return seenToViewers;
     }
 }

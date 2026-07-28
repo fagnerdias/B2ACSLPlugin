@@ -1,12 +1,10 @@
 package com.example.bxml;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -297,22 +295,6 @@ public final class BxmlComprehensionRegistry {
         return sb.toString();
     }
 
-    /** Regista um fingerprint por índice global (após {@link #assignDedupIndices()}). */
-    public void collectDistinctFingerprints(Set<String> target) {
-        int max = maxIndex();
-        for (int i = 1; i <= max; i++) {
-            Element qs = firstWithIndex(i);
-            if (qs == null) {
-                continue;
-            }
-            BxmlTypeRegistry types = elementTypes.get(qs);
-            if (types == null) {
-                continue;
-            }
-            target.add(axiomFingerprint(qs, types, gluingSubstitutions));
-        }
-    }
-
     private int maxIndex() {
         return elementToIndex.values().stream().mapToInt(Integer::intValue).max().orElse(0);
     }
@@ -402,39 +384,6 @@ public final class BxmlComprehensionRegistry {
         sb.append(axioms);
         sb.append("}\n");
         return sb.toString();
-    }
-
-    /** Como {@link #formatAxiomaticBlock(String, BxmlTranslateContext)} sem tipos de variáveis (só para testes / fallback). */
-    public String formatAxiomaticBlock(String machineName) {
-        return formatAxiomaticBlock(machineName, null);
-    }
-
-    /**
-     * Se <strong>todos</strong> os conjuntos desta máquina já estiverem representados em {@code seen}
-     * (mesmo fingerprint que noutro bloco já emitido), não gera o bloco {@code axiomatic}.
-     * Caso contrário gera o bloco completo e regista os fingerprints em {@code seen}.
-     */
-    public String formatAxiomaticBlockUnlessFullyCovered(String machineName, Set<String> seen) {
-        int maxIdx = maxIndex();
-        if (maxIdx == 0) return "";
-        Set<String> local = new HashSet<>();
-        for (int idx = 1; idx <= maxIdx; idx++) {
-            Element qs = firstWithIndex(idx);
-            if (qs == null) {
-                continue;
-            }
-            BxmlTypeRegistry types = elementTypes.get(qs);
-            if (types == null) {
-                continue;
-            }
-            local.add(axiomFingerprint(qs, types, gluingSubstitutions));
-        }
-        if (!local.isEmpty() && seen.containsAll(local)) {
-            return "";
-        }
-        String out = formatAxiomaticBlock(machineName, null);
-        seen.addAll(local);
-        return out;
     }
 
     /** Contexto para traduzir o predicado da compreensão com os mesmos {@code logic} que o resto da máquina. */

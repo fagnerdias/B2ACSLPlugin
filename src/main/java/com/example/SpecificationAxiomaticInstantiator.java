@@ -55,6 +55,20 @@ public final class SpecificationAxiomaticInstantiator {
     private static final Pattern LEGACY_PAIR_TYPE = Pattern.compile(
             "^(?:Relation|Function)_([a-z][a-z0-9_]*?)_([a-z][a-z0-9_]*)$");
 
+    /** Ver {@link com.example.bxml.BxmlTypeRegistry#TUPLE_CODOMAIN_RELATION_NAME}. */
+    private static final Pattern TUPLE_CODOMAIN_RELATION_NAME =
+            com.example.bxml.BxmlTypeRegistry.TUPLE_CODOMAIN_RELATION_NAME;
+
+    private static int countOccurrences(String haystack, String needle) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) >= 0) {
+            count++;
+            idx += needle.length();
+        }
+        return count;
+    }
+
     private SpecificationAxiomaticInstantiator() {}
 
     /** Normaliza {@code int} → {@code integer} para nomes de segmento simples. */
@@ -138,6 +152,33 @@ public final class SpecificationAxiomaticInstantiator {
                                 && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
                             pairs.add(p);
                         }
+                    }
+                } else if (!t.contains("<") && TUPLE_CODOMAIN_RELATION_NAME.matcher(t).matches()) {
+                    // Nome achatado gerado dinamicamente por BxmlTypeRegistry#powCartesianProductToAcslRelationType
+                    // para um codomínio tupla de N>=2 elementos (qualquer mistura de inteiro/booleano,
+                    // ex.: "Relation_integer_Tuple_Tuple_integer_integer_integer" para N=3 all-integer,
+                    // ou "Relation_integer_Tuple_boolean_integer" para N=2 misto) — não bate com
+                    // LEGACY_PAIR_TYPE (que só aceita segmentos minúsculos; "Tuple" é maiúsculo de
+                    // propósito para nunca ser confundido com esse caminho). Desfaz o achatamento:
+                    // conta quantos "_Tuple" existem (= aridade do codomínio - 1) e os tipos-folha
+                    // seguintes (integer/boolean, na ordem), reconstruindo o tipo aninhado à
+                    // esquerda que os blocos axiomatic<A,B> da lib esperam.
+                    Matcher tcm = TUPLE_CODOMAIN_RELATION_NAME.matcher(t);
+                    tcm.matches();
+                    String domain = tcm.group(1);
+                    int nestingCount = countOccurrences(tcm.group(2), "_Tuple");
+                    List<String> leaves = new ArrayList<>();
+                    for (String leaf : tcm.group(3).split("_")) {
+                        if (!leaf.isBlank()) leaves.add(leaf);
+                    }
+                    if (nestingCount == leaves.size() - 1) {
+                        String codomain = leaves.get(0);
+                        for (int i = 1; i < leaves.size(); i++) {
+                            codomain = "Tuple<" + codomain + "," + leaves.get(i) + ">";
+                        }
+                        pairs.add(List.of(domain, codomain));
+                        setElem.add(domain);
+                        setElem.addAll(leaves);
                     }
                 } else if (!t.contains("<") && (t.startsWith("Relation_") || t.startsWith("Function_"))) {
                     // Tipos legados no formato underscore: Relation_int_int, Function_integer_boolean, etc.
@@ -372,25 +413,6 @@ public final class SpecificationAxiomaticInstantiator {
     /** Padrão de início de nova declaração lógica (predicate / logic / axiom / lemma). */
     private static final Pattern DECL_START = Pattern.compile(
             "^\\s*(?:admit\\s+)?(?:predicate|logic|axiom|lemma)\\s+");
-
-    /**
-     * Divide o corpo do axiomatic em grupos de linhas, cada grupo pertencendo a uma aridade
-     * de parâmetros de tipo.  Declarações multi-linha são mantidas unidas antes da
-     * detecção de aridade.
-     */
-    private static Map<Integer, List<String>> groupLinesByArity(String body) {
-        // 1. Agrupa linhas em declarações lógicas completas
-        List<List<String>> logicalDecls = splitIntoLogicalDeclarations(body);
-
-        // 2. Para cada declaração completa, detecta a aridade e acumula as linhas
-        Map<Integer, List<String>> groups = new LinkedHashMap<>();
-        for (List<String> declLines : logicalDecls) {
-            String full = String.join("\n", declLines);
-            int arity = detectArityFromFullDecl(full);
-            groups.computeIfAbsent(arity, k -> new ArrayList<>()).addAll(declLines);
-        }
-        return groups;
-    }
 
     /**
      * Divide as linhas do corpo em segmentos onde cada segmento é uma declaração lógica
@@ -781,13 +803,33 @@ public final class SpecificationAxiomaticInstantiator {
             blockEnd++;
         }
 
+        String outsideBlock = content.substring(0, blockStart) + content.substring(blockEnd);
+        Set<String> alreadyDeclaredElsewhere = standaloneTypeDeclNames(outsideBlock);
+
         return content.substring(0, blockStart)
-                + buildConcreteNewTypesBlock(renames, ctx)
+                + buildConcreteNewTypesBlock(renames, ctx, alreadyDeclaredElsewhere)
                 + content.substring(blockEnd);
     }
 
+    /**
+     * Nomes de {@code type NAME = ...;} declarados FORA de {@code axiomatic new_types} (ex.:
+     * o {@code .acsl} próprio de uma máquina com um tipo de codomínio-tupla, incluído via
+     * {@code include}; ver {@link com.example.bxml.TupleCodomainTypeRegistry}). Reemitir estes
+     * nomes dentro do bloco reconstruído duplicaria a declaração no merged_code.c.
+     */
+    private static final Pattern STANDALONE_TYPE_DECL = Pattern.compile("\\btype\\s+(\\w+)\\s*=");
+
+    private static Set<String> standaloneTypeDeclNames(String text) {
+        Set<String> names = new LinkedHashSet<>();
+        Matcher m = STANDALONE_TYPE_DECL.matcher(text);
+        while (m.find()) {
+            names.add(m.group(1));
+        }
+        return names;
+    }
+
     private static String buildConcreteNewTypesBlock(
-            Map<String, String> renames, MonoContext ctx) {
+            Map<String, String> renames, MonoContext ctx, Set<String> alreadyDeclaredElsewhere) {
 
         // (comentários de instâncias removidos: // ... dentro de /*@ */ confundia o parser do Frama-C)
 
@@ -828,12 +870,19 @@ public final class SpecificationAxiomaticInstantiator {
                 String inner = entry.getKey();   // ex.: "integer, integer"
                 RelFun rf = entry.getValue();
 
-                if (rf.relName() != null) {
+                // Já declarado standalone fora deste bloco (ex.: codomínio-tupla no .acsl próprio
+                // da máquina — ver TupleCodomainTypeRegistry/AcslGenerator#generateAcsl, necessário
+                // porque -acsl-import não aceita instanciação genérica inline num ficheiro de
+                // topo). Reemitir aqui duplicaria a declaração no merged_code.c.
+                boolean relAlready = rf.relName() != null && alreadyDeclaredElsewhere.contains(rf.relName());
+                boolean funAlready = rf.funName() != null && alreadyDeclaredElsewhere.contains(rf.funName());
+
+                if (rf.relName() != null && !relAlready) {
                     String rhs = fixDoubleAngle("Set<Tuple<" + inner + "> >");
                     sb.append("  type ").append(rf.relName())
                             .append(" = ").append(rhs).append(" ;\n");
                 }
-                if (rf.funName() != null) {
+                if (rf.funName() != null && !funAlready) {
                     String rhs = rf.relName() != null ? rf.relName()
                             : fixDoubleAngle("Set<Tuple<" + inner + "> >");
                     sb.append("  type ").append(rf.funName())
