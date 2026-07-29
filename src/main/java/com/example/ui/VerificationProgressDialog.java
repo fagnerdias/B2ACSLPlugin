@@ -47,7 +47,7 @@ public final class VerificationProgressDialog {
         PENDING(" Pending", new Color(120, 120, 120)),
         RUNNING(" Running…", new Color(30, 90, 200)),
         PROVED(" Proved", new Color(28, 130, 48)),
-        PARTIAL(" Partial", new Color(176, 128, 18)),
+        PARTIAL(" Partial", new Color(255, 127, 36)),
         TIMEOUT(" Timeout", new Color(176, 128, 18)),
         FAILED(" Failed", new Color(180, 36, 36));
 

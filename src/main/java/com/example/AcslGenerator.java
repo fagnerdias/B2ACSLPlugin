@@ -377,6 +377,7 @@ public final class AcslGenerator {
                         initGhostAssert,
                         dummyGhostVarsForInit,
                         initBare.loopSpecs(),
+                        initBare.explicitLoops(),
                         machineHasNoImports);
         InitialisationAcsl init =
                 isAbstraction
@@ -892,6 +893,7 @@ public final class AcslGenerator {
                 init.includeGhostBehaviorAssert(),
                 init.dummyGhostEnsureVarNames(),
                 init.loopSpecs(),
+                init.explicitLoops(),
                 init.emitMinimalContract());
     }
 

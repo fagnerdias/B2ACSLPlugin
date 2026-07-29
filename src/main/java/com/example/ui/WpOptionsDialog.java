@@ -94,7 +94,7 @@ public final class WpOptionsDialog {
 
             JCheckBox loopSimplificationBox = new JCheckBox("Enable Loop Simplification", false);
             JCheckBox smokeTestsBox = new JCheckBox("Enable Smoke Tests (-wp-smoke-tests)", true);
-            JCheckBox counterExamplesBox = new JCheckBox("Counter Examples (-wp-counter-examples)", false);
+            JCheckBox counterExamplesBox = new JCheckBox("Counter Examples (-wp-counter-examples)", true);
             JCheckBox splitGoalsBox = new JCheckBox("Split Goals (-wp-split)", false);
             JCheckBox verifyPerOperationBox =
                     new JCheckBox("Verify each operation separately (-wp-fct)", true);

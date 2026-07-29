@@ -446,7 +446,7 @@ public final class BxmlOperationsTranslator {
                 implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
                 if (implOp != null) {
                     loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(
-                            implOp, ctx, machineEl, importedOpAssigns);
+                            implOp, ctx, machineEl, importedOpAssigns, bxmlDirectory);
                 }
             }
             if (importedOpAssigns != null && !importedOpAssigns.isEmpty() && implOp != null) {

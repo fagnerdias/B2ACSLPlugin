@@ -958,6 +958,19 @@ public final class BxmlMachineVariables {
      */
     public static String qualifyLoopAssignTarget(
             String varName, String machineName, Element abstractMachineEl, BxmlTranslateContext ctx) {
+        return qualifyLoopAssignTarget(varName, machineName, abstractMachineEl, ctx, null);
+    }
+
+    /**
+     * Como acima, mas com {@code bxmlDirectory}: quando o domínio do array é um conjunto nomeado
+     * valorado só numa máquina VISTA (SEES) — ex. {@code PERSON} valorado em {@code ContextI}, visto
+     * por {@code RegisterI} — resolve o intervalo exato ({@code low .. high}) em vez de cair para
+     * {@code [..]} (correto para WP, mas menos legível que a faixa explícita já usada no {@code
+     * assigns} da função).
+     */
+    public static String qualifyLoopAssignTarget(
+            String varName, String machineName, Element abstractMachineEl, BxmlTranslateContext ctx,
+            Path bxmlDirectory) {
         if (varName == null || varName.isBlank() || machineName == null || abstractMachineEl == null) {
             return varName;
         }
@@ -965,7 +978,8 @@ public final class BxmlMachineVariables {
             return varName;
         }
         String base = machineName.trim() + "__" + varName;
-        String ranged = implementationAssignTargetWithRange(base, varName, abstractMachineEl, ctx);
+        String ranged =
+                implementationAssignTargetWithRange(base, varName, abstractMachineEl, ctx, bxmlDirectory);
         return ranged != null ? ranged : base;
     }
 

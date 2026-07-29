@@ -88,10 +88,22 @@ public final class BxmlInitialisationTranslator {
                 ? detectAllLoopSpecs(
                         firstSubChild(src.initSource()), src.initOwnerMachine(), ctx, bxmlDirectory)
                 : List.of();
+        // WHILE explícito (com INVARIANT/VARIANT do usuário) na inicialização — ex.: um array
+        // preenchido por um laço escrito à mão em vez do açúcar `ARRAY := DOMAIN*{VALUE}` acima.
+        // Só verificado quando não há loopSpecs: os dois padrões nunca coincidem no mesmo nó (um é
+        // Assignement_Sub, o outro é While), e nenhum exemplo atual mistura os dois numa mesma
+        // Initialisation — ver BxmlLoopTranslator#translateLoopsFromSubstitution.
+        List<BxmlLoopTranslator.LoopContract> explicitLoops =
+                (src.initSource() != null && loopSpecs.isEmpty())
+                        ? BxmlLoopTranslator.translateLoopsFromSubstitution(
+                                firstSubChild(src.initSource()), ctx, src.initOwnerMachine(), null,
+                                bxmlDirectory)
+                        : List.of();
 
         String functionName = machineName + "__INITIALISATION";
         return new InitialisationAcsl(
-                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopSpecs, false);
+                functionName, ensures, new ArrayList<>(additionalAssignTargets), false, List.of(), loopSpecs,
+                explicitLoops, false);
     }
 
     private record InitSource(Element initSource, Element initOwnerMachine) {}
@@ -1151,6 +1163,14 @@ public final class BxmlInitialisationTranslator {
              */
             List<CartesianProductLoopSpec> loopSpecs,
             /**
+             * Loops {@code WHILE} explícitos (com {@code INVARIANT}/{@code VARIANT} escritos pelo
+             * usuário em B) encontrados na inicialização — ao contrário de {@code loopSpecs}, que só
+             * cobre o açúcar {@code ARRAY := DOMAIN * {VALUE}}. Populado só quando {@code loopSpecs}
+             * está vazio (os dois padrões nunca coincidem no mesmo nó — ver
+             * {@link BxmlLoopTranslator#translateLoopsFromSubstitution}).
+             */
+            List<BxmlLoopTranslator.LoopContract> explicitLoops,
+            /**
              * {@code true} para máquinas que não importam outras máquinas: emite um contrato mínimo
              * com {@code assigns \nothing;} mesmo que não haja outros conteúdos.
              */
@@ -1160,6 +1180,7 @@ public final class BxmlInitialisationTranslator {
             dummyGhostEnsureVarNames =
                     dummyGhostEnsureVarNames == null ? List.of() : List.copyOf(dummyGhostEnsureVarNames);
             loopSpecs = loopSpecs == null ? List.of() : List.copyOf(loopSpecs);
+            explicitLoops = explicitLoops == null ? List.of() : List.copyOf(explicitLoops);
         }
 
         public String toContractText() {
@@ -1167,6 +1188,7 @@ public final class BxmlInitialisationTranslator {
                     || !dummyGhostEnsureVarNames.isEmpty()
                     || !assignsTargets.isEmpty()
                     || !loopSpecs.isEmpty()
+                    || !explicitLoops.isEmpty()
                     || includeGhostBehaviorAssert;
             if (!hasContent && !emitMinimalContract) return "";
             StringBuilder sb = new StringBuilder();
@@ -1201,6 +1223,18 @@ public final class BxmlInitialisationTranslator {
                 sb.append("        loop assigns ").append(v).append(", ")
                   .append(arr).append("[").append(lo).append(" .. ").append(hi).append("];\n");
                 sb.append("        loop variant ").append(hi).append(" + 1 - ").append(v).append(";\n");
+            }
+            for (BxmlLoopTranslator.LoopContract loop : explicitLoops) {
+                sb.append("    at loop ").append(loop.index()).append(":\n");
+                if (loop.invariant() != null && !loop.invariant().isBlank()) {
+                    sb.append("        loop invariant (").append(loop.invariant()).append(");\n");
+                }
+                if (!loop.assigns().isEmpty()) {
+                    sb.append("        loop assigns ").append(String.join(", ", loop.assigns())).append(";\n");
+                }
+                if (loop.variant() != null && !loop.variant().isBlank()) {
+                    sb.append("        loop variant (").append(loop.variant()).append(");\n");
+                }
             }
             if (includeGhostBehaviorAssert) {
                 String machinePart = functionName.toLowerCase().replace("__initialisation", "");
