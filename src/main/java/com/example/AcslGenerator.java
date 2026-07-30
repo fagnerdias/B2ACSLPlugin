@@ -277,24 +277,6 @@ public final class AcslGenerator {
         sharedComprehensions.assignDedupIndices();
 
         Path bxmlDirectory = bxmlPath.getParent();
-        BxmlTranslateContext ctx =
-                BxmlTranslateContext.forMachineWithSharedComprehensions(
-                        machineEl, sharedComprehensions, gluing)
-                        .withLambdaRegistry(new LambdaFunctionRegistry())
-                        .withEnumRenames(
-                                BxmlSetsTranslator.buildEnumRenamesWithSees(
-                                        machineEl, mergedMachineElements, bxmlDirectory))
-                        .withEnumeratedSetRenames(
-                                BxmlSetsTranslator.buildEnumeratedSetRenamesWithSees(
-                                        machineEl, mergedMachineElements, bxmlDirectory))
-                        .withEnumeratedSetNames(
-                                BxmlSetsTranslator.buildEnumeratedSetNames(machineEl));
-
-        List<String> allInvariantPredicateNames =
-                listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
-        List<String> importedMachineNames =
-                com.example.bxml.BxmlSetsTranslator.listImportedMachineNamesFromChain(
-                        machineEl, mergedMachineElements);
         // IMPORTS é transitivo em B: se esta máquina importa X e X importa Y, esta máquina também
         // depende do invariante e do assigns de Y (X's próprias operações já a chamam
         // internamente). listImportedMachineNamesFromChain só olha um nível — usado aqui só para
@@ -315,6 +297,27 @@ public final class AcslGenerator {
         LinkedHashSet<String> invariantSourceMachineNames =
                 new LinkedHashSet<>(transitiveImportedMachineNames);
         invariantSourceMachineNames.addAll(transitiveSeenMachineNames);
+        BxmlTranslateContext ctx =
+                BxmlTranslateContext.forMachineWithSharedComprehensions(
+                        machineEl, sharedComprehensions, gluing)
+                        .withLambdaRegistry(new LambdaFunctionRegistry())
+                        .withEnumRenames(
+                                BxmlSetsTranslator.buildEnumRenamesWithSees(
+                                        machineEl, mergedMachineElements, bxmlDirectory))
+                        .withEnumeratedSetRenames(
+                                BxmlSetsTranslator.buildEnumeratedSetRenamesWithSees(
+                                        machineEl, mergedMachineElements, bxmlDirectory))
+                        .withEnumeratedSetNames(
+                                BxmlSetsTranslator.buildEnumeratedSetNames(machineEl))
+                        .withCrossMachineVariableNames(
+                                BxmlMachineVariables.transitiveCrossMachineVariableNames(
+                                        invariantSourceMachineNames, bxmlDirectory));
+
+        List<String> allInvariantPredicateNames =
+                listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
+        List<String> importedMachineNames =
+                com.example.bxml.BxmlSetsTranslator.listImportedMachineNamesFromChain(
+                        machineEl, mergedMachineElements);
         List<String> importedInvariantPredicateNames =
                 BxmlInvariantTranslator.listImportedMachineInvariantPredicateNames(
                         new ArrayList<>(invariantSourceMachineNames), bxmlDirectory);
@@ -525,7 +528,9 @@ public final class AcslGenerator {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
                             mel, ctx.comprehensions(), gluing, machineEl)
-                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames());
+                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
+                    .withLambdaRegistry(ctx.lambdaRegistry())
+                    .withCrossMachineVariableNames(ctx.crossMachineVariableNames());
             String varsMerged =
                     BxmlMachineVariables.formatAxiomaticBlock(
                             mel, mctx, baseName, refinementChainParent, gluing, bxmlDirectory);
@@ -560,7 +565,9 @@ public final class AcslGenerator {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
                             mel, ctx.comprehensions(), gluing, machineEl)
-                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames());
+                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
+                    .withLambdaRegistry(ctx.lambdaRegistry())
+                    .withCrossMachineVariableNames(ctx.crossMachineVariableNames());
             String constsMerged = BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx);
             if (!constsMerged.isBlank()) {
                 sb.append(constsMerged);
@@ -586,7 +593,9 @@ public final class AcslGenerator {
             BxmlTranslateContext mctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
                             mel, ctx.comprehensions(), gluing, machineEl)
-                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames());
+                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
+                    .withLambdaRegistry(ctx.lambdaRegistry())
+                    .withCrossMachineVariableNames(ctx.crossMachineVariableNames());
             String valuesMerged =
                     BxmlConstantsAndProperties.formatValuesBlock(mel, mctx, machineEl);
             if (!valuesMerged.isBlank()) {
@@ -606,7 +615,8 @@ public final class AcslGenerator {
         }
         appendMergedInvariantPredicatesOnly(
                 sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
-                ctx.enumeratedSetRenames(), mergedVariableRenames);
+                ctx.enumeratedSetRenames(), mergedVariableRenames, ctx.lambdaRegistry(),
+                ctx.crossMachineVariableNames());
 
         // 2b) Lambdas (emissão tardia, após variáveis): lambda_functions pode referenciar variáveis
         // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima.
@@ -810,7 +820,9 @@ public final class AcslGenerator {
             BxmlComprehensionRegistry sharedComprehensions,
             Element rootAbstractMachineEl,
             Map<String, String> enumeratedSetRenames,
-            Map<Element, Map<String, String>> variableRenamesByMachine) {
+            Map<Element, Map<String, String>> variableRenamesByMachine,
+            LambdaFunctionRegistry lambdaRegistry,
+            Set<String> crossMachineVariableNames) {
         if (mergedMachineRoots == null || mergedMachineRoots.isEmpty()) {
             return;
         }
@@ -818,7 +830,9 @@ public final class AcslGenerator {
             BxmlTranslateContext ctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
                             mel, sharedComprehensions, gluing, rootAbstractMachineEl)
-                    .withEnumeratedSetRenames(enumeratedSetRenames);
+                    .withEnumeratedSetRenames(enumeratedSetRenames)
+                    .withLambdaRegistry(lambdaRegistry)
+                    .withCrossMachineVariableNames(crossMachineVariableNames);
             String inv = BxmlInvariantTranslator.formatInvariantPredicates(mel, ctx);
             if (inv.isBlank()) continue;
             Map<String, String> renameMap = variableRenamesByMachine.get(mel);

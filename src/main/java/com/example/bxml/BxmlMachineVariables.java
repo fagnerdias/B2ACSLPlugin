@@ -421,6 +421,30 @@ public final class BxmlMachineVariables {
     }
 
     /**
+     * Nomes de variáveis declaradas por qualquer máquina em {@code machineNames} (tipicamente o
+     * fecho transitivo SEES/IMPORTS de {@link BxmlSetsTranslator#listSeenMachineNamesTransitive}/
+     * {@link BxmlSetsTranslator#listImportedMachineNamesTransitive}) — usado por {@link
+     * BxmlExpressionToAcsl#translate} para não tratar como "variável livre" de uma lambda {@code %}
+     * um identificador que já é estado de OUTRA máquina visível (ex. {@code array} de {@code
+     * VArray}, importada por {@code Fifo_i_2}): {@code ctx.variableLogicTypes()} só cobre a
+     * PRÓPRIA máquina sendo traduzida.
+     */
+    public static Set<String> transitiveCrossMachineVariableNames(
+            Collection<String> machineNames, Path bxmlDirectory) {
+        if (machineNames == null || machineNames.isEmpty() || bxmlDirectory == null) {
+            return Set.of();
+        }
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String name : machineNames) {
+            Element impl = BxmlSetsTranslator.findImplementationMachineElement(name, bxmlDirectory);
+            if (impl != null) {
+                out.addAll(declaredVariableNames(impl));
+            }
+        }
+        return out;
+    }
+
+    /**
      * Verdadeiro quando alguma implementação fundida não declara variáveis próprias e reutiliza o
      * estado da abstrata (liga {@code logic v = Raiz__v;} no bloco {@code Raiz_variables}).
      *

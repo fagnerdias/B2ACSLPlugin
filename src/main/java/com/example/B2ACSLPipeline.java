@@ -55,6 +55,10 @@ public final class B2ACSLPipeline {
     private static final Pattern FRAMA_C_STDOUT_TAG_LINE =
             Pattern.compile("^\\[[^\\]]+\\]\\s*.*");
 
+    /** Linha {@code [wp] N goals scheduled} — nº de provas que o WP agendou para a função corrente. */
+    private static final Pattern WP_GOALS_SCHEDULED_LINE =
+            Pattern.compile("^\\[wp\\]\\s+(\\d+)\\s+goals?\\s+scheduled\\s*$");
+
     /** Marca o bloco {@code axiomatic new_types} importado (ex. de {@code types.acsl}). */
     private static final String AXIOMATIC_NEW_TYPES_MARKER = "axiomatic new_types";
 
@@ -1010,7 +1014,18 @@ public final class B2ACSLPipeline {
             progress.appendLogHeader(sourceName);
 
             ProcessResult wpResult =
-                    runProcessWithCapturedOutput(wpPb, 600, TimeUnit.SECONDS, progress::appendLogLine);
+                    runProcessWithCapturedOutput(
+                            wpPb,
+                            600,
+                            TimeUnit.SECONDS,
+                            line -> {
+                                progress.appendLogLine(line);
+                                Matcher scheduled = WP_GOALS_SCHEDULED_LINE.matcher(line);
+                                if (scheduled.matches()) {
+                                    progress.markGoalsScheduled(
+                                            sourceName, Integer.parseInt(scheduled.group(1)));
+                                }
+                            });
             reportData.absorbOutput(wpResult.output(), sourceName);
             if (!wpResult.completed()) {
                 reportData.addTimeout(
