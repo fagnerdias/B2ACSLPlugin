@@ -117,6 +117,33 @@ public record BxmlTranslateContext(
                 names == null ? Set.of() : names);
     }
 
+    /**
+     * Retorna uma cópia deste contexto com {@code extra} mesclado em {@link #variableLogicTypes()}
+     * como fallback (entradas já presentes têm prioridade) — usado para que o invariante de uma
+     * camada da cadeia de refinamento (ex.: {@code _i}) veja o tipo de uma variável declarada só
+     * numa camada intermédia (ex.: {@code ss_r} em {@code _r}), que {@link #variableLogicTypes()}
+     * só cobre para a PRÓPRIA máquina (e a abstrata raiz) sem isto — sem o tipo autoritativo,
+     * {@code isListValued} cai no fallback por {@code typref} cru, que não distingue sequência de
+     * relação genérica (ambas {@code POW(INTEGER*T)} em B), gerando {@code sequence_ran}/{@code
+     * relation_ran} trocados.
+     */
+    public BxmlTranslateContext withAdditionalVariableLogicTypes(Map<String, String> extra) {
+        if (extra == null || extra.isEmpty()) return this;
+        Map<String, String> merged = new LinkedHashMap<>(extra);
+        merged.putAll(variableLogicTypes);
+        return new BxmlTranslateContext(
+                types,
+                comprehensions,
+                merged,
+                lambdaRegistry,
+                enumValueRenames,
+                enumeratedSetRenames,
+                enumeratedSetNames,
+                multiArgLambdaConstantNames,
+                machineName,
+                crossMachineVariableNames);
+    }
+
     private static String machineNameFrom(Element machineEl) {
         if (machineEl == null) {
             return "";

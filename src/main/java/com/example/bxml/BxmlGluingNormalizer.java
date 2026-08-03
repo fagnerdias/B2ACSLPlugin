@@ -102,7 +102,10 @@ public final class BxmlGluingNormalizer {
     }
 
     private static boolean isRanCall(String s) {
-        return s != null && s.startsWith("ran(") && s.endsWith(")");
+        if (s == null || !s.endsWith(")")) return false;
+        // B ran(X) traduz para sequence_ran(X) (\list) ou relation_ran(X) (Relation<A,B>) — "ran("
+        // sozinho não existe mais na lib (ver BxmlExpressionToAcsl#translateUnary).
+        return s.startsWith("sequence_ran(") || s.startsWith("relation_ran(");
     }
 
     private static boolean isSimpleIdentifier(String s) {

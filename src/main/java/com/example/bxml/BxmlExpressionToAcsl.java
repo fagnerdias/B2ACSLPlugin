@@ -553,6 +553,11 @@ public final class BxmlExpressionToAcsl {
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : "card(" + a + ")";
             case "size" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
+            // B ran: sequence_ran (\list, ACSL_Lib/sequence_functions/range.acsl) vs
+            // relation_ran (Relation<A,B>, ACSL_Lib/relation_functions/range.acsl) — "ran" sozinho
+            // não existe mais na lib (ambíguo entre os dois tipos).
+            case "ran" ->
+                    (isListValued(arg, ctx) ? "sequence_ran" : "relation_ran") + "(" + a + ")";
             case "imax" -> "set_max(" + a + ")";
             case "imin" -> "set_min(" + a + ")";
             case "~" -> "relation_inverse(" + a + ")";
