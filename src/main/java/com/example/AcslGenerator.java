@@ -321,6 +321,9 @@ public final class AcslGenerator {
                         .withCrossMachineVariableNames(
                                 BxmlMachineVariables.transitiveCrossMachineVariableNames(
                                         invariantSourceMachineNames, bxmlDirectory))
+                        .withCrossMachineVariableLogicTypes(
+                                BxmlMachineVariables.transitiveCrossMachineVariableLogicTypes(
+                                        invariantSourceMachineNames, bxmlDirectory))
                         .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
 
         List<String> allInvariantPredicateNames =
@@ -552,6 +555,7 @@ public final class AcslGenerator {
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                     .withLambdaRegistry(ctx.lambdaRegistry())
                     .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
+                    .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
             String varsMerged =
                     BxmlMachineVariables.formatAxiomaticBlock(
@@ -590,6 +594,7 @@ public final class AcslGenerator {
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                     .withLambdaRegistry(ctx.lambdaRegistry())
                     .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
+                    .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
             String constsMerged = BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx);
             if (!constsMerged.isBlank()) {
@@ -619,6 +624,7 @@ public final class AcslGenerator {
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                     .withLambdaRegistry(ctx.lambdaRegistry())
                     .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
+                    .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
             String valuesMerged =
                     BxmlConstantsAndProperties.formatValuesBlock(mel, mctx, machineEl);
@@ -629,28 +635,36 @@ public final class AcslGenerator {
             }
         }
 
-        // 2) Todos os predicate (invariantes)
+        // 2) Todos os predicate (invariantes) — traduzidos já aqui (podem registar lambdas, ex. um
+        // invariante de colagem que chama directamente uma "sequence builder"), mas o texto fica em
+        // buffers separados e só é anexado a 'sb' DEPOIS do bloco lambda_functions abaixo: um
+        // invariante como Fifo_i_2_invariant pode referenciar lambda_func01 directamente (não só
+        // através de Properties), e ACSL exige declare-antes-de-usar.
         String invariantPredicates = BxmlInvariantTranslator.formatInvariantPredicates(machineEl, ctx);
-        if (!invariantPredicates.isBlank()) {
-            sb.append("\n");
-            sb.append(invariantPredicates);
-            if (!invariantPredicates.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
-        }
+        StringBuilder mergedInvariantsSb = new StringBuilder();
         appendMergedInvariantPredicatesOnly(
-                sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
+                mergedInvariantsSb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
                 ctx.enumeratedSetRenames(), mergedVariableRenames, ctx.lambdaRegistry(),
-                ctx.crossMachineVariableNames(), refinementChainVariableLogicTypes);
+                ctx.crossMachineVariableNames(), ctx.crossMachineVariableLogicTypes(),
+                refinementChainVariableLogicTypes);
 
         // 2b) Lambdas (emissão tardia, após variáveis): lambda_functions pode referenciar variáveis
-        // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima.
-        // Properties da máquina raiz é emitido a seguir, pois pode referenciar predicados lambda.
+        // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima. Emitido
+        // antes dos invariantes/properties bufferizados acima/abaixo, que podem referenciar
+        // predicados/funções lambda.
         LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
         if (lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo) {
             sb.append("\n");
             sb.append(lambdaRegistry.formatAxiomaticBlockFrom(lambdaEmittedUpTo));
             sb.append("\n");
         }
+        if (!invariantPredicates.isBlank()) {
+            sb.append("\n");
+            sb.append(invariantPredicates);
+            if (!invariantPredicates.endsWith("\n")) sb.append("\n");
+            sb.append("\n");
+        }
+        sb.append(mergedInvariantsSb);
         if (!propertiesBlock.isBlank()) {
             sb.append(propertiesBlock);
             if (!propertiesBlock.endsWith("\n")) sb.append("\n");
@@ -874,6 +888,7 @@ public final class AcslGenerator {
             Map<Element, Map<String, String>> variableRenamesByMachine,
             LambdaFunctionRegistry lambdaRegistry,
             Set<String> crossMachineVariableNames,
+            Map<String, String> crossMachineVariableLogicTypes,
             Map<String, String> refinementChainVariableLogicTypes) {
         if (mergedMachineRoots == null || mergedMachineRoots.isEmpty()) {
             return;
@@ -885,6 +900,7 @@ public final class AcslGenerator {
                     .withEnumeratedSetRenames(enumeratedSetRenames)
                     .withLambdaRegistry(lambdaRegistry)
                     .withCrossMachineVariableNames(crossMachineVariableNames)
+                    .withCrossMachineVariableLogicTypes(crossMachineVariableLogicTypes)
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
             String inv = BxmlInvariantTranslator.formatInvariantPredicates(mel, ctx);
             if (inv.isBlank()) continue;

@@ -445,6 +445,47 @@ public final class BxmlMachineVariables {
     }
 
     /**
+     * Como {@link #transitiveCrossMachineVariableNames}, mas devolvendo também o tipo {@code logic}
+     * de cada variável (ex. {@code array} → {@code Function_int_int}) — usado quando uma variável de
+     * OUTRA máquina precisa entrar como PARÂMETRO explícito (tipado) de uma função lógica gerada
+     * (ex. {@code lambda_funcNN} recursivo sobre sequência), não apenas ser excluída da deteção de
+     * variável livre.
+     */
+    public static Map<String, String> transitiveCrossMachineVariableLogicTypes(
+            Collection<String> machineNames, Path bxmlDirectory) {
+        if (machineNames == null || machineNames.isEmpty() || bxmlDirectory == null) {
+            return Map.of();
+        }
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        for (String name : machineNames) {
+            // Camada ABSTRATA primeiro: a tipagem "v : seq(T)"/"v : iseq(T)" de uma variável (ex.
+            // "contents" em Fifo.bxml) vive no invariante ABSTRATO — o invariante de colagem da
+            // implementação usa a variável sem a retipar, por isso inferVariableLogicTypes só na
+            // implementação nunca a encontra (fica sem entrada, cai no fallback por typref cru em
+            // isListValued/isRelationOrFunctionValued, que não distingue \list de Relation).
+            Element abs = BxmlSetsTranslator.findAbstractMachineElement(name, bxmlDirectory);
+            if (abs != null) {
+                BxmlTypeRegistry absTypes = BxmlTypeRegistry.fromMachine(abs);
+                BxmlTranslateContext absTmp =
+                        new BxmlTranslateContext(
+                                absTypes, BxmlComprehensionRegistry.emptyForFingerprinting());
+                for (Map.Entry<String, String> e : inferVariableLogicTypes(abs, absTmp).entrySet()) {
+                    out.putIfAbsent(e.getKey(), e.getValue());
+                }
+            }
+            Element impl = BxmlSetsTranslator.findImplementationMachineElement(name, bxmlDirectory);
+            if (impl == null) continue;
+            BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(impl);
+            BxmlTranslateContext tmp =
+                    new BxmlTranslateContext(types, BxmlComprehensionRegistry.emptyForFingerprinting());
+            for (Map.Entry<String, String> e : inferVariableLogicTypes(impl, tmp).entrySet()) {
+                out.put(e.getKey(), e.getValue());
+            }
+        }
+        return out;
+    }
+
+    /**
      * Verdadeiro quando alguma implementação fundida não declara variáveis próprias e reutiliza o
      * estado da abstrata (liga {@code logic v = Raiz__v;} no bloco {@code Raiz_variables}).
      *
@@ -1904,7 +1945,14 @@ public final class BxmlMachineVariables {
         // total) também é resolvida pelo invariante da ABSTRATA — a implementação não tem
         // <Invariant> ao nível da máquina (o único <Invariant> em array_i.bxml, p.ex., é o de um
         // loop dentro de <Operations>, não filho direto de <Machine>: firstChildElement não o acha).
-        if (result.isEmpty() && abstractEl != null) {
+        // SÓ se aplica quando a variável é mesmo array/C-backed: se a máquina precisa de ghost
+        // abstraction (ex.: "contents" de Fifo, \list-valued sem storage C nenhum), "sem
+        // Concrete_Variables" significa GHOST, não "reusa a abstrata como C global" — gerar
+        // "Fifo__contents" aqui produz um alvo de assigns inexistente ("unbound logic variable" no
+        // Frama-C); o alvo correto (bloco abaixo) já é "ghost_contents".
+        if (result.isEmpty()
+                && abstractEl != null
+                && !needsGhostAbstraction(abstractEl, List.of(implEl))) {
             for (String v : declaredVariableNames(abstractEl)) {
                 String base = machineName + "__" + v;
                 String ranged =

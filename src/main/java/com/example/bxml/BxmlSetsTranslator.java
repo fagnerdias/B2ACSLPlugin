@@ -974,6 +974,43 @@ public final class BxmlSetsTranslator {
         return null;
     }
 
+    /**
+     * Encontra o ficheiro {@code .bxml} ABSTRATO ({@code type='abstraction'}, {@code name=machineName})
+     * em {@code bxmlDirectory} — irmão de {@link #findImplementationMachineElement}, para quando o
+     * tipo {@code logic} de uma variável só está disponível no invariante da camada ABSTRATA (ex.:
+     * {@code contents : seq(Fifo_ctx_ELEM)} em {@code Fifo.bxml}), não na implementação (cujo próprio
+     * invariante de colagem usa {@code contents} sem o retipar).
+     */
+    static Element findAbstractMachineElement(String machineName, Path bxmlDirectory) {
+        if (machineName == null || machineName.isBlank()
+                || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return null;
+        }
+        List<Path> candidates;
+        try (Stream<Path> files = Files.list(bxmlDirectory)) {
+            candidates = files
+                    .filter(p -> p.getFileName().toString().endsWith(".bxml"))
+                    .sorted()
+                    .toList();
+        } catch (IOException e) {
+            return null;
+        }
+        for (Path p : candidates) {
+            try {
+                Element el = parseMachineElement(p);
+                if (!"abstraction".equalsIgnoreCase(el.getAttribute("type"))) {
+                    continue;
+                }
+                if (machineName.equals(el.getAttribute("name"))) {
+                    return el;
+                }
+            } catch (Exception ignored) {
+                // ficheiro malformado ou não-BXML; ignora e tenta o próximo
+            }
+        }
+        return null;
+    }
+
     /** Raiz {@code <Machine>} com parser namespace-aware (BXML 1.0 com {@code xmlns}). */
     static Element parseMachineElement(Path bxmlPath) throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();

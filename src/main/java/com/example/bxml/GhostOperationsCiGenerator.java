@@ -491,7 +491,7 @@ public final class GhostOperationsCiGenerator {
                     String existsForm = BxmlInitialisationTranslator.translateAnySubAsExists(anySub, ctx);
                     if (existsForm == null || existsForm.isBlank()) continue;
                     List<Param> params =
-                            appendOutputParametersAsPointers(listInputParameters(op), op);
+                            appendOutputParametersAsPointers(listInputParameters(op), op, false);
                     existsForm =
                             rewriteAnySubEnsureForGhost(
                                     existsForm, abstractSet, concreteConstants, op, anySub, ctx,
@@ -510,7 +510,7 @@ public final class GhostOperationsCiGenerator {
                 if (assigned.isEmpty()) continue;
 
                 List<Param> params =
-                        appendOutputParametersAsPointers(listInputParameters(op), op);
+                        appendOutputParametersAsPointers(listInputParameters(op), op, false);
                 List<String> ensures = new ArrayList<>();
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
                 List<String> ghostEnsures = new ArrayList<>();
@@ -2113,12 +2113,33 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
-     * Acrescenta os {@code Output_Parameters} como ponteiros C ({@code int *<name>}) à lista de
-     * parâmetros (na ordem de declaração no BXML); usado por contratos ghost derivados de
-     * {@code ANY_Sub} (e respetivo {@code predicate ghost__<op>}).
+     * Como {@link #appendOutputParametersAsPointers(List, Element, boolean)}, com o tipo ENUM real
+     * (ex. {@code RobustFifo__REPORT *}) quando aplicável — usado pelo {@code predicate ghost__<op>}
+     * do bloco axiomático real (importado DEPOIS dos {@code .c}, onde o typedef já é visível).
      */
     static List<Param> appendOutputParametersAsPointers(
             List<Param> base, Element operation) {
+        return appendOutputParametersAsPointers(base, operation, true);
+    }
+
+    /**
+     * Acrescenta os {@code Output_Parameters} como ponteiros C ({@code int *<name>}, ou o tipo ENUM
+     * real quando {@code useConcreteEnumTypes} e o parâmetro é de um conjunto ENUMERADO) à lista de
+     * parâmetros (na ordem de declaração no BXML); usado por contratos ghost derivados de
+     * {@code ANY_Sub} (e respetivo {@code predicate ghost__<op>}).
+     *
+     * @param useConcreteEnumTypes {@code false} para o {@code void <op>(...)} dummy dentro de {@code
+     *     ghost_operations.ci}: esse ficheiro é analisado pelo Frama-C como front-end ISOLADO, ANTES
+     *     de qualquer {@code .c} (ver {@link #write}) — um typedef de enum como {@code
+     *     RobustFifo__REPORT}, só definido dentro de {@code RobustFifo_i.c}, é literalmente
+     *     desconhecido nesse ponto, e usá-lo aqui produz {@code syntax error ... before or at token:
+     *     RobustFifo__REPORT} no pré-processamento do {@code .ci}. {@code true} para o {@code
+     *     predicate ghost__<op>(...)} do bloco axiomático real (emitido no {@code .acsl}, importado
+     *     DEPOIS de todos os {@code .c} — aí o typedef já é visível, e usar {@code int *} geraria
+     *     "invalid implicit conversion" no local de chamada real ({@code assert ghost__op(…, rr)}).
+     */
+    static List<Param> appendOutputParametersAsPointers(
+            List<Param> base, Element operation, boolean useConcreteEnumTypes) {
         List<Param> out = new ArrayList<>(base);
         if (operation == null) return out;
         Element outEl = firstChildElement(operation, "Output_Parameters");
@@ -2133,6 +2154,9 @@ public final class GhostOperationsCiGenerator {
             String name = e.getAttribute("value");
             if (name == null || name.isBlank()) continue;
             String cPtrType = cPointerTypeFromTypref(findAncestorMachine(operation), e);
+            if (!useConcreteEnumTypes && !"int *".equals(cPtrType) && !"_Bool *".equals(cPtrType)) {
+                cPtrType = "int *";
+            }
             out.add(new Param(cPtrType, sanitizeCIdent(name.trim())));
         }
         return out;
@@ -2150,8 +2174,23 @@ public final class GhostOperationsCiGenerator {
             int id = Integer.parseInt(tr.trim());
             BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machine);
             String raw = types.getRawType(id);
-            if ("BOOL".equals(raw != null ? raw.trim() : "")) {
+            String rawTrim = raw == null ? "" : raw.trim();
+            if ("BOOL".equals(rawTrim)) {
                 return "_Bool *";
+            }
+            // Conjunto ENUMERADO declarado nesta máquina (ex.: "REPORT" em RobustFifo.bxml, com
+            // Enumerated_Values ok/failed): o C real gerado tipa o parâmetro como
+            // "<Machine>__<Set> *" (ex. "RobustFifo__REPORT *"), um enum de verdade — não "int *".
+            // Sem isto, "predicate ghost__op(..., int *rr)" não casa com o protótipo C real usado
+            // no local de chamada ("at return: assert ghost__op(..., rr);"), e o Frama-C rejeita com
+            // "invalid implicit conversion from '<Machine>__<Set> *' to 'int *'". Conjuntos DIFERIDOS
+            // (sem Enumerated_Values, ex. Fifo_ctx__ELEM) não entram aqui — mapeiam para {@code int}
+            // simples no C gerado, compatível com o "int *" por omissão.
+            if (BxmlSetsTranslator.buildEnumeratedSetNames(machine).contains(rawTrim)) {
+                String machineName = machine.getAttribute("name");
+                if (machineName != null && !machineName.isBlank()) {
+                    return machineName.trim() + "__" + rawTrim + " *";
+                }
             }
         } catch (NumberFormatException ignored) {}
         return "int *";

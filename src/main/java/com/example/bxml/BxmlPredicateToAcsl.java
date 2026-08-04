@@ -487,6 +487,11 @@ public final class BxmlPredicateToAcsl {
      * {@code (\exists integer x; body)}.
      *
      * <p>Suporta múltiplas variáveis ({@code !x,y.(…)}).
+     *
+     * <p>Caso especial: {@code #v.(v = E & P)} (uma só variável ligada, definida por igualdade
+     * dentro do próprio corpo) → {@code \let v = E; P}, evitando um existencial desnecessário
+     * quando a testemunha é univocamente determinada — ver
+     * {@link #tryExistsLetElimination(String, Element, BxmlTranslateContext)}.
      */
     private static String translateQuantifiedPred(Element qp, BxmlTranslateContext ctx) {
         String type = qp.getAttribute("type");
@@ -494,6 +499,7 @@ public final class BxmlPredicateToAcsl {
 
         Element varsEl = childByName(qp, "Variables");
         List<String> varDecls = new ArrayList<>();
+        List<String> varNames = new ArrayList<>();
         if (varsEl != null) {
             NodeList nl = varsEl.getChildNodes();
             for (int i = 0; i < nl.getLength(); i++) {
@@ -501,6 +507,7 @@ public final class BxmlPredicateToAcsl {
                 if (n.getNodeType() != Node.ELEMENT_NODE) continue;
                 Element e = (Element) n;
                 if ("Attr".equals(e.getLocalName()) || !"Id".equals(e.getLocalName())) continue;
+                varNames.add(e.getAttribute("value"));
                 varDecls.add("integer " + e.getAttribute("value"));
             }
         }
@@ -510,9 +517,95 @@ public final class BxmlPredicateToAcsl {
         if (bodyEl == null) return "/* quantified pred */";
         Element bodyPred = firstPredChild(bodyEl);
         if (bodyPred == null) return "/* quantified pred */";
-        String body = translatePred(bodyPred, ctx);
 
+        if ("#".equals(type) && varNames.size() == 1) {
+            String letForm = tryExistsLetElimination(varNames.get(0), bodyPred, ctx);
+            if (letForm != null) return letForm;
+        }
+
+        String body = translatePred(bodyPred, ctx);
         return "(" + quant + " " + String.join(", ", varDecls) + "; " + body + ")";
+    }
+
+    /**
+     * Se {@code bodyPred} for {@code v = E} (directamente, ou um conjunto {@code Nary_Pred op='&'}
+     * contendo exactamente um conjunto {@code v = E} nesse formato, com {@code v} ausente de
+     * {@code E}), devolve {@code \let v = E; P} já traduzido, onde {@code P} é o resto do corpo
+     * (ou {@code \true} se {@code v = E} for o único conjunto); senão {@code null} (cai no
+     * {@code \exists} normal).
+     */
+    private static String tryExistsLetElimination(String varName, Element bodyPred, BxmlTranslateContext ctx) {
+        List<Element> conjuncts = new ArrayList<>();
+        if ("Nary_Pred".equals(bodyPred.getLocalName()) && "&".equals(bodyPred.getAttribute("op"))) {
+            NodeList nl = bodyPred.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element e = (Element) n;
+                if ("Attr".equals(e.getLocalName())) continue;
+                conjuncts.add(e);
+            }
+        } else {
+            conjuncts.add(bodyPred);
+        }
+
+        Element witnessExp = null;
+        int witnessIndex = -1;
+        for (int i = 0; i < conjuncts.size(); i++) {
+            Element w = equalityDefiningVar(conjuncts.get(i), varName);
+            if (w != null) {
+                witnessExp = w;
+                witnessIndex = i;
+                break;
+            }
+        }
+        if (witnessExp == null) return null;
+
+        String witness = BxmlExpressionToAcsl.translate(witnessExp, ctx);
+        List<String> rest = new ArrayList<>();
+        for (int i = 0; i < conjuncts.size(); i++) {
+            if (i == witnessIndex) continue;
+            rest.add(translatePred(conjuncts.get(i), ctx));
+        }
+        String p = rest.isEmpty() ? "\\true" : String.join(" && ", rest);
+        return "(\\let " + varName + " = " + witness + "; " + p + ")";
+    }
+
+    /**
+     * Se {@code pred} for {@code Exp_Comparison op='='} com um dos lados exactamente
+     * {@code Id(varName)} e {@code varName} não ocorrer no outro lado, devolve o outro lado
+     * (a definição/testemunha {@code E}); senão {@code null}.
+     */
+    private static Element equalityDefiningVar(Element pred, String varName) {
+        if (pred == null || !"Exp_Comparison".equals(pred.getLocalName())) return null;
+        if (!"=".equals(normalizeExpComparisonOp(pred.getAttribute("op")))) return null;
+        Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
+        if (pair[0] == null || pair[1] == null) return null;
+        if ("Id".equals(pair[0].getLocalName())
+                && varName.equals(pair[0].getAttribute("value"))
+                && !containsIdValue(pair[1], varName)) {
+            return pair[1];
+        }
+        if ("Id".equals(pair[1].getLocalName())
+                && varName.equals(pair[1].getAttribute("value"))
+                && !containsIdValue(pair[0], varName)) {
+            return pair[0];
+        }
+        return null;
+    }
+
+    /** {@code true} se algum nó {@code Id} na sub-árvore de {@code e} tiver o valor {@code varName}. */
+    private static boolean containsIdValue(Element e, String varName) {
+        if ("Id".equals(e.getLocalName()) && varName.equals(e.getAttribute("value"))) {
+            return true;
+        }
+        NodeList nl = e.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            if (containsIdValue((Element) n, varName)) return true;
+        }
+        return false;
     }
 
     private static Element childByName(Element parent, String localName) {

@@ -174,6 +174,14 @@ public final class BxmlExpressionToAcsl {
     private static boolean isListValuedId(Element idEl, BxmlTranslateContext ctx) {
         String name = idEl.getAttribute("value");
         String t = ctx.variableLogicTypes().get(name);
+        if (t == null) {
+            // Variável de OUTRA máquina (ex.: "contents" de Fifo, referenciada num invariante de
+            // colagem de RobustFifo): variableLogicTypes() só cobre a própria máquina + cadeia de
+            // refinamento; sem este fallback, uma \list cross-machine caía sempre no ramo typref
+            // abaixo (tipo B cru POW(INTEGER*T), indistinguível de relação) e o "=" gerava
+            // list_to_function(...) ao contrário, produzindo "incompatible types" no Frama-C.
+            t = ctx.crossMachineVariableLogicTypes().get(name);
+        }
         // t != null é uma resposta AUTORITATIVA (inclui a deteção de "v : seq(T)"/"v : iseq(T)" do
         // invariante, que o fallback por typref abaixo NÃO conhece — esse fallback só olha o tipo B
         // cru, onde uma sequência é POW(INTEGER*T), indistinguível de uma relação genérica). Confiar
@@ -220,6 +228,10 @@ public final class BxmlExpressionToAcsl {
     private static boolean isRelationOrFunctionValuedId(Element idEl, BxmlTranslateContext ctx) {
         String name = idEl.getAttribute("value");
         String t = ctx.variableLogicTypes().get(name);
+        if (t == null) {
+            // Variável de OUTRA máquina — ver comentário análogo em isListValuedId.
+            t = ctx.crossMachineVariableLogicTypes().get(name);
+        }
         // t != null é uma resposta AUTORITATIVA (ver comentário análogo em isListValuedId) — sem
         // isto, uma variável \list<...> conhecida (ex.: "queue : seq(ELEM)") caía no fallback por
         // typref, que via o tipo B cru POW(INTEGER*INTEGER) (a codificação de "seq" em B) e
@@ -772,14 +784,19 @@ public final class BxmlExpressionToAcsl {
             "TRUE", "FALSE", "MAXINT", "MININT");
 
     /**
-     * B lambda {@code % x.(P | E)} → predicado nomeado registado em {@link LambdaFunctionRegistry}.
+     * B lambda {@code % x.(P | E)} → função lógica nomeada registada em {@link LambdaFunctionRegistry}.
+     * Nunca {@code \lambda} nativo do ACSL (não compõe com o sistema de tipos B2ACSL baseado em ADTs).
      *
-     * <p>Se o corpo for um {@code Boolean_Exp}, o predicado interno é usado directamente como corpo
-     * do predicado ACSL. Caso contrário usa {@code \lambda} inline como fallback.
-     *
-     * <p>As variáveis livres são detectadas varrendo os nós {@code Id} do corpo e subtraindo as
-     * variáveis ligadas e os identificadores de estado abstracto/concreto em
-     * {@link BxmlTranslateContext#variableLogicTypes()}.
+     * <p>Classifica o domínio {@code P} (ver {@link #intervalDomainBounds}) para escolher a forma:
+     * <ul>
+     *   <li>Uma só variável ligada com domínio {@code x : lo..hi} (intervalo literal) → {@code E} é
+     *       o elemento de uma SEQUÊNCIA B — forma "sequence builder" ({@link
+     *       #translateSequenceBuilderLambda}): função lógica recursiva sobre {@code \list}, com
+     *       lemas-ponte {@code _length}/{@code _nth}.</li>
+     *   <li>Caso contrário (múltiplas variáveis ligadas, ou domínio não é um intervalo literal) →
+     *       modelo de MAPA ({@link #translateMapLambda}): função/predicado ponto-a-ponto, guardado
+     *       pelo domínio quando este não é trivial.</li>
+     * </ul>
      */
     private static String translateQuantifiedExp(Element qe, BxmlTranslateContext ctx) {
         String type = qe.getAttribute("type");
@@ -804,10 +821,9 @@ public final class BxmlExpressionToAcsl {
 
         // 2. Guarda (domínio) do % — lado esquerdo do "|" em "% x.(P | E)". B trata % como função
         // PARCIAL: fora de P a lambda é indefinida, por isso a guarda tem de restringir a definição
-        // gerada (ver passo 5), não pode ser descartada.
+        // gerada, não pode ser descartada.
         Element guardEl = childByLocalName(qe, "Pred");
         Element guardPred = guardEl != null ? firstExpChild(guardEl) : null;
-        String guardStr = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx) : null;
 
         // 3. Corpo da lambda
         Element bodyEl = childByLocalName(qe, "Body");
@@ -815,7 +831,110 @@ public final class BxmlExpressionToAcsl {
         Element bodyExp = firstExpChild(bodyEl);
         if (bodyExp == null) return "/* TODO: lambda body */";
 
-        // 4. Determina se o corpo é Boolean_Exp → predicado directo
+        // 4. Classificação: sequência (caso a/b) vs mapa (caso c) — ver javadoc.
+        String[] intervalBounds = boundVarNames.size() == 1
+                ? intervalDomainBounds(guardPred, boundVarNames.get(0), ctx)
+                : null;
+        if (intervalBounds != null) {
+            return translateSequenceBuilderLambda(
+                    boundVarNames.get(0), intervalBounds[0], intervalBounds[1], bodyExp, guardPred, ctx);
+        }
+        return translateMapLambda(boundVarNames, guardPred, bodyExp, ctx);
+    }
+
+    /**
+     * Se {@code guardPred} for exactamente {@code boundVarName : lo..hi} ({@code Exp_Comparison
+     * op=':'} com o lado direito um {@code Binary_Exp op='..'} literal), devolve {@code [lo, hi]}
+     * já traduzidos para ACSL; senão {@code null} (domínio não é um intervalo simples — cai no
+     * modelo de mapa). {@code lo} pode ser {@code 1} (caso "a" da classificação, sequência B
+     * padrão) ou outro valor (caso "b", sequência reindexada).
+     */
+    private static String[] intervalDomainBounds(
+            Element guardPred, String boundVarName, BxmlTranslateContext ctx) {
+        if (guardPred == null || !"Exp_Comparison".equals(guardPred.getLocalName())) {
+            return null;
+        }
+        if (!":".equals(guardPred.getAttribute("op"))) {
+            return null;
+        }
+        Element[] pair = twoDirectExpChildren(guardPred);
+        if (pair[0] == null || pair[1] == null) {
+            return null;
+        }
+        if (!"Id".equals(pair[0].getLocalName()) || !boundVarName.equals(pair[0].getAttribute("value"))) {
+            return null;
+        }
+        Element domain = pair[1];
+        if (!isIntervalBinaryExp(domain)) {
+            return null;
+        }
+        Element[] bounds = twoDirectExpChildren(domain);
+        if (bounds[0] == null || bounds[1] == null) {
+            return null;
+        }
+        String lo = translate(bounds[0], ctx);
+        String hi = translate(bounds[1], ctx);
+        if (lo == null || lo.isBlank() || hi == null || hi.isBlank()) {
+            return null;
+        }
+        return new String[] {lo.trim(), hi.trim()};
+    }
+
+    /**
+     * Forma "sequence builder": {@code % x.(x : lo..hi | E)} → função lógica recursiva sobre
+     * {@code \list}, registada em {@link LambdaFunctionRegistry#registerSequenceBuilder}. Ver
+     * {@link #translateQuantifiedExp}.
+     */
+    private static String translateSequenceBuilderLambda(
+            String boundVarName, String loExpr, String hiExpr, Element bodyExp, Element guardPred,
+            BxmlTranslateContext ctx) {
+        String bodyStr = translate(bodyExp, ctx);
+
+        // Variáveis livres: IDs no corpo E na guarda (que contém lo/hi, ex. card(array)) que não
+        // são a variável ligada nem estado da PRÓPRIA máquina (reads directo, sem parametrizar).
+        // Ao contrário do modelo de mapa, aqui NÃO se exclui crossMachineVariableNames: a função
+        // gerada é pura e genérica (nunca usa reads de variável global — ver
+        // LambdaFunctionRegistry#registerSequenceBuilder), logo uma variável de OUTRA máquina (ex.
+        // array, de VArray, importada por Fifo_i_2) tem de entrar como parâmetro tipado explícito.
+        java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
+        collectIdValues(bodyExp, allIds);
+        if (guardPred != null) collectIdValues(guardPred, allIds);
+        allIds.remove(boundVarName);
+        allIds.removeAll(ctx.variableLogicTypes().keySet());
+        allIds.removeAll(B_NON_PARAM_IDS);
+        java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
+        java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
+        for (String v : freeVarNames) {
+            String t = ctx.crossMachineVariableLogicTypes().get(v);
+            freeVarTypes.add(t == null || t.isBlank() ? "integer" : t);
+        }
+
+        String bodyForLo = replaceWordBoundary(bodyStr, boundVarName, "lo");
+        String bodyForLoPlusK = replaceWordBoundary(bodyStr, boundVarName, "(lo + k)");
+
+        LambdaFunctionRegistry registry = ctx.lambdaRegistry();
+        if (registry == null) {
+            return "/* TODO: sequence lambda sem registro no contexto */";
+        }
+        String name = registry.registerSequenceBuilder(
+                freeVarNames, freeVarTypes, "integer", bodyForLo, bodyForLoPlusK);
+        java.util.List<String> args = new java.util.ArrayList<>(freeVarNames);
+        args.add(loExpr);
+        args.add(hiExpr);
+        return name + "(" + String.join(", ", args) + ")";
+    }
+
+    /**
+     * Forma "mapa": {@code % x.(P | E)} com domínio não-intervalo, ou múltiplas variáveis ligadas —
+     * função/predicado ponto-a-ponto registada em {@link LambdaFunctionRegistry#register}/{@link
+     * LambdaFunctionRegistry#registerFunction}. Comportamento anterior a {@link
+     * #translateSequenceBuilderLambda} existir; ver {@link #translateQuantifiedExp}.
+     */
+    private static String translateMapLambda(
+            java.util.List<String> boundVarNames, Element guardPred, Element bodyExp,
+            BxmlTranslateContext ctx) {
+        String guardStr = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx) : null;
+
         boolean isBooleanBody = "Boolean_Exp".equals(bodyExp.getLocalName());
         String bodyStr;
         Element scanRoot; // elemento cuja sub-árvore será varrida para IDs livres
@@ -829,7 +948,7 @@ public final class BxmlExpressionToAcsl {
             scanRoot = bodyExp;
         }
 
-        // 5. Variáveis livres: IDs no corpo E na guarda que não são ligadas nem estado
+        // Variáveis livres: IDs no corpo E na guarda que não são ligadas nem estado
         // abstracto/concreto (ex.: card(array) na guarda referencia array, tal como o corpo pode).
         java.util.Set<String> boundSet = new java.util.LinkedHashSet<>(boundVarNames);
         java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
@@ -840,17 +959,19 @@ public final class BxmlExpressionToAcsl {
         allIds.removeAll(ctx.crossMachineVariableNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
+        java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
+        for (String v : freeVarNames) {
+            String t = ctx.variableLogicTypes().get(v);
+            if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(v);
+            freeVarTypes.add(t == null || t.isBlank() ? "integer" : t);
+        }
 
-        // 6. Regista no LambdaFunctionRegistry: predicate (corpo booleano) ou logic function (corpo
-        // valorado) — nunca \lambda nativo do ACSL, que não compõe com o resto do sistema de tipos
-        // B2ACSL baseado em ADTs (Function<A,B>, \list, …): um \lambda não pode ser passado a
-        // funções da lib como restrict_front/function_to_list, que esperam esses ADTs, não uma
-        // função ACSL nativa de primeira classe.
         LambdaFunctionRegistry registry = ctx.lambdaRegistry();
         if (registry != null) {
             String name = isBooleanBody
-                    ? registry.register(freeVarNames, boundVarNames, bodyStr, guardStr)
-                    : registry.registerFunction(freeVarNames, boundVarNames, bodyStr, "integer", guardStr);
+                    ? registry.register(freeVarNames, freeVarTypes, boundVarNames, bodyStr, guardStr)
+                    : registry.registerFunction(
+                            freeVarNames, freeVarTypes, boundVarNames, bodyStr, "integer", guardStr);
             java.util.List<String> args = new java.util.ArrayList<>(freeVarNames);
             args.addAll(boundVarNames);
             return name + "(" + String.join(", ", args) + ")";
@@ -859,6 +980,13 @@ public final class BxmlExpressionToAcsl {
         java.util.List<String> decls = new java.util.ArrayList<>();
         for (String v : boundVarNames) decls.add("integer " + v);
         return "\\lambda " + String.join(", ", decls) + "; " + bodyStr;
+    }
+
+    /** Substitui {@code name} por {@code replacement} em {@code text}, por fronteira de palavra. */
+    private static String replaceWordBoundary(String text, String name, String replacement) {
+        return text.replaceAll(
+                "(?<![A-Za-z0-9_])" + java.util.regex.Pattern.quote(name) + "(?![A-Za-z0-9_])",
+                java.util.regex.Matcher.quoteReplacement(replacement));
     }
 
     /** Recolhe recursivamente todos os valores {@code value} de nós {@code Id}. */
