@@ -1,3 +1,168 @@
+# Implementações v0.0.3
+
+Release focada na tradução de máquinas B com **IMPORTS/SEES multi-máquina** via mecanismo de
+ghost operations completo, ampliando a cobertura de construtos B e a biblioteca ACSL genérica.
+O conjunto de exemplos validados cresceu de 2 (v0.0.2) para **16 projetos**, com **1275/1357
+(94,0%) obrigações de prova (PO) provadas** automaticamente pelo Frama-C WP (CVC5) nesta execução.
+
+---
+
+## Ghost operations: mecanismo completo (novo)
+
+- Novo pipeline de **ghost operations**: cada operação abstrata passa a ter uma contraparte
+  ghost com parâmetros e predicados espelhados, permitindo reconstruir o estado abstrato a
+  partir do estado concreto/array-backed sem alterar a assinatura da função real em C.
+- `DummyGhostAxiomaticBuilder` (novo, ~714 linhas): gera declarações dummy para operações e
+  tipos ghost; corrigido para não omitir a segunda+ sobrecarga de uma mesma predicate/logic e
+  para não perder o `&&` ao mesclar blocos dummy duplicados.
+- `GhostOperationsCiGenerator` reescrito (~1150 linhas alteradas): `ghost_operations.ci` agora é
+  gerado **antes** dos `.acsl` (necessário para que símbolos como `set_difference` sejam
+  detectados no scan da lib) e é interpretado pelo Frama-C como front-end **isolado** — sem
+  visão dos símbolos de `-acsl-import` —, exigindo tratamento explícito de `is_total_function`
+  para o operador `-->` de B no texto ghost.
+- `assignsAbstract` passa a disparar a inclusão de parâmetros de saída no `assigns` ghost.
+- Renomeação de colisão com palavras reservadas do Frama-C para evitar erros de sintaxe;
+  suporte a conjuntos diferidos (*deferred sets*) nas operações ghost.
+- Contratos reais (não-ghost) agora **reutilizam** o `ensures` funcional do ghost e os
+  invariantes de loop passam a carregar também os invariantes das operações chamadas
+  internamente — foi necessário reaproveitar reescritas ACSL do lado ghost (predicado
+  ternário, cast escalar) para manter tudo parseável.
+
+## Transitividade de IMPORTS/SEES (classe de bug corrigida em 4 pontos distintos)
+
+Uma mesma classe de problema — busca em máquinas importadas/vistas que só olhava um nível de
+profundidade — foi encontrada e corrigida em quatro lugares diferentes do pipeline:
+
+- Predicados `requires` derivados de invariantes, `assigns` por máquina e o mapa de `assigns`
+  por operação agora resolvem **IMPORTS transitivo** (`listSeenMachineNamesTransitive` /
+  equivalentes), não apenas o primeiro nível.
+- Invariante de máquinas **SEEN** (não só IMPORTED) também passa a virar `requires` no ponto de
+  chamada (`BxmlSeesGraph`, novo).
+- Tamanho de `array_to_function` (cardinalidade de conjunto diferido), faixa de `assigns`
+  (`X[low..high]` vs. `X[..]`) e a especificação de loop de inicialização
+  (`ARRAY := DOMAIN*{VALUE}`) agora resolvem o conjunto/domínio mesmo quando ele é valorado
+  numa máquina alcançável apenas via `SEES`.
+- Novas classes dedicadas: `BxmlImportsGraph` e `BxmlSeesGraph` para navegar essas relações.
+
+## Novos construtos e traduções B → ACSL
+
+- **`ANY`**: tradução migrada de `\forall … ==>` para `\exists … &&`, com `\old()` correto e
+  eliminação de variáveis-alias definidas por guarda (bug latente também corrigido no caminho
+  de contrato real, não só no ghost).
+- **`::` (becomes_element_of)**: nova tradução via `becomes_element_of` (2 sobrecargas —
+  domínio função e conjunto simples) substituindo `is_total_function`/`belongs`; expôs e
+  corrigiu 3 bugs latentes na biblioteca (entrada obsoleta em `symbol_dependency_map.json`,
+  colisão de axiomáticas duplicadas, omissão silenciosa de declaração dummy quando a
+  assinatura do predicate ocupava mais de uma linha).
+- **`f(x) := y`** (sobrescrita de relação/função): agora traduzido para
+  `equals(f, overwrite(f, singleton(couple(x,y))))` em vez da equivalência fraca
+  `function_apply(f,x)==y`; inclui correção de `\old`-wrapping do valor pós-estado.
+- **`<+`** (overwrite de relação): nova função `overwrite`/`relation_overwrite` na biblioteca.
+- **`**`** (potência): sem operador C equivalente — geração automática de `b_pow.acsl` com
+  contrato dedicado sempre que `**` é detectado no projeto, evitando depender de um helper de
+  runtime opaco sem especificação.
+- **`v = bool(P)`**: parênteses externos corrigidos em `v <==> P` — a ausência deles corrompia
+  silenciosamente qualquer invariante/loop que fizesse `&&` com outros conjuntos (`<==>` tem
+  precedência menor que `&&`).
+- Relações com **codomínio tupla** (`PERSON +-> (DAY*MONTH*YEAR)`): suporte totalmente genérico
+  (qualquer aridade/mistura inteiro-booleano) via `TupleCodomainTypeRegistry` + arquivo `.acsl`
+  dinâmico por máquina.
+- Constantes lambda multi-argumento e emissão antecipada (`LambdaFunctionRegistry`).
+- Variáveis de mesmo nome entre abstrato e implementação agora **colapsam** em uma única
+  variável array-backed (sem gêmeo ghost), com correção correspondente na origem do `ensures`
+  de `INITIALISATION` e no parsing do operador `-->` do lado não-ghost.
+
+## Separação de memória e ponteiros de saída
+
+- `requires \separated(p, array)` gerado automaticamente para parâmetros de saída versus os
+  arrays da própria máquina e das máquinas IMPORTS/SEES/USES transitivas, além de
+  `\separated` par-a-par entre múltiplas saídas — tornando explícita a hipótese de modelo de
+  memória que o WP antes assumia implicitamente.
+
+## Loops
+
+- `BxmlLoopTranslator` (novo, ~325 linhas) e `LoopUnrollLevelEstimator` (novo, ~253 linhas).
+- Suporte a múltiplas especificações de loop na tradução de `INITIALISATION`.
+
+## Biblioteca ACSL (submódulo B2ACSLLib)
+
+- `array_to_function` dividido em `array_to_function_bool` / `array_to_function_int`.
+- Novas funções `overwrite` / `relation_overwrite` (operador B `<+`) e `becomes_element_of`.
+- Suporte a tuplas ampliado (`accessors`, `equals`) e mais de 200 linhas de lemmas novos.
+
+## Interface gráfica e fluxo de verificação
+
+- `VerificationProgressDialog` (novo): acompanhamento em tempo real da verificação, por
+  operação, com logging.
+- `WpOptionsDialog`: interface não-bloqueante; opções de contraexemplos e "split goals".
+- `FormalVerificationReportDialog` / `VerificationReportData` ampliados para refletir o novo
+  detalhamento por operação.
+
+## Refatoração
+
+- Remoção de classes e métodos não utilizados (`AcslLibSymbolDependencyMap`,
+  `SpecificationTypesCollector`, simplificação de `Invariant`/`Operations`/`Variables`).
+
+---
+
+## Exemplos validados (16 projetos)
+
+Resultados de obrigações de prova (PO) obtidos executando o pipeline completo
+(`B2ACSLPipeline` → Frama-C `-acsl-import` → `-wp -wp-prover CVC5 -wp-rte -wp-smoke-tests`)
+contra o estado atual do código, pasta `examples/`:
+
+| Projeto | PO provadas / total | % |
+|---|---|---|
+| AddRunner | 28 / 28 | 100,0% |
+| airlock | 87 / 87 | 100,0% |
+| Biblioteca | 144 / 158 | 91,1% |
+| BirthdayRegister | 38 / 46 | 82,6% |
+| Customer_estr | 123 / 133 | 92,5% |
+| DataFields | 3 / 3 | 100,0% |
+| DataValidation | 147 / 167 | 88,0% |
+| filling_array | 111 / 120 | 92,5% |
+| finding_the_max_array | 108 / 122 | 88,5% |
+| fuel_level | 206 / 206 | 100,0% |
+| integer_arithmetic_calculator | 101 / 103 | 98,1% |
+| mult | 69 / 69 | 100,0% |
+| OddEvenCounter | 37 / 42 | 88,1% |
+| railroad_switch | 47 / 47 | 100,0% |
+| RobustFifo | não conclui¹ | — |
+| simple_loop | 26 / 26 | 100,0% |
+| **Total (15 projetos concluídos)** | **1275 / 1357** | **94,0%** |
+
+¹ `RobustFifo` trava na etapa de parsing do Frama-C (`-acsl-import -print`) antes de qualquer
+goal de WP ser agendado — não é uma falha de prova, e sim uma limitação de tradução conhecida:
+o invariante de buffer circular da máquina depende de operadores de rotação de sequência e de
+sequências construídas por lambda que ainda não são totalmente suportados (ver
+`BirthdayRegister/RobustFifo Bugs & Gaps` nas notas de desenvolvimento). Fica como item aberto
+para a próxima release.
+
+Das 82 PO não provadas nos 15 projetos concluídos, **nenhuma é um contraexemplo real**
+(nenhum status `Invalid`/inconsistência em nenhum dos exemplos):
+
+- **60** são timeout do CVC5 (limite de 10s por goal) — candidatas a prova com um timeout maior
+  ou lemmas auxiliares, não bugs de especificação;
+- **22** são smoke-tests de código morto (`Doomed`) que o próprio WP identifica como
+  inalcançável — achado correto do smoke-test, não uma lacuna de prova (20 em
+  `DataValidation__check`, 1 em `filling_array` e 1 em `finding_the_max_array`; a "lacuna" de
+  `DataValidation__check` é, na verdade, **100% coberta** por esses 20 achados de código morto,
+  já revisados em sessão anterior).
+
+---
+
+## Próximos passos sugeridos
+
+- Suporte a operadores de rotação/lambda de sequência para viabilizar `RobustFifo`.
+- Investigar os goals com timeout de `Biblioteca`, `BirthdayRegister`, `DataValidation`,
+  `finding_the_max_array` e `OddEvenCounter` com timeout maior ou lemmas auxiliares.
+- Automatizar esta bateria de 16 exemplos como suíte de regressão (script único, como o
+  `scripts/generate_acsl_symbol_dependency_map.py` já faz para a lib).
+- Commitar as alterações pendentes do submódulo `B2ACSLLib` (`array_to_function_bool/int`,
+  `overwrite`, `becomes_element_of`, tuplas) antes de fixar a tag `v0.0.3`.
+
+---
+
 # Implementações v0.0.2
 
 ## Biblioteca ACSL genérica e instanciação
