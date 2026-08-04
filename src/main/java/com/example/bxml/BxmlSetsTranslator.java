@@ -170,6 +170,41 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Nomes de TODOS os conjuntos declarados em {@code <Sets>} da máquina (deferred E enumerados) —
+     * ao contrário de {@link #buildEnumeratedSetNames}, que só cobre os enumerados. Usado por
+     * {@link BxmlTranslateContext} para excluir nomes de conjunto (ex.: {@code COPY}, um deferred
+     * set) da deteção de "variável livre" de uma lambda B {@code %} — sem isto, {@code %cc.(cc :
+     * COPY | …)} trata {@code COPY} (o próprio conjunto do domínio) como um parâmetro extra da
+     * função lógica gerada, quando é apenas um identificador de conjunto fixo, resolvível
+     * diretamente em ACSL ({@code Biblioteca_COPY}), nunca um valor que precise de ser passado.
+     */
+    public static Set<String> declaredSetNames(Element machineEl) {
+        Element setsEl = firstChildElement(machineEl, "Sets");
+        if (setsEl == null) return Set.of();
+        Set<String> names = new LinkedHashSet<>();
+        NodeList ch = setsEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element setEl = (Element) n;
+            if (!"Set".equals(setEl.getLocalName())) continue;
+            NodeList setChildren = setEl.getChildNodes();
+            for (int j = 0; j < setChildren.getLength(); j++) {
+                Node sn = setChildren.item(j);
+                if (sn.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element idEl = (Element) sn;
+                if (!"Id".equals(idEl.getLocalName())) continue;
+                String name = idEl.getAttribute("value");
+                if (name != null && !name.isBlank()) {
+                    names.add(name.trim());
+                    break;
+                }
+            }
+        }
+        return names;
+    }
+
+    /**
      * Constrói o mapa B-name → ACSL-name para os valores enumerados de todos os conjuntos de uma
      * máquina. Ex.: {@code "normal" → "switch__normal"}.
      *

@@ -468,9 +468,24 @@ public final class SpecificationAxiomaticInstantiator {
     /**
      * Sinal de que {@code A} é o tipo de elemento de uma sequência B codificada como função total
      * {@code integer --> A} (ex.: {@code is_sequence_def_B<A>}), mesmo sem {@code \list<A>} literal.
+     *
+     * <p>Aceita tanto a forma não expandida ({@code Function<integer, A>}, como escrita nos
+     * ficheiros-fonte da lib) quanto a forma que o {@code frama-c -print} realmente produz no
+     * {@code merged_code.c}: o sinónimo de tipo {@code Function<A,B> = Relation<A,B> =
+     * Set<Tuple<A,B>>} (ver {@code types.acsl}) já vem CANONICALIZADO para {@code Set<Tuple<integer,
+     * A>>} nesse ponto — sem este segundo padrão, a deteção nunca disparava para nenhum axioma real
+     * (só funcionaria em texto sintético/de teste com "Function<...>" literal), caindo sempre no
+     * ramo genérico de {@code Set<A>} (que usa {@code setElemTypes()}, mais amplo, incluindo
+     * {@code Tuple<...>} sintetizados que não fazem sentido como elemento de sequência) — isto fazia
+     * {@code is_sequence_def_B<A>} instanciar para {@code A = Tuple<integer,integer>} em qualquer
+     * projeto com uma relação {@code Relation_int_int} (ex. RobustFifo/VArray), cujo corpo então
+     * precisa de {@code dom}/{@code ran} para o par {@code (integer, Tuple<integer,integer>)} — par
+     * que nunca é instanciado, dando {@code "no such predicate or logic function dom(...)"} no WP.
      */
     private static final Pattern SEQUENCE_ENCODED_AS_FUNCTION_OF_A =
-            Pattern.compile("Function\\s*<\\s*integer\\s*,\\s*A\\s*>");
+            Pattern.compile(
+                    "Function\\s*<\\s*integer\\s*,\\s*A\\s*>"
+                            + "|Set\\s*<\\s*Tuple\\s*<\\s*integer\\s*,\\s*A\\s*>\\s*>");
 
     private static List<List<String>> buildSubstitutions(
             int arity, String content, MonoContext ctx) {

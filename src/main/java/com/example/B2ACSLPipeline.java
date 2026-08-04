@@ -1426,6 +1426,29 @@ public final class B2ACSLPipeline {
     private static final Pattern LABELED_ARRAY_TO_FUNCTION_REF =
             Pattern.compile("array_to_function_\\w+\\(\\([^()]*\\)\\s*([A-Za-z_]\\w*)\\s*,");
 
+    /**
+     * {@code true} se {@code name} aparece em {@code text} como PARÂMETRO FORMAL de uma declaração
+     * {@code logic}/{@code predicate} própria (ex.: {@code Relation_int_int array} num {@code logic
+     * \list<integer> lambda_func01(Relation_int_int array, integer lo, integer hi) = …}) — nesse
+     * caso todas as ocorrências de {@code name} dentro de {@code text} referem-se ao PARÂMETRO
+     * local, não a uma variável/constante global de mesmo nome ({@code array{L}= …}). Sem esta
+     * distinção, um lambda "sequence builder" cujo parâmetro livre reusa o nome de uma variável de
+     * OUTRA máquina (ex. {@code array}, parâmetro de {@code lambda_func01} vs a variável concreta
+     * {@code array} de {@code VArray}) cria uma dependência de ordenação ESPÚRIA — o texto "contém a
+     * palavra array", mas não depende de facto da declaração global — e como essa falsa dependência
+     * contradiz a ordenação real (o global tem de vir DEPOIS do seu próprio C {@code static}, mas
+     * "antes do lambda" que na realidade não o usa), as duas regras de reposicionamento entram em
+     * oscilação perpétua sem nunca convergir.
+     */
+    private static boolean isNameShadowedAsParameter(String text, String name) {
+        Pattern paramDecl =
+                Pattern.compile(
+                        "(?:[A-Za-z_]\\w*|\\\\list\\s*<[^()]*>)\\s+"
+                                + Pattern.quote(name)
+                                + "\\s*[,)]");
+        return paramDecl.matcher(text).find();
+    }
+
     private static String moveOneMemoryDependentVariableBlockIfNeeded(String content) {
         List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
         // Nome declarado {L}= -> span que o declara, para localizar dependências entre blocos
@@ -1468,6 +1491,7 @@ public final class B2ACSLPipeline {
                 if (Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(depName) + "(?![A-Za-z0-9_])")
                         .matcher(sp.text)
                         .find()
+                        && !isNameShadowedAsParameter(sp.text, depName)
                         && depSpan.end > latestDepEnd) {
                     latestDepEnd = depSpan.end;
                 }
@@ -1501,7 +1525,8 @@ public final class B2ACSLPipeline {
                 }
                 if (Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(name) + "(?![A-Za-z0-9_])")
                         .matcher(sp.text)
-                        .find()) {
+                        .find()
+                        && !isNameShadowedAsParameter(sp.text, name)) {
                     earliestUseStart = Math.min(earliestUseStart, sp.start);
                 }
             }
@@ -2867,6 +2892,14 @@ public final class B2ACSLPipeline {
         if (insertAt < 0) {
             insertAt = findPreambleInsertIndex(cut);
         }
+        // sequence_list_to_function_axioms usa outros símbolos da lib no seu PRÓPRIO corpo (ex.
+        // length(list_to_function(l)), is_sequence(...), function_apply(...)) — mover o bloco para
+        // logo antes do seu primeiro USO real, sem olhar para essas dependências, pode reintroduzir a
+        // MESMA violação declare-antes-de-usar que este passo tenta resolver, só que para o símbolo
+        // dependente (ex. "length") em vez de para list_to_function. Empurra o ponto de inserção para
+        // depois de qualquer declaração (logic/predicate) já presente no ficheiro de que
+        // list_to_function dependa transitivamente.
+        insertAt = pushInsertAfterSymbolDeclDependencies(cut, insertAt, "list_to_function");
 
         StringBuilder sb = new StringBuilder();
         for (AcsCommentSpan sp : toMove) {
@@ -2884,6 +2917,48 @@ public final class B2ACSLPipeline {
             }
         }
         return findPreambleInsertIndex(cut);
+    }
+
+    /**
+     * Empurra {@code insertAt} para depois de qualquer declaração ({@code logic}/{@code predicate})
+     * já presente em {@code content}, de um símbolo do qual {@code rootSymbol} dependa transitivamente
+     * (ver {@link AcslLibSymbolDependencyMap#transitiveDependencySymbols(String)}) — necessário quando
+     * se reposiciona {@code rootSymbol} (ex. {@code list_to_function}) para logo antes do seu próprio
+     * primeiro USO: se um símbolo de que ele depende (ex. {@code length}, referenciado dentro do
+     * próprio corpo dos axiomas de {@code list_to_function}) já estiver declarado MAIS À FRENTE no
+     * ficheiro do que o ponto de inserção calculado, mover para lá deixaria essa dependência por
+     * declarar nesse ponto — a mesma violação declare-antes-de-usar que esta função tenta resolver,
+     * só que para o símbolo dependente. Devolve {@code insertAt} inalterado se nenhuma dependência
+     * conhecida tiver uma declaração no ficheiro em posição igual/posterior.
+     */
+    private static int pushInsertAfterSymbolDeclDependencies(
+            String content, int insertAt, String rootSymbol) {
+        Set<String> deps =
+                AcslLibSymbolDependencyMap.instance().transitiveDependencySymbols(rootSymbol);
+        if (deps.isEmpty()) {
+            return insertAt;
+        }
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        int result = insertAt;
+        for (String dep : deps) {
+            if (dep.equals(rootSymbol)) {
+                continue;
+            }
+            Pattern declPattern =
+                    Pattern.compile(
+                            "(?m)^.*\\b(?:logic|predicate)\\b.*?\\b"
+                                    + Pattern.quote(dep)
+                                    + "\\s*\\(");
+            for (AcsCommentSpan sp : spans) {
+                if (sp.end <= result) {
+                    continue;
+                }
+                if (declPattern.matcher(sp.text).find()) {
+                    result = Math.max(result, sp.end);
+                }
+            }
+        }
+        return result;
     }
 
 }

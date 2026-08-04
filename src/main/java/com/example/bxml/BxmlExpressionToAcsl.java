@@ -901,6 +901,7 @@ public final class BxmlExpressionToAcsl {
         if (guardPred != null) collectIdValues(guardPred, allIds);
         allIds.remove(boundVarName);
         allIds.removeAll(ctx.variableLogicTypes().keySet());
+        allIds.removeAll(ctx.declaredSetNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
@@ -957,6 +958,7 @@ public final class BxmlExpressionToAcsl {
         allIds.removeAll(boundSet);
         allIds.removeAll(ctx.variableLogicTypes().keySet());
         allIds.removeAll(ctx.crossMachineVariableNames());
+        allIds.removeAll(ctx.declaredSetNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
