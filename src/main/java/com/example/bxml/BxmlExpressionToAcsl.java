@@ -390,6 +390,22 @@ public final class BxmlExpressionToAcsl {
         return "->".equals(o) || "-&gt;".equals(o);
     }
 
+    /** B restrição de frente {@code s /|\ n} (mantém os primeiros n) → {@code restrict_front(s, n)}. */
+    private static boolean isSequenceRestrictFrontOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        return "/|\\".equals(op.trim());
+    }
+
+    /** B restrição de cauda {@code s \|/ n} (descarta os primeiros n) → {@code restrict_tail(s, n)}. */
+    private static boolean isSequenceRestrictTailOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        return "\\|/".equals(op.trim());
+    }
+
     /**
      * Constantes nomeadas do B que não existem como símbolos ACSL — traduzem-se para literais
      * {@code integer} compatíveis com {@code int} de 32 bits ({@code INT_MAX} / {@code INT_MIN}),
@@ -537,6 +553,11 @@ public final class BxmlExpressionToAcsl {
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : "card(" + a + ")";
             case "size" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
+            // B ran: sequence_ran (\list, ACSL_Lib/sequence_functions/range.acsl) vs
+            // relation_ran (Relation<A,B>, ACSL_Lib/relation_functions/range.acsl) — "ran" sozinho
+            // não existe mais na lib (ambíguo entre os dois tipos).
+            case "ran" ->
+                    (isListValued(arg, ctx) ? "sequence_ran" : "relation_ran") + "(" + a + ")";
             case "imax" -> "set_max(" + a + ")";
             case "imin" -> "set_min(" + a + ")";
             case "~" -> "relation_inverse(" + a + ")";
@@ -612,6 +633,14 @@ public final class BxmlExpressionToAcsl {
         }
         if (isSequencePrependOp(op)) {
             return "\\concat([|" + left + "|], " + right + ")";
+        }
+        if (isSequenceRestrictFrontOp(op)) {
+            // B: s /|\ n (mantém os primeiros n elementos) → restrict_front (ACSL_Lib/sequence_functions/restrict_front.acsl)
+            return "restrict_front(" + left + ", " + right + ")";
+        }
+        if (isSequenceRestrictTailOp(op)) {
+            // B: s \|/ n (descarta os primeiros n elementos) → restrict_tail (ACSL_Lib/sequence_functions/restrict_tail.acsl)
+            return "restrict_tail(" + left + ", " + right + ")";
         }
         if ("mod".equals(op)) return "(" + left + " % " + right + ")";
         if ("**i".equals(op == null ? "" : op.trim())) {
@@ -773,13 +802,20 @@ public final class BxmlExpressionToAcsl {
         }
         if (boundVarNames.isEmpty()) return "/* TODO: lambda vars */";
 
-        // 2. Corpo da lambda
+        // 2. Guarda (domínio) do % — lado esquerdo do "|" em "% x.(P | E)". B trata % como função
+        // PARCIAL: fora de P a lambda é indefinida, por isso a guarda tem de restringir a definição
+        // gerada (ver passo 5), não pode ser descartada.
+        Element guardEl = childByLocalName(qe, "Pred");
+        Element guardPred = guardEl != null ? firstExpChild(guardEl) : null;
+        String guardStr = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx) : null;
+
+        // 3. Corpo da lambda
         Element bodyEl = childByLocalName(qe, "Body");
         if (bodyEl == null) return "/* TODO: lambda body */";
         Element bodyExp = firstExpChild(bodyEl);
         if (bodyExp == null) return "/* TODO: lambda body */";
 
-        // 3. Determina se o corpo é Boolean_Exp → predicado directo
+        // 4. Determina se o corpo é Boolean_Exp → predicado directo
         boolean isBooleanBody = "Boolean_Exp".equals(bodyExp.getLocalName());
         String bodyStr;
         Element scanRoot; // elemento cuja sub-árvore será varrida para IDs livres
@@ -793,24 +829,33 @@ public final class BxmlExpressionToAcsl {
             scanRoot = bodyExp;
         }
 
-        // 4. Variáveis livres: IDs no corpo que não são ligadas nem estado abstracto/concreto
+        // 5. Variáveis livres: IDs no corpo E na guarda que não são ligadas nem estado
+        // abstracto/concreto (ex.: card(array) na guarda referencia array, tal como o corpo pode).
         java.util.Set<String> boundSet = new java.util.LinkedHashSet<>(boundVarNames);
         java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
         collectIdValues(scanRoot, allIds);
+        if (guardPred != null) collectIdValues(guardPred, allIds);
         allIds.removeAll(boundSet);
         allIds.removeAll(ctx.variableLogicTypes().keySet());
+        allIds.removeAll(ctx.crossMachineVariableNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
 
-        // 5. Regista no LambdaFunctionRegistry ou cai no inline \lambda
+        // 6. Regista no LambdaFunctionRegistry: predicate (corpo booleano) ou logic function (corpo
+        // valorado) — nunca \lambda nativo do ACSL, que não compõe com o resto do sistema de tipos
+        // B2ACSL baseado em ADTs (Function<A,B>, \list, …): um \lambda não pode ser passado a
+        // funções da lib como restrict_front/function_to_list, que esperam esses ADTs, não uma
+        // função ACSL nativa de primeira classe.
         LambdaFunctionRegistry registry = ctx.lambdaRegistry();
-        if (registry != null && isBooleanBody) {
-            String name = registry.register(freeVarNames, boundVarNames, bodyStr);
+        if (registry != null) {
+            String name = isBooleanBody
+                    ? registry.register(freeVarNames, boundVarNames, bodyStr, guardStr)
+                    : registry.registerFunction(freeVarNames, boundVarNames, bodyStr, "integer", guardStr);
             java.util.List<String> args = new java.util.ArrayList<>(freeVarNames);
             args.addAll(boundVarNames);
             return name + "(" + String.join(", ", args) + ")";
         }
-        // Fallback inline
+        // Fallback inline (sem registro disponível no contexto)
         java.util.List<String> decls = new java.util.ArrayList<>();
         for (String v : boundVarNames) decls.add("integer " + v);
         return "\\lambda " + String.join(", ", decls) + "; " + bodyStr;

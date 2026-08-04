@@ -47,7 +47,7 @@ public final class VerificationProgressDialog {
         PENDING(" Pending", new Color(120, 120, 120)),
         RUNNING(" Running…", new Color(30, 90, 200)),
         PROVED(" Proved", new Color(28, 130, 48)),
-        PARTIAL(" Partial", new Color(176, 128, 18)),
+        PARTIAL(" Partial", new Color(255, 127, 36)),
         TIMEOUT(" Timeout", new Color(176, 128, 18)),
         FAILED(" Failed", new Color(180, 36, 36));
 
@@ -261,6 +261,28 @@ public final class VerificationProgressDialog {
                     row.statusIcon().setForeground(Status.RUNNING.color);
                     row.statusText().setText(Status.RUNNING.label);
                     row.statusText().setForeground(Status.RUNNING.color);
+                    row.goalsLabel().setText("");
+                });
+    }
+
+    /**
+     * Informa quantas provas o WP agendou para a função/operação em execução (linha {@code N goals
+     * scheduled} do próprio Frama-C) — chamado assim que essa linha aparece no log ao vivo, antes de
+     * {@link #markCompleted} (que só chega no fim, com o resultado). Sem efeito se a função já
+     * tiver sido concluída (ex. linha atrasada chegando após o processo terminar).
+     */
+    public void markGoalsScheduled(String functionName, int scheduled) {
+        if (isHeadless()) {
+            System.out.println("[B2ACSL] " + functionName + ": " + scheduled + " goal(s) scheduled");
+            return;
+        }
+        SwingUtilities.invokeLater(
+                () -> {
+                    Row row = rowsByName.get(functionName);
+                    if (row == null) {
+                        return;
+                    }
+                    row.goalsLabel().setText(scheduled + (scheduled == 1 ? " goal" : " goals"));
                 });
     }
 

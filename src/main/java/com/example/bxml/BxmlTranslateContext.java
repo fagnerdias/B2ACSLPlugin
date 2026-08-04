@@ -19,18 +19,20 @@ public record BxmlTranslateContext(
         Map<String, String> enumeratedSetRenames,
         Set<String> enumeratedSetNames,
         Set<String> multiArgLambdaConstantNames,
-        String machineName) {
+        String machineName,
+        Set<String> crossMachineVariableNames) {
 
     /** Sem registo de lambdas nem renomeação de enumerados. */
     public BxmlTranslateContext(
             BxmlTypeRegistry types,
             BxmlComprehensionRegistry comprehensions,
             Map<String, String> variableLogicTypes) {
-        this(types, comprehensions, variableLogicTypes, null, Map.of(), Map.of(), Set.of(), Set.of(), "");
+        this(types, comprehensions, variableLogicTypes, null, Map.of(), Map.of(), Set.of(), Set.of(), "",
+                Set.of());
     }
 
     public BxmlTranslateContext(BxmlTypeRegistry types, BxmlComprehensionRegistry comprehensions) {
-        this(types, comprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), "");
+        this(types, comprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), "", Set.of());
     }
 
     /** Retorna uma cópia deste contexto com o registo de lambdas substituído. */
@@ -44,7 +46,8 @@ public record BxmlTranslateContext(
                 enumeratedSetRenames,
                 enumeratedSetNames,
                 multiArgLambdaConstantNames,
-                machineName);
+                machineName,
+                crossMachineVariableNames);
     }
 
     /** Retorna uma cópia deste contexto com o mapa de renomeação de valores enumerados substituído. */
@@ -58,7 +61,8 @@ public record BxmlTranslateContext(
                 enumeratedSetRenames,
                 enumeratedSetNames,
                 multiArgLambdaConstantNames,
-                machineName);
+                machineName,
+                crossMachineVariableNames);
     }
 
     /** Retorna uma cópia com renomeação de conjuntos enumerados (ex. {@code ALARM_STATUS} → {@code ctx__ALARM_STATUS}). */
@@ -72,7 +76,8 @@ public record BxmlTranslateContext(
                 renames == null ? Map.of() : renames,
                 enumeratedSetNames,
                 multiArgLambdaConstantNames,
-                machineName);
+                machineName,
+                crossMachineVariableNames);
     }
 
     /** Retorna uma cópia deste contexto com os nomes de conjuntos enumerados substituídos. */
@@ -86,7 +91,57 @@ public record BxmlTranslateContext(
                 enumeratedSetRenames,
                 setNames == null ? Set.of() : setNames,
                 multiArgLambdaConstantNames,
-                machineName);
+                machineName,
+                crossMachineVariableNames);
+    }
+
+    /**
+     * Retorna uma cópia deste contexto com os nomes de variáveis de máquinas SEES/IMPORTS
+     * (transitivo) substituídos — usado por {@link com.example.bxml.BxmlExpressionToAcsl} para não
+     * tratar como "variável livre" (parâmetro extra) da função lógica gerada para {@code %} um
+     * identificador que já é uma variável de estado de outra máquina visível (ex. {@code array} de
+     * {@code VArray}, importada por {@code Fifo_i_2}) — {@link #variableLogicTypes()} só cobre as
+     * variáveis da PRÓPRIA máquina sendo traduzida.
+     */
+    public BxmlTranslateContext withCrossMachineVariableNames(Set<String> names) {
+        return new BxmlTranslateContext(
+                types,
+                comprehensions,
+                variableLogicTypes,
+                lambdaRegistry,
+                enumValueRenames,
+                enumeratedSetRenames,
+                enumeratedSetNames,
+                multiArgLambdaConstantNames,
+                machineName,
+                names == null ? Set.of() : names);
+    }
+
+    /**
+     * Retorna uma cópia deste contexto com {@code extra} mesclado em {@link #variableLogicTypes()}
+     * como fallback (entradas já presentes têm prioridade) — usado para que o invariante de uma
+     * camada da cadeia de refinamento (ex.: {@code _i}) veja o tipo de uma variável declarada só
+     * numa camada intermédia (ex.: {@code ss_r} em {@code _r}), que {@link #variableLogicTypes()}
+     * só cobre para a PRÓPRIA máquina (e a abstrata raiz) sem isto — sem o tipo autoritativo,
+     * {@code isListValued} cai no fallback por {@code typref} cru, que não distingue sequência de
+     * relação genérica (ambas {@code POW(INTEGER*T)} em B), gerando {@code sequence_ran}/{@code
+     * relation_ran} trocados.
+     */
+    public BxmlTranslateContext withAdditionalVariableLogicTypes(Map<String, String> extra) {
+        if (extra == null || extra.isEmpty()) return this;
+        Map<String, String> merged = new LinkedHashMap<>(extra);
+        merged.putAll(variableLogicTypes);
+        return new BxmlTranslateContext(
+                types,
+                comprehensions,
+                merged,
+                lambdaRegistry,
+                enumValueRenames,
+                enumeratedSetRenames,
+                enumeratedSetNames,
+                multiArgLambdaConstantNames,
+                machineName,
+                crossMachineVariableNames);
     }
 
     private static String machineNameFrom(Element machineEl) {
@@ -113,14 +168,16 @@ public record BxmlTranslateContext(
         String machineName = machineNameFrom(machineEl);
         BxmlTranslateContext tmp =
                 new BxmlTranslateContext(
-                        types, reg, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), machineName);
+                        types, reg, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), machineName,
+                        Set.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
         Set<String> lambdaConstantNames =
                 BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet();
         return new BxmlTranslateContext(
-                types, reg, merged, null, Map.of(), Map.of(), Set.of(), lambdaConstantNames, machineName);
+                types, reg, merged, null, Map.of(), Map.of(), Set.of(), lambdaConstantNames, machineName,
+                Set.of());
     }
 
     /**
@@ -155,7 +212,7 @@ public record BxmlTranslateContext(
         BxmlTranslateContext tmp =
                 new BxmlTranslateContext(
                         types, sharedComprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(),
-                        machineName);
+                        machineName, Set.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         Set<String> lambdaConstantNames =
@@ -175,7 +232,8 @@ public record BxmlTranslateContext(
                             Map.of(),
                             Set.of(),
                             Set.of(),
-                            absMachineName);
+                            absMachineName,
+                            Set.of());
             merged.putAll(
                     BxmlMachineVariables.inferVariableLogicTypes(
                             abstractMachineElForSharedVariableTypes, tmpAbs));
@@ -186,6 +244,6 @@ public record BxmlTranslateContext(
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
         return new BxmlTranslateContext(
                 types, sharedComprehensions, merged, null, Map.of(), Map.of(), Set.of(), lambdaConstantNames,
-                machineName);
+                machineName, Set.of());
     }
 }

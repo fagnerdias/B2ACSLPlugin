@@ -1,5 +1,6 @@
 package com.example.bxml;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -68,6 +69,21 @@ public final class BxmlLoopTranslator {
     public static List<LoopContract> translateLoopsFromImplementationOperation(
             Element implementationOperation, BxmlTranslateContext ctx, Element abstractMachineEl,
             Map<String, List<String>> importedOpAssigns) {
+        return translateLoopsFromImplementationOperation(
+                implementationOperation, ctx, abstractMachineEl, importedOpAssigns, null);
+    }
+
+    /**
+     * @param bxmlDirectory diretório das fontes {@code .bxml} — necessário para resolver a fatia
+     *     {@code [low .. high]} de um array no {@code loop assigns} quando o conjunto do seu domínio
+     *     só está valorado numa máquina VISTA (SEES), não na própria implementação (ex.: {@code
+     *     PERSON} valorado em {@code ContextI}, visto por {@code RegisterI}); sem isto, cai para
+     *     {@code [..]} (equivalente para o WP, mas menos legível — ver {@link
+     *     BxmlMachineVariables#qualifyLoopAssignTarget}).
+     */
+    public static List<LoopContract> translateLoopsFromImplementationOperation(
+            Element implementationOperation, BxmlTranslateContext ctx, Element abstractMachineEl,
+            Map<String, List<String>> importedOpAssigns, Path bxmlDirectory) {
         if (implementationOperation == null || ctx == null) {
             return List.of();
         }
@@ -75,8 +91,32 @@ public final class BxmlLoopTranslator {
         if (body == null) {
             return List.of();
         }
+        return translateLoopsFromSubstitution(body, ctx, abstractMachineEl, importedOpAssigns, bxmlDirectory);
+    }
+
+    /**
+     * Como {@link #translateLoopsFromImplementationOperation}, mas a partir de qualquer raiz de
+     * substituição já resolvida (ex.: o {@code <Initialisation>} de uma máquina, que não tem o
+     * wrapper {@code <Body>} de uma {@code <Operation>}) — usado para {@code WHILE} explícitos
+     * dentro da inicialização (com {@code INVARIANT}/{@code VARIANT} escritos pelo usuário em B),
+     * que antes só eram reconhecidos dentro de corpos de operação.
+     */
+    public static List<LoopContract> translateLoopsFromSubstitution(
+            Element substitutionRoot, BxmlTranslateContext ctx, Element abstractMachineEl,
+            Map<String, List<String>> importedOpAssigns) {
+        return translateLoopsFromSubstitution(
+                substitutionRoot, ctx, abstractMachineEl, importedOpAssigns, null);
+    }
+
+    /** Como acima, com {@code bxmlDirectory} — ver {@link #translateLoopsFromImplementationOperation}. */
+    public static List<LoopContract> translateLoopsFromSubstitution(
+            Element substitutionRoot, BxmlTranslateContext ctx, Element abstractMachineEl,
+            Map<String, List<String>> importedOpAssigns, Path bxmlDirectory) {
+        if (substitutionRoot == null || ctx == null) {
+            return List.of();
+        }
         List<LoopContract> loops = new ArrayList<>();
-        walkForWhileLoops(body, ctx, abstractMachineEl, loops, importedOpAssigns);
+        walkForWhileLoops(substitutionRoot, ctx, abstractMachineEl, loops, importedOpAssigns, bxmlDirectory);
         return List.copyOf(loops);
     }
 
@@ -102,13 +142,16 @@ public final class BxmlLoopTranslator {
 
     private static void walkForWhileLoops(
             Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, List<LoopContract> out,
-            Map<String, List<String>> importedOpAssigns) {
+            Map<String, List<String>> importedOpAssigns, Path bxmlDirectory) {
         if (sub == null) {
             return;
         }
         if ("While".equals(sub.getLocalName())) {
-            out.add(translateWhile(sub, ctx, abstractMachineEl, out.size() + 1, importedOpAssigns));
-            walkForWhileLoops(firstChildElement(sub, "Body"), ctx, abstractMachineEl, out, importedOpAssigns);
+            out.add(translateWhile(
+                    sub, ctx, abstractMachineEl, out.size() + 1, importedOpAssigns, bxmlDirectory));
+            walkForWhileLoops(
+                    firstChildElement(sub, "Body"), ctx, abstractMachineEl, out, importedOpAssigns,
+                    bxmlDirectory);
             return;
         }
         NodeList nl = sub.getChildNodes();
@@ -121,13 +164,13 @@ public final class BxmlLoopTranslator {
             if ("Attr".equals(ch.getLocalName())) {
                 continue;
             }
-            walkForWhileLoops(ch, ctx, abstractMachineEl, out, importedOpAssigns);
+            walkForWhileLoops(ch, ctx, abstractMachineEl, out, importedOpAssigns, bxmlDirectory);
         }
     }
 
     private static LoopContract translateWhile(
             Element whileEl, BxmlTranslateContext ctx, Element abstractMachineEl, int index,
-            Map<String, List<String>> importedOpAssigns) {
+            Map<String, List<String>> importedOpAssigns, Path bxmlDirectory) {
         Element invEl = firstChildElement(whileEl, "Invariant");
         String invariant = "";
         if (invEl != null) {
@@ -145,20 +188,14 @@ public final class BxmlLoopTranslator {
 
         LinkedHashSet<String> assigns = new LinkedHashSet<>();
         Element body = firstChildElement(whileEl, "Body");
-        collectLoopAssigns(body, ctx, abstractMachineEl, assigns, importedOpAssigns, Set.of());
+        collectLoopAssigns(body, ctx, abstractMachineEl, assigns, importedOpAssigns, Set.of(), bxmlDirectory);
 
         return new LoopContract(index, invariant, variant, List.copyOf(assigns));
     }
 
     private static void collectLoopAssigns(
             Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, Set<String> out,
-            Map<String, List<String>> importedOpAssigns) {
-        collectLoopAssigns(sub, ctx, abstractMachineEl, out, importedOpAssigns, Set.of());
-    }
-
-    private static void collectLoopAssigns(
-            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl, Set<String> out,
-            Map<String, List<String>> importedOpAssigns, Set<String> localVars) {
+            Map<String, List<String>> importedOpAssigns, Set<String> localVars, Path bxmlDirectory) {
         if (sub == null) {
             return;
         }
@@ -172,7 +209,7 @@ public final class BxmlLoopTranslator {
                         // atribuição simples: x := ...
                         String name = lhs.getAttribute("value");
                         if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
-                            out.add(qualify(name.trim(), ctx, abstractMachineEl));
+                            out.add(qualify(name.trim(), ctx, abstractMachineEl, bxmlDirectory));
                         }
                     } else if ("Binary_Exp".equals(lhs.getLocalName())
                             && "(".equals(lhs.getAttribute("op"))) {
@@ -181,7 +218,7 @@ public final class BxmlLoopTranslator {
                         if (!args.isEmpty() && "Id".equals(args.get(0).getLocalName())) {
                             String name = args.get(0).getAttribute("value");
                             if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
-                                out.add(qualify(name.trim(), ctx, abstractMachineEl));
+                                out.add(qualify(name.trim(), ctx, abstractMachineEl, bxmlDirectory));
                             }
                         }
                     }
@@ -203,7 +240,9 @@ public final class BxmlLoopTranslator {
             }
             Element innerBody = firstChildElement(sub, "Body");
             if (innerBody != null) {
-                collectLoopAssigns(innerBody, ctx, abstractMachineEl, out, importedOpAssigns, innerLocals);
+                collectLoopAssigns(
+                        innerBody, ctx, abstractMachineEl, out, importedOpAssigns, innerLocals,
+                        bxmlDirectory);
             }
             return;
         }
@@ -242,7 +281,7 @@ public final class BxmlLoopTranslator {
             if ("Attr".equals(ch.getLocalName())) {
                 continue;
             }
-            collectLoopAssigns(ch, ctx, abstractMachineEl, out, importedOpAssigns, localVars);
+            collectLoopAssigns(ch, ctx, abstractMachineEl, out, importedOpAssigns, localVars, bxmlDirectory);
         }
     }
 
@@ -267,12 +306,13 @@ public final class BxmlLoopTranslator {
      * Qualifica o nome de uma variável assignada no loop: variáveis de máquina recebem prefixo
      * {@code machineName__} (e fatia de array se aplicável); variáveis locais ficam como-estão.
      */
-    private static String qualify(String varName, BxmlTranslateContext ctx, Element abstractMachineEl) {
+    private static String qualify(
+            String varName, BxmlTranslateContext ctx, Element abstractMachineEl, Path bxmlDirectory) {
         if (ctx == null || abstractMachineEl == null) {
             return varName;
         }
         return BxmlMachineVariables.qualifyLoopAssignTarget(
-                varName, ctx.machineName(), abstractMachineEl, ctx);
+                varName, ctx.machineName(), abstractMachineEl, ctx, bxmlDirectory);
     }
 
     private static Element firstChildElement(Element parent, String localName) {

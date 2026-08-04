@@ -86,7 +86,7 @@ public final class FormalVerificationReportDialog {
         scrollPane.getVerticalScrollBar().setUnitIncrement(16);
         scrollPane.getHorizontalScrollBar().setUnitIncrement(16);
 
-        JButton saveButton = new JButton("Save Full Output (.txt)");
+        JButton saveButton = new JButton("Save Full Log (.txt)");
         JButton closeButton = new JButton("Close");
         JPanel buttonBar = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 8));        
         buttonBar.add(closeButton);
