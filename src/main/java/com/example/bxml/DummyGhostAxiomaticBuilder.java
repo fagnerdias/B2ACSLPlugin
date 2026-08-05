@@ -522,17 +522,42 @@ final class DummyGhostAxiomaticBuilder {
                     t.startsWith("Relation_")
                             ? t.substring("Relation_".length())
                             : t.substring("Function_".length());
-            String[] parts = suffix.split("_", 2);
-            if (parts.length == 2) {
-                return "DRelation<"
-                        + acslTypeParamName(parts[0])
-                        + ", "
-                        + acslTypeParamName(parts[1])
-                        + ">";
+            int firstUnderscore = suffix.indexOf('_');
+            if (firstUnderscore > 0) {
+                String domainToken = suffix.substring(0, firstUnderscore);
+                String codomainSuffix = suffix.substring(firstUnderscore + 1);
+                String result =
+                        "DRelation<"
+                                + acslTypeParamName(domainToken)
+                                + ", "
+                                + dummyTypeFromFlattenedSuffix(codomainSuffix)
+                                + ">";
+                // Codomínio DSet<...> aninhado produz ">>" adjacente (ex.: "DSet<integer>>") — o
+                // lexer do Frama-C tokeniza-o como shift, não dois fechos de genérico (mesmo
+                // problema que BxmlTypeRegistry#spaceOutAdjacentClosingAngleBrackets evita do lado
+                // real); lookahead para lidar com 2+ fechos consecutivos numa só passagem.
+                return result.replaceAll(">(?=>)", "> ");
             }
             return "DRelation<integer, integer>";
         }
         return t;
+    }
+
+    /**
+     * Parte achatada de um codomínio (ver {@code BxmlTypeRegistry#resolveCartesianPartType}), ex.
+     * {@code Set_integer} (de {@code Set<integer>}, um domínio/codomínio ele próprio um conjunto —
+     * {@code PLAYER --> POW(ISLAND)}) → {@code DSet<integer>}, recursivo para {@code POW(POW(...))}
+     * ({@code Set_Set_integer} → {@code DSet<DSet<integer>>}). Sem isto, {@code split("_", 2)}
+     * simples tratava {@code "Set_integer"} inteiro como um único nome de tipo escalar desconhecido,
+     * caindo no default silencioso de {@link #acslTypeParamName} ({@code integer}) — {@code
+     * DRelation<integer, integer>} errado em vez de {@code DRelation<integer, DSet<integer>>}, só
+     * rejeitado tarde pelo front-end isolado com "incompatible types".
+     */
+    private static String dummyTypeFromFlattenedSuffix(String suffix) {
+        if (suffix.startsWith("Set_") && suffix.length() > 4) {
+            return "DSet<" + dummyTypeFromFlattenedSuffix(suffix.substring(4)) + ">";
+        }
+        return acslTypeParamName(suffix);
     }
 
     private static boolean isScalarLogicType(String t) {
@@ -577,6 +602,19 @@ final class DummyGhostAxiomaticBuilder {
         List<String> seenDeferredSets =
                 BxmlSetsTranslator.listSeenMachineDeferredSetQualifiedNames(machineEl, bxmlDirectory);
         for (String name : seenDeferredSets) {
+            Pattern pat =
+                    Pattern.compile(
+                            "(?<![A-Za-z0-9_])dummy_" + Pattern.quote(name) + "(?![A-Za-z0-9_])");
+            if (pat.matcher(ghostText).find()) {
+                sb.append("        logic DSet<integer> dummy_").append(name).append(";\n\n");
+            }
+        }
+        // Conjuntos diferidos da PRÓPRIA máquina (ex. RulerOfTheSeas_ISLAND, já qualificados por
+        // ctx.enumeratedSetRenames() antes do texto chegar aqui — ver buildEnumeratedSetRenamesWithSees,
+        // que apesar do nome também funde buildDeferredSetRenames): mesmo tratamento, sem o qual o
+        // front-end isolado rejeita com "unbound logic variable" (a referência já vem prefixada
+        // dummy_ por ghostDummyConcreteRefs, mas nunca é DECLARADA).
+        for (String name : BxmlSetsTranslator.buildDeferredSetRenames(machineEl).values()) {
             Pattern pat =
                     Pattern.compile(
                             "(?<![A-Za-z0-9_])dummy_" + Pattern.quote(name) + "(?![A-Za-z0-9_])");

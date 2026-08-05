@@ -22,20 +22,22 @@ public record BxmlTranslateContext(
         String machineName,
         Set<String> crossMachineVariableNames,
         Map<String, String> crossMachineVariableLogicTypes,
-        Set<String> declaredSetNames) {
+        Set<String> declaredSetNames,
+        SigmaFunctionRegistry sigmaRegistry,
+        UnionInterFunctionRegistry unionInterRegistry) {
 
-    /** Sem registo de lambdas nem renomeação de enumerados. */
+    /** Sem registo de lambdas/sigma/union-inter nem renomeação de enumerados. */
     public BxmlTranslateContext(
             BxmlTypeRegistry types,
             BxmlComprehensionRegistry comprehensions,
             Map<String, String> variableLogicTypes) {
         this(types, comprehensions, variableLogicTypes, null, Map.of(), Map.of(), Set.of(), Set.of(), "",
-                Set.of(), Map.of(), Set.of());
+                Set.of(), Map.of(), Set.of(), null, null);
     }
 
     public BxmlTranslateContext(BxmlTypeRegistry types, BxmlComprehensionRegistry comprehensions) {
         this(types, comprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), "", Set.of(),
-                Map.of(), Set.of());
+                Map.of(), Set.of(), null, null);
     }
 
     /** Retorna uma cópia deste contexto com o registo de lambdas substituído. */
@@ -52,7 +54,47 @@ public record BxmlTranslateContext(
                 machineName,
                 crossMachineVariableNames,
                 crossMachineVariableLogicTypes,
-                declaredSetNames);
+                declaredSetNames,
+                sigmaRegistry,
+                unionInterRegistry);
+    }
+
+    /** Retorna uma cópia deste contexto com o registo de funções SIGMA/PI/MIN/MAX substituído. */
+    public BxmlTranslateContext withSigmaRegistry(SigmaFunctionRegistry registry) {
+        return new BxmlTranslateContext(
+                types,
+                comprehensions,
+                variableLogicTypes,
+                lambdaRegistry,
+                enumValueRenames,
+                enumeratedSetRenames,
+                enumeratedSetNames,
+                multiArgLambdaConstantNames,
+                machineName,
+                crossMachineVariableNames,
+                crossMachineVariableLogicTypes,
+                declaredSetNames,
+                registry,
+                unionInterRegistry);
+    }
+
+    /** Retorna uma cópia deste contexto com o registo de funções UNION/INTER substituído. */
+    public BxmlTranslateContext withUnionInterRegistry(UnionInterFunctionRegistry registry) {
+        return new BxmlTranslateContext(
+                types,
+                comprehensions,
+                variableLogicTypes,
+                lambdaRegistry,
+                enumValueRenames,
+                enumeratedSetRenames,
+                enumeratedSetNames,
+                multiArgLambdaConstantNames,
+                machineName,
+                crossMachineVariableNames,
+                crossMachineVariableLogicTypes,
+                declaredSetNames,
+                sigmaRegistry,
+                registry);
     }
 
     /** Retorna uma cópia deste contexto com o mapa de renomeação de valores enumerados substituído. */
@@ -69,7 +111,9 @@ public record BxmlTranslateContext(
                 machineName,
                 crossMachineVariableNames,
                 crossMachineVariableLogicTypes,
-                declaredSetNames);
+                declaredSetNames,
+                sigmaRegistry,
+                unionInterRegistry);
     }
 
     /** Retorna uma cópia com renomeação de conjuntos enumerados (ex. {@code ALARM_STATUS} → {@code ctx__ALARM_STATUS}). */
@@ -86,7 +130,9 @@ public record BxmlTranslateContext(
                 machineName,
                 crossMachineVariableNames,
                 crossMachineVariableLogicTypes,
-                declaredSetNames);
+                declaredSetNames,
+                sigmaRegistry,
+                unionInterRegistry);
     }
 
     /** Retorna uma cópia deste contexto com os nomes de conjuntos enumerados substituídos. */
@@ -103,7 +149,9 @@ public record BxmlTranslateContext(
                 machineName,
                 crossMachineVariableNames,
                 crossMachineVariableLogicTypes,
-                declaredSetNames);
+                declaredSetNames,
+                sigmaRegistry,
+                unionInterRegistry);
     }
 
     /**
@@ -127,7 +175,9 @@ public record BxmlTranslateContext(
                 machineName,
                 names == null ? Set.of() : names,
                 crossMachineVariableLogicTypes,
-                declaredSetNames);
+                declaredSetNames,
+                sigmaRegistry,
+                unionInterRegistry);
     }
 
     /**
@@ -150,7 +200,9 @@ public record BxmlTranslateContext(
                 machineName,
                 crossMachineVariableNames,
                 types0 == null ? Map.of() : types0,
-                declaredSetNames);
+                declaredSetNames,
+                sigmaRegistry,
+                unionInterRegistry);
     }
 
     /**
@@ -173,7 +225,9 @@ public record BxmlTranslateContext(
                 machineName,
                 crossMachineVariableNames,
                 crossMachineVariableLogicTypes,
-                setNames == null ? Set.of() : setNames);
+                setNames == null ? Set.of() : setNames,
+                sigmaRegistry,
+                unionInterRegistry);
     }
 
     /**
@@ -202,7 +256,9 @@ public record BxmlTranslateContext(
                 machineName,
                 crossMachineVariableNames,
                 crossMachineVariableLogicTypes,
-                declaredSetNames);
+                declaredSetNames,
+                sigmaRegistry,
+                unionInterRegistry);
     }
 
     private static String machineNameFrom(Element machineEl) {
@@ -231,7 +287,7 @@ public record BxmlTranslateContext(
         BxmlTranslateContext tmp =
                 new BxmlTranslateContext(
                         types, reg, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), machineName,
-                        Set.of(), Map.of(), setNames);
+                        Set.of(), Map.of(), setNames, null, null);
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
@@ -239,7 +295,7 @@ public record BxmlTranslateContext(
                 BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet();
         return new BxmlTranslateContext(
                 types, reg, merged, null, Map.of(), Map.of(), Set.of(), lambdaConstantNames, machineName,
-                Set.of(), Map.of(), setNames);
+                Set.of(), Map.of(), setNames, null, null);
     }
 
     /**
@@ -279,7 +335,7 @@ public record BxmlTranslateContext(
         BxmlTranslateContext tmp =
                 new BxmlTranslateContext(
                         types, sharedComprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(),
-                        machineName, Set.of(), Map.of(), setNames);
+                        machineName, Set.of(), Map.of(), setNames, null, null);
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         Set<String> lambdaConstantNames =
@@ -302,7 +358,9 @@ public record BxmlTranslateContext(
                             absMachineName,
                             Set.of(),
                             Map.of(),
-                            setNames);
+                            setNames,
+                            null,
+                            null);
             merged.putAll(
                     BxmlMachineVariables.inferVariableLogicTypes(
                             abstractMachineElForSharedVariableTypes, tmpAbs));
@@ -313,6 +371,6 @@ public record BxmlTranslateContext(
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
         return new BxmlTranslateContext(
                 types, sharedComprehensions, merged, null, Map.of(), Map.of(), Set.of(), lambdaConstantNames,
-                machineName, Set.of(), Map.of(), setNames);
+                machineName, Set.of(), Map.of(), setNames, null, null);
     }
 }

@@ -125,6 +125,23 @@ public final class BxmlTypeRegistry {
      * ficheiro alcançado via {@code include}, nunca inline num ficheiro de topo (confirmado
      * empiricamente).
      */
+    /**
+     * Tipo ACSL de uma parte do produto cartesiano flattened (ver {@link
+     * #powCartesianProductToAcslRelationType}): {@code POW(X)} (ex.: domínio/codomínio ele próprio
+     * um conjunto, como em {@code PLAYER --> POW(ISLAND)}) → {@code Set<...>} recursivo; senão
+     * escalar via {@link #acslElementTypeNameStatic}. Sem isto, uma parte {@code POW(X)} caía como
+     * string opaca em {@code acslElementTypeNameStatic} (nunca bate INTEGER/INT/NAT/BOOL) e resolvia
+     * silenciosamente para {@code integer} — {@code Relation_int_int} errado em vez de {@code
+     * Relation<integer, Set<integer>>}, só rejeitado tarde por WP com "incompatible types".
+     */
+    private static String resolveCartesianPartType(String part) {
+        if (part != null && part.startsWith("POW(") && part.endsWith(")")) {
+            String inner = part.substring(4, part.length() - 1).trim();
+            return "Set<" + resolveCartesianPartType(inner) + ">";
+        }
+        return acslElementTypeNameStatic(part);
+    }
+
     public static String powCartesianProductToAcslRelationType(String innerProduct) {
         if (innerProduct == null || !innerProduct.contains("*")) {
             return "Relation_int_int";
@@ -139,7 +156,7 @@ public final class BxmlTypeRegistry {
         }
         java.util.List<String> acslTypes = new java.util.ArrayList<>();
         for (String part : parts) {
-            acslTypes.add(acslElementTypeNameStatic(part));
+            acslTypes.add(resolveCartesianPartType(part));
         }
 
         if (parts.size() == 2) {
@@ -242,13 +259,20 @@ public final class BxmlTypeRegistry {
         return acslElementTypeName(getRawType(typref));
     }
 
-    /** Nome de elemento ACSL (minúsculas) para {@code Set<...>}. */
+    /**
+     * Tipo de elemento ACSL para {@code Set<...>}/{@code \forall}. Alinhado a {@link
+     * #acslElementTypeNameStatic}: conjuntos B diferidos/enumerados (ex.: {@code ISLAND}, {@code
+     * BOOK}) nunca ganham um tipo ACSL próprio declarado neste codebase — são sempre modelados como
+     * {@code Set<integer>} (ver {@code axiomatic <Machine>_sets}), por isso o default tem de cair em
+     * {@code "integer"}, não {@code bName.toLowerCase()} (que produzia um tipo nunca declarado, ex.
+     * {@code Set<island>}, rejeitado como "unexpected token"/"unbound" pelo Frama-C).
+     */
     public String acslElementTypeName(String bName) {
         if (bName == null || bName.isBlank()) return "integer";
         return switch (bName) {
             case "INTEGER", "INT", "NAT" -> "integer";
             case "BOOL" -> "boolean";
-            default -> bName.toLowerCase();
+            default -> "integer";
         };
     }
 

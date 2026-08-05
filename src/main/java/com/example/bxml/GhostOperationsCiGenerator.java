@@ -252,6 +252,9 @@ public final class GhostOperationsCiGenerator {
 
         BxmlTranslateContext ctx =
                 BxmlTranslateContext.forMachine(abstractMachineEl, gluing)
+                        .withLambdaRegistry(new LambdaFunctionRegistry())
+                        .withSigmaRegistry(new SigmaFunctionRegistry())
+                        .withUnionInterRegistry(new UnionInterFunctionRegistry())
                         .withEnumRenames(
                                 BxmlSetsTranslator.buildEnumRenamesWithSees(
                                         abstractMachineEl, mergedMachineElements, bxmlDirectory))
@@ -285,6 +288,12 @@ public final class GhostOperationsCiGenerator {
         concreteConstants.addAll(
                 BxmlSetsTranslator.listSeenMachineDeferredSetQualifiedNames(
                         abstractMachineEl, bxmlDirectory));
+        // Conjuntos diferidos da PRÓPRIA máquina (ex. RulerOfTheSeas_ISLAND, já renomeados de ISLAND
+        // para o nome qualificado por ctx.enumeratedSetRenames() — ver buildEnumeratedSetRenamesWithSees,
+        // que apesar do nome também funde buildDeferredSetRenames): sem isto ficam sem dummy_,
+        // "unbound logic variable" no front-end isolado (ex. INITIALISATION referenciando o próprio
+        // ISLAND da máquina, não só de uma máquina SEEN).
+        concreteConstants.addAll(BxmlSetsTranslator.buildDeferredSetRenames(abstractMachineEl).values());
 
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
                 BxmlSetsTranslator.listEnumeratedSetsWithSees(
@@ -322,6 +331,40 @@ public final class GhostOperationsCiGenerator {
         for (GhostOp go : ghostOps) {
             allGhostEnsureLines.addAll(go.ghostEnsures());
         }
+
+        // % (lambda) e SIGMA/PI/MIN/MAX usados nos ensures ghost acima (ex.: ANY_Sub que soma/mapeia
+        // sobre um domínio): ghost_operations.ci é um front-end isolado (não vê os lambda_funcNN/
+        // sigma_funcNN de -acsl-import), por isso cada um precisa da SUA PRÓPRIA cópia local — ver
+        // LambdaFunctionRegistry/SigmaFunctionRegistry, populados como efeito colateral da tradução
+        // das ensures acima (ctx.withLambdaRegistry/withSigmaRegistry no início desta função). Sem
+        // isto, % cai no fallback inline "\lambda ...", que o front-end isolado não aceita
+        // (confirmado empiricamente: "unexpected token '\lambda'"). Calculados ANTES de
+        // DummyGhostAxiomaticBuilder.format abaixo (não só emitidos depois): o texto de cada um tem
+        // de entrar em allGhostEnsureLines para que os símbolos da lib que usa (belongs,
+        // function_apply, is_finite, …) sejam detectados e ganhem declaração dummy_ no preâmbulo,
+        // tal como qualquer outra linha de ensures ghost. Ordem alinhada à do .acsl raiz
+        // (AcslGenerator emite lambda_functions antes de generalized_quantifier_functions).
+        LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
+        String lambdaBlock = lambdaRegistry != null && !lambdaRegistry.isEmpty()
+                ? prefixLocalAxiomaticBlockForGhost(
+                        lambdaRegistry.formatAxiomaticBlock(), ctx, concreteConstants, abstractSet)
+                : null;
+        if (lambdaBlock != null) allGhostEnsureLines.add(lambdaBlock);
+
+        SigmaFunctionRegistry sigmaRegistry = ctx.sigmaRegistry();
+        String sigmaBlock = sigmaRegistry != null && !sigmaRegistry.isEmpty()
+                ? prefixLocalAxiomaticBlockForGhost(
+                        sigmaRegistry.formatAxiomaticBlock(), ctx, concreteConstants, abstractSet)
+                : null;
+        if (sigmaBlock != null) allGhostEnsureLines.add(sigmaBlock);
+
+        UnionInterFunctionRegistry unionInterRegistry = ctx.unionInterRegistry();
+        String unionInterBlock = unionInterRegistry != null && !unionInterRegistry.isEmpty()
+                ? prefixLocalAxiomaticBlockForGhost(
+                        unionInterRegistry.formatAxiomaticBlock(), ctx, concreteConstants, abstractSet)
+                : null;
+        if (unionInterBlock != null) allGhostEnsureLines.add(unionInterBlock);
+
         int maxSetComp =
                 Math.max(
                         ctx.comprehensions().maxComprehensionIndex(),
@@ -338,6 +381,17 @@ public final class GhostOperationsCiGenerator {
                                 bxmlDirectory,
                                 abstractConstDecls);
         if (!axiomaticBlock.isBlank()) sb.append(axiomaticBlock);
+
+        // Como o bloco "axiomatic dummy_ghost" acima: cada um precisa do wrapper /*@ ... */ — .ci é
+        // um front-end externo que só aceita ACSL dentro de comentários de anotação, ao contrário do
+        // .acsl raiz (importado directamente, sem wrapper).
+        for (String block : new String[] {lambdaBlock, sigmaBlock, unionInterBlock}) {
+            if (block == null) continue;
+            sb.append("/*@\n");
+            sb.append(block);
+            if (!block.endsWith("\n")) sb.append("\n");
+            sb.append("*/\n\n");
+        }
 
         for (GhostOp go : ghostOps) {
             sb.append(go.format());
@@ -531,6 +585,7 @@ public final class GhostOperationsCiGenerator {
                     ge = normalizeBooleanLiteralsForGhost(ge);
                     ge = dereferenceScalarOutputParams(ge, op);
                     ge = rewriteBoolOutputPredicateTernary(ge);
+                    ge = rewriteIntegerTernaryPredicateConditionForGhost(ge);
                     ge = castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
@@ -718,6 +773,63 @@ public final class GhostOperationsCiGenerator {
                 "(($1 != 0) <==> $2)");
     }
 
+    /**
+     * {@code \forall T z; X == (P ? A : B)} (X/A/B termos INTEIROS quaisquer, {@code P} um predicado
+     * da lib como {@code dummy_belongs}) → {@code \forall T z; (P ==> X == A) && (!(P) ==> X == B)}.
+     *
+     * <p>Irmã de {@link #rewriteBoolOutputPredicateTernary}, mesma causa raiz (front-end isolado de
+     * {@code .ci} rejeita predicado em posição de termo — "symbol dummy_X is a predicate, not a
+     * function" — condição de ternário É posição de termo) mas forma diferente: aquela é para
+     * ensures {@code boolean} (produz bicondicional); esta é para {@code X}/{@code A}/{@code B}
+     * inteiros (ex.: vindos de {@link BxmlExpressionToAcsl#formatOverwriteWithLambdaAssignment}, B
+     * {@code v := v <+ %z.(...)} ) — não há bicondicional que sirva, precisa da forma com duas
+     * implicações. Só reescreve quando o ternário ocupa TODO o lado direito de um {@code \forall}
+     * simples (não tenta cobrir aninhamento arbitrário); nas demais formas não mexe.
+     */
+    private static String rewriteIntegerTernaryPredicateConditionForGhost(String ensure) {
+        if (ensure == null || !ensure.startsWith("\\forall ") || !ensure.contains(" ? ")) {
+            return ensure;
+        }
+        int semi = ensure.indexOf(';');
+        if (semi < 0) return ensure;
+        String forallPrefix = ensure.substring(0, semi + 1);
+        String rest = ensure.substring(semi + 1).trim();
+        int eqIdx = rest.indexOf(" == (");
+        if (eqIdx < 0) return ensure;
+        String funcApplyPart = rest.substring(0, eqIdx).trim();
+        int openParen = eqIdx + " == (".length() - 1;
+        int closeParen = findMatchingClose(rest, openParen);
+        if (closeParen < 0 || closeParen != rest.length() - 1) {
+            return ensure;
+        }
+        String inner = rest.substring(openParen + 1, closeParen);
+        int qMark = findTopLevelChar(inner, '?', 0);
+        if (qMark < 0) return ensure;
+        int colon = findTopLevelChar(inner, ':', qMark + 1);
+        if (colon < 0) return ensure;
+        String pred = inner.substring(0, qMark).trim();
+        String a = stripOuterParens(inner.substring(qMark + 1, colon).trim());
+        String b = stripOuterParens(inner.substring(colon + 1).trim());
+        return forallPrefix + " (" + pred + " ==> " + funcApplyPart + " == " + a + ")"
+                + " && (!(" + pred + ") ==> " + funcApplyPart + " == " + b + ")";
+    }
+
+    /** Como {@link #findTopLevelComma}, mas procura {@code target} em vez de vírgula. */
+    private static int findTopLevelChar(String s, char target, int start) {
+        int depth = 0;
+        for (int i = start; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') {
+                if (depth == 0) return -1;
+                depth--;
+            } else if (c == target && depth == 0) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     /** {@code TRUE}/{@code FALSE} B restantes → {@code \\true}/{@code \\false} no universo lógico ghost. */
     private static String normalizeBooleanLiteralsForGhost(String text) {
         if (text == null || text.isEmpty()) {
@@ -743,6 +855,41 @@ public final class GhostOperationsCiGenerator {
         }
 
         if (!s.startsWith("equals(")) {
+            // "\forall T z; function_apply(v, z) == rhs" vem de BxmlExpressionToAcsl's
+            // formatOverwriteWithLambdaAssignment (B "v := v <+ %z.(...)", sobreposição relacional
+            // por lambda) — a MESMA razão do caso "function_apply(v, idx) == rhs" logo abaixo: "v"
+            // aqui já denota o pós-estado (o \old(...) relevante já foi aplicado ao "rhs" pelo passo
+            // partilhado em BxmlInitialisationTranslator, ANTES desta função ver o texto), então
+            // cair no fallback genérico rewriteAbstractIdsWithOld também envolveria "v" errado
+            // (\old(dummy_v) em vez de dummy_v) — e nem SEQUER bateria o formato "\forall" que esse
+            // fallback assume (foi desenhado para o "cond" de uma implicação simples).
+            if (s.startsWith("\\forall ")) {
+                int semi = s.indexOf(';');
+                if (semi > 0) {
+                    String forallPrefix = s.substring(0, semi + 1);
+                    String rest = s.substring(semi + 1).trim();
+                    if (rest.startsWith("function_apply(")) {
+                        int fnOpen = rest.indexOf('(');
+                        int fnClose = findMatchingClose(rest, fnOpen);
+                        if (fnClose > fnOpen) {
+                            String argsPart = rest.substring(fnOpen + 1, fnClose);
+                            int argComma = findTopLevelComma(argsPart, 0);
+                            String tail = rest.substring(fnClose + 1).trim();
+                            if (argComma >= 0 && tail.startsWith("==")) {
+                                String v = argsPart.substring(0, argComma).trim();
+                                String boundVarRef = argsPart.substring(argComma + 1).trim();
+                                String rhs = tail.substring(2).trim();
+                                if (abstractVars.contains(v)) {
+                                    String vGhost = "dummy_" + v;
+                                    String rhsGhost = prefixAbstractVarsForGhost(rhs, abstractVars);
+                                    return forallPrefix + " function_apply(" + vGhost + ", "
+                                            + boundVarRef + ") == " + rhsGhost;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // "function_apply(v, idx) == rhs" comes from B's relational-override assignment sugar
             // (f(x) := y, e.g. Price_i.setprice's "price(gg) := pp") via BxmlInitialisationTranslator's
             // generic body-to-ensures translation. Since ACSL "ensures" already denotes post-state,
@@ -1696,6 +1843,48 @@ public final class GhostOperationsCiGenerator {
      */
     private static String prefixAcslLibFunctionsForGhost(String text) {
         return DummyGhostAxiomaticBuilder.prefixLibCallsInSignature(text);
+    }
+
+    /**
+     * Adapta um bloco {@code axiomatic} gerado por {@link LambdaFunctionRegistry}/{@link
+     * SigmaFunctionRegistry} para o universo {@code dummy_ghost}: mesmo tratamento que uma linha de
+     * {@code ensures} ghost normal (ver {@link #rewriteAnySubEnsureForGhost}), já que este bloco não
+     * passa pelo pipeline por-linha (é uma declaração à parte, não uma cláusula de contrato).
+     */
+    private static String prefixLocalAxiomaticBlockForGhost(
+            String rawBlock, BxmlTranslateContext ctx, Set<String> concreteConstantNames,
+            Set<String> abstractVars) {
+        String s = stripCommentLines(rawBlock);
+        s = prefixAcslLibFunctionsForGhost(s);
+        s = prefixEnumValuesForGhost(s, ctx.enumValueRenames());
+        s = prefixGlobalLogicSetsForGhost(s);
+        s = prefixSetComprehensionsForGhost(s);
+        s = ghostDummyConcreteRefs(s, concreteConstantNames);
+        s = prefixAbstractVarsForGhost(s, abstractVars);
+        // Set<A> não existe neste front-end isolado — só o tipo-sombra DSet<A> (ver
+        // DummyGhostAxiomaticBuilder#rewriteDummyTypes, mesma substituição). \list<T> é builtin
+        // nativo da ACSL (não da lib), por isso não precisa de sombra equivalente.
+        return s.replaceAll("\\bSet<", "DSet<");
+    }
+
+    /**
+     * Remove linhas que são inteiramente um comentário de uma linha só (uma linha por comentário —
+     * ver {@link SigmaFunctionRegistry}) antes de embrulhar um bloco no comentário de anotação
+     * {@code .ci}: comentários ACSL não aninham, e o texto livre de um TODO pode colidir com o regex
+     * de {@link DummyGhostAxiomaticBuilder#prefixLibCallsInSignature} (ex.: fronteira de palavra
+     * ASCII não trata acentos — "domínio" casava com o símbolo da lib {@code dom}).
+     */
+    private static String stripCommentLines(String text) {
+        if (text == null || text.isEmpty()) return text;
+        String[] lines = text.split("\n", -1);
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < lines.length; i++) {
+            String t = lines[i].trim();
+            if (t.startsWith("/*") && t.endsWith("*/") && t.length() >= 4) continue;
+            out.append(lines[i]);
+            if (i < lines.length - 1) out.append("\n");
+        }
+        return out.toString();
     }
 
     /**

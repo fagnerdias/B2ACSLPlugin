@@ -36,6 +36,8 @@ import com.example.bxml.BxmlSetsTranslator;
 import com.example.bxml.BxmlTranslateContext;
 import com.example.bxml.BxmlTypeRegistry;
 import com.example.bxml.LambdaFunctionRegistry;
+import com.example.bxml.SigmaFunctionRegistry;
+import com.example.bxml.UnionInterFunctionRegistry;
 import com.example.model.Machine;
 
 /**
@@ -310,6 +312,8 @@ public final class AcslGenerator {
                 BxmlTranslateContext.forMachineWithSharedComprehensions(
                         machineEl, sharedComprehensions, gluing)
                         .withLambdaRegistry(new LambdaFunctionRegistry())
+                        .withSigmaRegistry(new SigmaFunctionRegistry())
+                        .withUnionInterRegistry(new UnionInterFunctionRegistry())
                         .withEnumRenames(
                                 BxmlSetsTranslator.buildEnumRenamesWithSees(
                                         machineEl, mergedMachineElements, bxmlDirectory))
@@ -466,6 +470,8 @@ public final class AcslGenerator {
         // variáveis de estado (ex.: copyOf) que só ficam declaradas após as variáveis.
         String propertiesBlock = BxmlConstantsAndProperties.formatPropertiesBlock(machineEl, ctx);
         int lambdaEmittedUpTo = 0;
+        int sigmaEmittedUpTo = 0;
+        int unionInterEmittedUpTo = 0;
         String valuesRoot = BxmlConstantsAndProperties.formatValuesBlock(machineEl, ctx);
         if (!valuesRoot.isBlank()) {
             sb.append(valuesRoot);
@@ -554,6 +560,8 @@ public final class AcslGenerator {
                             mel, ctx.comprehensions(), gluing, machineEl)
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                     .withLambdaRegistry(ctx.lambdaRegistry())
+                    .withSigmaRegistry(ctx.sigmaRegistry())
+                    .withUnionInterRegistry(ctx.unionInterRegistry())
                     .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
                     .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
@@ -593,6 +601,8 @@ public final class AcslGenerator {
                             mel, ctx.comprehensions(), gluing, machineEl)
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                     .withLambdaRegistry(ctx.lambdaRegistry())
+                    .withSigmaRegistry(ctx.sigmaRegistry())
+                    .withUnionInterRegistry(ctx.unionInterRegistry())
                     .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
                     .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
@@ -623,6 +633,8 @@ public final class AcslGenerator {
                             mel, ctx.comprehensions(), gluing, machineEl)
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                     .withLambdaRegistry(ctx.lambdaRegistry())
+                    .withSigmaRegistry(ctx.sigmaRegistry())
+                    .withUnionInterRegistry(ctx.unionInterRegistry())
                     .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
                     .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
@@ -644,9 +656,9 @@ public final class AcslGenerator {
         StringBuilder mergedInvariantsSb = new StringBuilder();
         appendMergedInvariantPredicatesOnly(
                 mergedInvariantsSb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
-                ctx.enumeratedSetRenames(), mergedVariableRenames, ctx.lambdaRegistry(),
-                ctx.crossMachineVariableNames(), ctx.crossMachineVariableLogicTypes(),
-                refinementChainVariableLogicTypes);
+                ctx.enumeratedSetRenames(), mergedVariableRenames, ctx.lambdaRegistry(), ctx.sigmaRegistry(),
+                ctx.unionInterRegistry(), ctx.crossMachineVariableNames(),
+                ctx.crossMachineVariableLogicTypes(), refinementChainVariableLogicTypes);
 
         // 2b) Lambdas (emissão tardia, após variáveis): lambda_functions pode referenciar variáveis
         // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima. Emitido
@@ -656,6 +668,39 @@ public final class AcslGenerator {
         if (lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo) {
             sb.append("\n");
             sb.append(lambdaRegistry.formatAxiomaticBlockFrom(lambdaEmittedUpTo));
+            sb.append("\n");
+        }
+        // 2c) SIGMA/PI/MIN/MAX (mesma emissão tardia que os lambdas, pelo mesmo motivo: podem
+        // referenciar variáveis de estado só declaradas nos blocos de variáveis acima). Ao
+        // contrário dos lambdas (só predicate/logic escalares), este bloco usa Set<A> genérico
+        // (ex.: Set<integer> no caso de domínio-conjunto) — -acsl-import só aceita instanciação
+        // genérica concreta dentro de um ficheiro alcançado via include, nunca inline num ficheiro
+        // de topo (confirmado empiricamente: "[Syntax error] <" na primeira ocorrência de "Set<" se
+        // deixado inline aqui — mesma restrição que TupleCodomainTypeRegistry já contorna para
+        // "type X = Y;"). Escreve num .acsl próprio da máquina e inclui NESTA MESMA posição (não no
+        // preâmbulo: o bloco referencia variáveis de estado só declaradas ANTES deste ponto).
+        SigmaFunctionRegistry sigmaRegistry = ctx.sigmaRegistry();
+        if (sigmaRegistry != null && sigmaRegistry.size() > sigmaEmittedUpTo) {
+            String sigmaBlock = sigmaRegistry.formatAxiomaticBlockFrom(sigmaEmittedUpTo);
+            String sigmaFileName = baseName + "_sigma_functions.acsl";
+            Files.writeString(outputDir.resolve(sigmaFileName), sigmaBlock);
+            // O conteúdo saiu de 'sb' (só o include entra) — sem isto, símbolos da lib usados só lá
+            // dentro (is_finite, belongs, singleton, …) nunca apareceriam no texto varrido para
+            // decidir os includes do ficheiro raiz (mesmo padrão de connection.acsl, ver acima).
+            libScanRemovedBodies.append(sigmaBlock).append('\n');
+            sb.append("\n");
+            sb.append("include \"").append(sigmaFileName).append("\";\n");
+            sb.append("\n");
+        }
+        // 2d) UNION/INTER (mesmo motivo e mesma técnica de include separado que 2c — Set<T> genérico).
+        UnionInterFunctionRegistry unionInterRegistry = ctx.unionInterRegistry();
+        if (unionInterRegistry != null && unionInterRegistry.size() > unionInterEmittedUpTo) {
+            String unionInterBlock = unionInterRegistry.formatAxiomaticBlockFrom(unionInterEmittedUpTo);
+            String unionInterFileName = baseName + "_union_inter_functions.acsl";
+            Files.writeString(outputDir.resolve(unionInterFileName), unionInterBlock);
+            libScanRemovedBodies.append(unionInterBlock).append('\n');
+            sb.append("\n");
+            sb.append("include \"").append(unionInterFileName).append("\";\n");
             sb.append("\n");
         }
         if (!invariantPredicates.isBlank()) {
@@ -887,6 +932,8 @@ public final class AcslGenerator {
             Map<String, String> enumeratedSetRenames,
             Map<Element, Map<String, String>> variableRenamesByMachine,
             LambdaFunctionRegistry lambdaRegistry,
+            SigmaFunctionRegistry sigmaRegistry,
+            UnionInterFunctionRegistry unionInterRegistry,
             Set<String> crossMachineVariableNames,
             Map<String, String> crossMachineVariableLogicTypes,
             Map<String, String> refinementChainVariableLogicTypes) {
@@ -899,6 +946,8 @@ public final class AcslGenerator {
                             mel, sharedComprehensions, gluing, rootAbstractMachineEl)
                     .withEnumeratedSetRenames(enumeratedSetRenames)
                     .withLambdaRegistry(lambdaRegistry)
+                    .withSigmaRegistry(sigmaRegistry)
+                    .withUnionInterRegistry(unionInterRegistry)
                     .withCrossMachineVariableNames(crossMachineVariableNames)
                     .withCrossMachineVariableLogicTypes(crossMachineVariableLogicTypes)
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
