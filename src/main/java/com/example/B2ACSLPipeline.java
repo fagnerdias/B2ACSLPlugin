@@ -1740,10 +1740,24 @@ public final class B2ACSLPipeline {
         return true;
     }
 
-    /** Substitui {@code assert ghost__} por {@code ghost } nas anotações Frama-C. */
+    /**
+     * Substitui {@code assert ghost__} por {@code ghost } nas anotações Frama-C.
+     *
+     * <p>Usa {@code \s+} (não um espaço literal) entre {@code assert} e {@code ghost__}: o
+     * pretty-printer do {@code -print} do Frama-C QUEBRA a linha quando é longa o suficiente (ex.:
+     * {@code attackplayer}, cuja lista de 4 parâmetros é mais longa que a de qualquer outra operação
+     * ghost neste projeto) — {@code "assert\n        ghost__attackplayer(...)"}, com quebra de linha
+     * e indentação em vez de um único espaço. Um {@code String.replace} literal (a versão anterior)
+     * nunca casava nesse caso, deixando {@code ghost__attackplayer} para trás como uma referência a
+     * PREDICADO ACSL normal dentro do {@code assert} — mas só {@code void attackplayer(...)} (a
+     * função ghost em si, sem o prefixo {@code ghost__}) sobrevive até {@code merged_code.c}, daí
+     * "unbound logic predicate ghost__attackplayer". Só descoberto ao correr RulerOfTheSeas
+     * (primeira operação ghost deste projeto cuja lista de parâmetros é longa o suficiente para
+     * quebrar linha).
+     */
     private static void replaceAssertGhostWithGhostKeyword(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
-        content = content.replace("assert ghost__", "ghost ");
+        content = content.replaceAll("assert\\s+ghost__", "ghost ");
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -1940,13 +1954,20 @@ public final class B2ACSLPipeline {
      */
     private static void liftPureGhostEnsuresToOperationContracts(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
-        // Group 1 uses (?:[^*]|\*(?!/))* instead of [\s\S]*? to prevent the lazy quantifier from
-        // backtracking past the closing */ of the ghost annotation. Without this, a short ghost
-        // call like /*@ ghost add(ee); */ inside a function body could extend (via backtracking)
-        // all the way to the next /*@…*/ block, consuming the C body of the preceding function.
+        // Group 1 usa [^*]*(?:\*(?!/)[^*]*)* — "loop desenrolado" equivalente a (?:[^*]|\*(?!/))*
+        // (mesma linguagem: qualquer texto até o primeiro "*/" literal) mas SEM repetir um GRUPO de
+        // alternação via "*": em Java, Pattern$Loop recursa uma stack frame por repetição de um
+        // GRUPO (Pattern$GroupHead/GroupTail/Branch/BranchConn no stack trace), então o "(?:X|Y)*"
+        // original recursava uma vez por CARACTER do bloco ghost — StackOverflowError em blocos
+        // ghost grandes (ex.: RulerOfTheSeas, com muito mais conteúdo ghost que os exemplos
+        // anteriores — nunca disparou até rodar esse exemplo). A forma desenrolada só recursa uma
+        // vez por "*" literal (raro em texto ACSL), com o grosso do texto consumido pelas classes de
+        // caracteres [^*]* (repetição eficiente, não-recursiva-por-caractere em Java). Mesma proteção
+        // do original contra a cauda "\*/" ser ultrapassada por backtracking: um "*" só é consumido
+        // pelo grupo interno quando NÃO é seguido de "/".
         Pattern ghostThenNormalBeforeDefinition =
                 Pattern.compile(
-                        "(/\\*@\\s*ghost\\b(?:[^*]|\\*(?!/))*\\*/\\s*)"
+                        "(/\\*@\\s*ghost\\b[^*]*(?:\\*(?!/)[^*]*)*\\*/\\s*)"
                                 + "(?s)(/\\*@(?!\\s*(?:ghost|axiomatic)\\b)[\\s\\S]*?\\*/\\s*)"
                                 + "(void\\s+[A-Za-z_]\\w*__([A-Za-z_]\\w*)\\s*\\([^;{}]*\\)\\s*\\{)");
         Pattern pureGhostAssignsNothing =

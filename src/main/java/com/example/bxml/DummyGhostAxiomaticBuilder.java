@@ -152,8 +152,26 @@ final class DummyGhostAxiomaticBuilder {
             }
             for (int k = 1; k <= maxSetComprehensionIndex; k++) {
                 sb.append("        logic DSet<integer> dummy_")
-                        .append(BxmlComprehensionRegistry.comprehensionSetName(machineName, k))
-                        .append(";\n\n");
+                        .append(BxmlComprehensionRegistry.comprehensionSetName(machineName, k));
+                // Aridade tem de bater com a declaração REAL (referenceName/formatAxiomaticBlock):
+                // uma compreensão parametrizada (ex. set_comprehension_2(pp), RulerOfTheSeas's
+                // InvestOnResources) referenciada em texto ghost como dummy_..._2(pp) contra uma
+                // declaração de aridade zero aqui dava "too many arguments" — ver
+                // BxmlComprehensionRegistry#freeVarsForIndex.
+                if (ctx != null && ctx.comprehensions() != null) {
+                    List<String>[] free = ctx.comprehensions().freeVarsForIndex(k, ctx);
+                    if (!free[0].isEmpty()) {
+                        sb.append("(");
+                        for (int i = 0; i < free[0].size(); i++) {
+                            if (i > 0) sb.append(", ");
+                            sb.append(dummyAxiomaticLogicType(free[1].get(i)))
+                                    .append(" ")
+                                    .append(free[0].get(i));
+                        }
+                        sb.append(")");
+                    }
+                }
+                sb.append(";\n\n");
             }
         }
 
@@ -516,6 +534,23 @@ final class DummyGhostAxiomaticBuilder {
                 codomain = "DTuple<" + codomain + ", " + leaves.get(i) + ">";
             }
             return "DRelation<" + domain + ", " + codomain + " >";
+        }
+        // Espelho do ramo acima para o caso oposto: domínio composto (matriz característica, ex.
+        // player_islands_i : PLAYER*ISLAND --> BOOL) + codomínio escalar — ver
+        // BxmlTypeRegistry#TUPLE_DOMAIN_RELATION_NAME.
+        Matcher tupleDomainMatch = BxmlTypeRegistry.TUPLE_DOMAIN_RELATION_NAME.matcher(t);
+        if (tupleDomainMatch.matches()) {
+            List<String> domainLeaves = new ArrayList<>();
+            for (String leaf : tupleDomainMatch.group(2).split("_")) {
+                if (!leaf.isBlank()) domainLeaves.add(leaf);
+            }
+            String codomain = tupleDomainMatch.group(3);
+            String domain = domainLeaves.get(0);
+            for (int i = 1; i < domainLeaves.size(); i++) {
+                domain = "DTuple<" + domain + ", " + domainLeaves.get(i) + ">";
+            }
+            String result = "DRelation<" + domain + ", " + codomain + " >";
+            return result.replaceAll(">(?=>)", "> ");
         }
         if (t.startsWith("Relation_") || t.startsWith("Function_")) {
             String suffix =

@@ -24,7 +24,8 @@ public record BxmlTranslateContext(
         Map<String, String> crossMachineVariableLogicTypes,
         Set<String> declaredSetNames,
         SigmaFunctionRegistry sigmaRegistry,
-        UnionInterFunctionRegistry unionInterRegistry) {
+        UnionInterFunctionRegistry unionInterRegistry,
+        Set<String> deferredSetTypedParameterNames) {
 
     /** Sem registo de lambdas/sigma/union-inter nem renomeação de enumerados. */
     public BxmlTranslateContext(
@@ -32,12 +33,12 @@ public record BxmlTranslateContext(
             BxmlComprehensionRegistry comprehensions,
             Map<String, String> variableLogicTypes) {
         this(types, comprehensions, variableLogicTypes, null, Map.of(), Map.of(), Set.of(), Set.of(), "",
-                Set.of(), Map.of(), Set.of(), null, null);
+                Set.of(), Map.of(), Set.of(), null, null, Set.of());
     }
 
     public BxmlTranslateContext(BxmlTypeRegistry types, BxmlComprehensionRegistry comprehensions) {
         this(types, comprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), "", Set.of(),
-                Map.of(), Set.of(), null, null);
+                Map.of(), Set.of(), null, null, Set.of());
     }
 
     /** Retorna uma cópia deste contexto com o registo de lambdas substituído. */
@@ -56,7 +57,8 @@ public record BxmlTranslateContext(
                 crossMachineVariableLogicTypes,
                 declaredSetNames,
                 sigmaRegistry,
-                unionInterRegistry);
+                unionInterRegistry,
+                deferredSetTypedParameterNames);
     }
 
     /** Retorna uma cópia deste contexto com o registo de funções SIGMA/PI/MIN/MAX substituído. */
@@ -75,7 +77,8 @@ public record BxmlTranslateContext(
                 crossMachineVariableLogicTypes,
                 declaredSetNames,
                 registry,
-                unionInterRegistry);
+                unionInterRegistry,
+                deferredSetTypedParameterNames);
     }
 
     /** Retorna uma cópia deste contexto com o registo de funções UNION/INTER substituído. */
@@ -94,7 +97,8 @@ public record BxmlTranslateContext(
                 crossMachineVariableLogicTypes,
                 declaredSetNames,
                 sigmaRegistry,
-                registry);
+                registry,
+                deferredSetTypedParameterNames);
     }
 
     /** Retorna uma cópia deste contexto com o mapa de renomeação de valores enumerados substituído. */
@@ -113,7 +117,8 @@ public record BxmlTranslateContext(
                 crossMachineVariableLogicTypes,
                 declaredSetNames,
                 sigmaRegistry,
-                unionInterRegistry);
+                unionInterRegistry,
+                deferredSetTypedParameterNames);
     }
 
     /** Retorna uma cópia com renomeação de conjuntos enumerados (ex. {@code ALARM_STATUS} → {@code ctx__ALARM_STATUS}). */
@@ -132,7 +137,8 @@ public record BxmlTranslateContext(
                 crossMachineVariableLogicTypes,
                 declaredSetNames,
                 sigmaRegistry,
-                unionInterRegistry);
+                unionInterRegistry,
+                deferredSetTypedParameterNames);
     }
 
     /** Retorna uma cópia deste contexto com os nomes de conjuntos enumerados substituídos. */
@@ -151,7 +157,8 @@ public record BxmlTranslateContext(
                 crossMachineVariableLogicTypes,
                 declaredSetNames,
                 sigmaRegistry,
-                unionInterRegistry);
+                unionInterRegistry,
+                deferredSetTypedParameterNames);
     }
 
     /**
@@ -177,7 +184,8 @@ public record BxmlTranslateContext(
                 crossMachineVariableLogicTypes,
                 declaredSetNames,
                 sigmaRegistry,
-                unionInterRegistry);
+                unionInterRegistry,
+                deferredSetTypedParameterNames);
     }
 
     /**
@@ -202,7 +210,8 @@ public record BxmlTranslateContext(
                 types0 == null ? Map.of() : types0,
                 declaredSetNames,
                 sigmaRegistry,
-                unionInterRegistry);
+                unionInterRegistry,
+                deferredSetTypedParameterNames);
     }
 
     /**
@@ -227,7 +236,44 @@ public record BxmlTranslateContext(
                 crossMachineVariableLogicTypes,
                 setNames == null ? Set.of() : setNames,
                 sigmaRegistry,
-                unionInterRegistry);
+                unionInterRegistry,
+                deferredSetTypedParameterNames);
+    }
+
+    /**
+     * Retorna uma cópia deste contexto com os nomes de PARÂMETROS DE OPERAÇÃO tipados por um
+     * conjunto diferido/enumerado NA MÁQUINA ABSTRATA (ex. {@code "pp"} para
+     * {@code AddPlayer(pp) = PRE pp:PLAYER & ... END}) substituídos — ver {@link
+     * BxmlMachineVariables#deferredSetTypedOperationParameterNames}.
+     *
+     * <p>Necessário porque o {@code typref} de um parâmetro de operação, DENTRO do corpo/loop da
+     * IMPLEMENTAÇÃO, pode legitimamente ter sido refinado pelo próprio AtelierB para {@code
+     * INTEGER} (ex. usado em indexação de array) mesmo sendo {@code PLAYER} na assinatura
+     * ABSTRATA — mas a assinatura C REAL gerada continua a usar o tipo enum (ex. {@code
+     * RulerOfTheSeas__PLAYER pp}), então o cast {@code (integer)} continua a ser necessário sempre
+     * que o parâmetro entra num slot ACSL genérico (ex. {@code couple<A,B>}). Sem este sinal
+     * adicional, {@code BxmlExpressionToAcsl#translate}'s caso {@code "Id"} (que decide o cast só
+     * pelo {@code typref} do nó) não tem como saber disto — dá "invalid cast from
+     * Tuple&lt;EnumType,...&gt; to Tuple&lt;integer,...&gt;" (confirmado em
+     * {@code AddPlayer}/{@code player_islands_i}).
+     */
+    public BxmlTranslateContext withDeferredSetTypedParameterNames(Set<String> names) {
+        return new BxmlTranslateContext(
+                types,
+                comprehensions,
+                variableLogicTypes,
+                lambdaRegistry,
+                enumValueRenames,
+                enumeratedSetRenames,
+                enumeratedSetNames,
+                multiArgLambdaConstantNames,
+                machineName,
+                crossMachineVariableNames,
+                crossMachineVariableLogicTypes,
+                declaredSetNames,
+                sigmaRegistry,
+                unionInterRegistry,
+                names == null ? Set.of() : names);
     }
 
     /**
@@ -258,7 +304,8 @@ public record BxmlTranslateContext(
                 crossMachineVariableLogicTypes,
                 declaredSetNames,
                 sigmaRegistry,
-                unionInterRegistry);
+                unionInterRegistry,
+                deferredSetTypedParameterNames);
     }
 
     private static String machineNameFrom(Element machineEl) {
@@ -287,7 +334,7 @@ public record BxmlTranslateContext(
         BxmlTranslateContext tmp =
                 new BxmlTranslateContext(
                         types, reg, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), machineName,
-                        Set.of(), Map.of(), setNames, null, null);
+                        Set.of(), Map.of(), setNames, null, null, Set.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
@@ -295,7 +342,7 @@ public record BxmlTranslateContext(
                 BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet();
         return new BxmlTranslateContext(
                 types, reg, merged, null, Map.of(), Map.of(), Set.of(), lambdaConstantNames, machineName,
-                Set.of(), Map.of(), setNames, null, null);
+                Set.of(), Map.of(), setNames, null, null, Set.of());
     }
 
     /**
@@ -335,7 +382,7 @@ public record BxmlTranslateContext(
         BxmlTranslateContext tmp =
                 new BxmlTranslateContext(
                         types, sharedComprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(),
-                        machineName, Set.of(), Map.of(), setNames, null, null);
+                        machineName, Set.of(), Map.of(), setNames, null, null, Set.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         Set<String> lambdaConstantNames =
@@ -360,7 +407,8 @@ public record BxmlTranslateContext(
                             Map.of(),
                             setNames,
                             null,
-                            null);
+                            null,
+                            Set.of());
             merged.putAll(
                     BxmlMachineVariables.inferVariableLogicTypes(
                             abstractMachineElForSharedVariableTypes, tmpAbs));
@@ -370,7 +418,7 @@ public record BxmlTranslateContext(
         }
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
         return new BxmlTranslateContext(
-                types, sharedComprehensions, merged, null, Map.of(), Map.of(), Set.of(), lambdaConstantNames,
-                machineName, Set.of(), Map.of(), setNames, null, null);
+                types, sharedComprehensions, merged, null, Map.of(), Map.of(), Set.of(),
+                lambdaConstantNames, machineName, Set.of(), Map.of(), setNames, null, null, Set.of());
     }
 }

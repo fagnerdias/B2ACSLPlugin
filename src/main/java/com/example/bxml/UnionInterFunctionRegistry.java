@@ -31,8 +31,8 @@ import java.util.regex.Pattern;
 public final class UnionInterFunctionRegistry {
 
     public enum Op {
-        UNION("union_func", "union_set"),
-        INTER("inter_func", "inter_set");
+        UNION("union_func", "set_union"),
+        INTER("inter_func", "set_intersection");
 
         final String namePrefix;
         final String combineOp;
@@ -381,10 +381,17 @@ public final class UnionInterFunctionRegistry {
                 .append("Set<").append(T).append("> dom);\n\n");
 
         if (op == Op.UNION) {
+            // Dois witnesses de tipos DIFERENTES: "witness" só fixa o tipo do DOMÍNIO (Set<T>, ex.
+            // Set<integer> de índices de jogador), "resultWitness" fixa o tipo do RESULTADO
+            // (Set<elementType>, ex. Set<integer> de ilhas) — em geral T != elementType (domínio e
+            // "elemento do conjunto-resultado" são conceptualmente independentes). Usar
+            // e.bodyForX() aqui (como fazia antes) referenciava "x", a variável ligada do corpo, que
+            // NÃO está no escopo deste axioma (só _add a declara) — "unbound logic variable x".
             sb.append("  axiom ").append(name).append("_empty:\n")
-                    .append("    \\forall ").append(fp).append("Set<").append(T).append("> witness;\n")
+                    .append("    \\forall ").append(fp).append("Set<").append(T)
+                    .append("> witness, Set<").append(e.elementType()).append("> resultWitness;\n")
                     .append("      equals(").append(name).append("(").append(fa)
-                    .append("empty(witness)), empty(").append(e.bodyForX()).append("));\n\n");
+                    .append("empty(witness)), empty(resultWitness));\n\n");
             // Sem not_belongs(x, dom): ∪ é idempotente — o axioma vale mesmo com repetição de
             // inserção, ao contrário do análogo em SigmaFunctionRegistry.
             sb.append("  axiom ").append(name).append("_add:\n")

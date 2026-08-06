@@ -359,6 +359,15 @@ public final class BxmlPredicateToAcsl {
                     && BxmlExpressionToAcsl.isRelationOrFunctionValued(leftEl, ctx)) {
                 return "(" + left + " == list_to_function(" + right + "))";
             }
+            // V = %x.(x:D | {y|Q}) — lambda "mapa" valorado-em-conjunto (ver
+            // BxmlExpressionToAcsl#setValuedMapLambdaPointwiseEquality): V é a relação inteira, o
+            // corpo é só o valor pontual — precisa de \forall pontual, não igualdade nua.
+            String setValuedLambdaEq =
+                    BxmlExpressionToAcsl.setValuedMapLambdaPointwiseEquality(leftEl, rightEl, ctx);
+            if (setValuedLambdaEq != null) return setValuedLambdaEq;
+            setValuedLambdaEq =
+                    BxmlExpressionToAcsl.setValuedMapLambdaPointwiseEquality(rightEl, leftEl, ctx);
+            if (setValuedLambdaEq != null) return setValuedLambdaEq;
             if (BxmlExpressionToAcsl.isSetValued(leftEl, ctx)
                     && BxmlExpressionToAcsl.isSetValued(rightEl, ctx)) {
                 return "equals(" + left + ", " + right + ")";

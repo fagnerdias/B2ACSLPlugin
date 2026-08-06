@@ -308,6 +308,7 @@ public final class AcslGenerator {
         // sequence_ran/relation_ran trocados.
         Map<String, String> refinementChainVariableLogicTypes =
                 refinementChainVariableLogicTypes(machineEl, mergedMachineElements);
+        Set<String> enumeratedSetNamesForCtx = BxmlSetsTranslator.buildEnumeratedSetNames(machineEl);
         BxmlTranslateContext ctx =
                 BxmlTranslateContext.forMachineWithSharedComprehensions(
                         machineEl, sharedComprehensions, gluing)
@@ -320,8 +321,7 @@ public final class AcslGenerator {
                         .withEnumeratedSetRenames(
                                 BxmlSetsTranslator.buildEnumeratedSetRenamesWithSees(
                                         machineEl, mergedMachineElements, bxmlDirectory))
-                        .withEnumeratedSetNames(
-                                BxmlSetsTranslator.buildEnumeratedSetNames(machineEl))
+                        .withEnumeratedSetNames(enumeratedSetNamesForCtx)
                         .withCrossMachineVariableNames(
                                 BxmlMachineVariables.transitiveCrossMachineVariableNames(
                                         invariantSourceMachineNames, bxmlDirectory))
@@ -329,6 +329,10 @@ public final class AcslGenerator {
                                 BxmlMachineVariables.transitiveCrossMachineVariableLogicTypes(
                                         invariantSourceMachineNames, bxmlDirectory))
                         .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
+        // deferredSetTypedParameterNames NÃO é preenchido aqui: é por-OPERAÇÃO (nomes de parâmetro
+        // colidem entre operações diferentes da mesma máquina com papéis diferentes — ver javadoc
+        // de BxmlMachineVariables.deferredSetTypedOperationParameterNames), preenchido dentro do
+        // laço de BxmlOperationsTranslator#translateOperations com a Precondition de cada operação.
 
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
@@ -824,11 +828,19 @@ public final class AcslGenerator {
             tupleTypesInclude = "include \"" + baseName + "_tuple_types.acsl\";\n";
         }
         StringBuilder preambleIncludes = new StringBuilder();
-        if (!tupleTypesInclude.isEmpty()) {
-            preambleIncludes.append(tupleTypesInclude);
-        }
+        // import/types.acsl PRIMEIRO: declara os tipos genéricos Set<A>/Tuple<A,B> em si (ver
+        // "axiomatic new_types" nesse ficheiro — "type Set<A>;"/"type Tuple<A,B>;", sem corpo). O
+        // ficheiro de tipos-tupla desta máquina só usa "Set<Tuple<...>>" já assumindo que ambos
+        // estão conhecidos — invertido, o front-end do acsl-import (mais estrito que o "-print" só
+        // do kernel, usado para verificar progresso durante o desenvolvimento) rejeita com
+        // "[Syntax error] <" logo no primeiro uso, por não saber ainda que "Set"/"Tuple" são
+        // genéricos (confirmado: isolar SÓ o alias mais antigo, já usado noutros exemplos, sem
+        // nenhum tipo introduzido por esta sessão, reproduz o mesmo erro na mesma posição).
         if (!omitLibIncludesFromPreamble && !libIncludes.isEmpty()) {
             preambleIncludes.append(libIncludes);
+        }
+        if (!tupleTypesInclude.isEmpty()) {
+            preambleIncludes.append(tupleTypesInclude);
         }
         appendAcslMachineIncludes(preambleIncludes, machineDependencyIncludes);
         if (!preambleIncludes.isEmpty()) {

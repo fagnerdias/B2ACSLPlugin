@@ -489,20 +489,54 @@ public final class BxmlInitialisationTranslator {
      * <p>A tradução das atribuições em {@code Then} reusa {@link #walkSubstitution} (mesmas regras
      * que {@code Initialisation} / corpos de operação).
      */
-    public static String translateAnySubAsExists(Element anySub, BxmlTranslateContext ctx) {
-        if (anySub == null) return "";
+    /**
+     * Análise de aliases de um {@code ANY_Sub}: quais variáveis ligadas ({@code WHERE aux = expr})
+     * são alias PURO de uma variável REAL, via {@code real := aux} direto no {@code THEN} —
+     * extraído de {@link #translateAnySubAsExists} (que consome {@code eliminated()} para omitir
+     * binders desnecessários do {@code \exists} gerado) para também ser reutilizado por {@link
+     * BxmlComprehensionRegistry}: uma compreensão referenciando o alias diretamente (ex. {@code ih}
+     * em {@code ih(ii)}, dentro de {@code {ii|ii:player_islands(pp) & ih(ii)<=0}} em
+     * RulerOfTheSeas's {@code InvestOnResources}) precisa ver a variável REAL ({@code
+     * island_happiness}) como sua livre — não o alias, transitório e sem sentido fora do escopo do
+     * próprio {@code ANY} (nem findável como uma variável de máquina, o que rejeitava o registo da
+     * compreensão por tipo de binder não-simples).
+     */
+    record AnySubAliasInfo(
+            List<Element> varIds,
+            Set<String> anyVarNames,
+            List<Element> guardConjuncts,
+            List<Element> thenSubs,
+            Map<String, Element> definingExpr,
+            Map<String, Element> definingConjunct,
+            Map<String, String> aliasRealName,
+            Map<String, Element> aliasAssign,
+            Set<String> eliminated) {
+
+        /** {@code aux -> real} só para as variáveis efetivamente eliminadas (ver {@link #eliminated}). */
+        Map<String, String> eliminatedAliasToRealNames() {
+            Map<String, String> out = new LinkedHashMap<>();
+            for (String alias : eliminated) {
+                out.put(alias, aliasRealName.get(alias));
+            }
+            return out;
+        }
+    }
+
+    /** {@code null} se {@code anySub} não tiver a forma esperada ({@code Variables}/{@code Pred}/{@code Then}). */
+    static AnySubAliasInfo analyzeAnySubAliases(Element anySub) {
+        if (anySub == null) return null;
         Element vars = firstChildElement(anySub, "Variables");
         Element predEl = firstChildElement(anySub, "Pred");
         Element thenEl = firstChildElement(anySub, "Then");
         if (vars == null || predEl == null || thenEl == null) {
-            return "";
+            return null;
         }
         List<Element> varIds = new ArrayList<>();
         for (Element e : directExpChildren(vars)) {
             if ("Id".equals(e.getLocalName())) varIds.add(e);
         }
         if (varIds.isEmpty()) {
-            return "";
+            return null;
         }
         Set<String> anyVarNames = new LinkedHashSet<>();
         for (Element vid : varIds) {
@@ -560,6 +594,43 @@ public final class BxmlInitialisationTranslator {
         Set<String> eliminated = new LinkedHashSet<>(definingExpr.keySet());
         eliminated.retainAll(aliasRealName.keySet());
 
+        return new AnySubAliasInfo(
+                varIds, anyVarNames, guardConjuncts, thenSubs, definingExpr, definingConjunct,
+                aliasRealName, aliasAssign, eliminated);
+    }
+
+    public static String translateAnySubAsExists(Element anySub, BxmlTranslateContext ctx) {
+        if (anySub == null) return "";
+        AnySubAliasInfo info = analyzeAnySubAliases(anySub);
+        if (info == null) return "";
+        Element predEl = firstChildElement(anySub, "Pred");
+        Element thenSub = firstSubChild(firstChildElement(anySub, "Then"));
+        List<Element> varIds = info.varIds();
+        List<Element> guardConjuncts = info.guardConjuncts();
+        List<Element> thenSubs = info.thenSubs();
+        Map<String, Element> definingExpr = info.definingExpr();
+        Map<String, Element> definingConjunct = info.definingConjunct();
+        Map<String, String> aliasRealName = info.aliasRealName();
+        Map<String, Element> aliasAssign = info.aliasAssign();
+        Set<String> eliminated = info.eliminated();
+
+        // NÃO retorna cedo se binders ficar vazio: um ANY cuja(s) ÚNICA(S) variável(is) ligada(s)
+        // é/são eliminada(s) (ex.: "ANY ih WHERE ih = island_happiness <+ %ii.(...) THEN
+        // island_happiness := ih || ... END", RulerOfTheSeas's InvestOnResources/InvestOnHappiness)
+        // ainda tem conteúdo genuíno a traduzir — a própria atribuição-alias vira
+        // "island_happiness == <+ expressão>" dentro de thenParts abaixo (ver o ramo
+        // "auxHere != null"), mais quaisquer OUTRAS atribuições paralelas no mesmo THEN. Retornar
+        // "" aqui (como uma versão anterior fazia, para evitar o "\exists ;" sintaticamente inválido
+        // de binders vazio) descartava esse conteúdo inteiro: o chamador
+        // (GhostOperationsCiGenerator#buildGhostOperations) trata "" como "nada a traduzir" e
+        // SILENCIOSAMENTE pula a operação toda — sem erro, sem log — daí InvestOnResources/
+        // InvestOnHappiness nunca ganharem operação ghost nenhuma em ghost_operations.ci, apesar de
+        // claramente mutarem várias variáveis abstratas. AttackPlayer nunca expôs isto porque as
+        // suas próprias variáveis ligadas do ANY (attacker_happiness/victim_happiness, via SIGMA) só
+        // aparecem em COMPARAÇÕES no THEN, nunca como alvo de "realVar := auxVar", logo nunca são
+        // "eliminadas" e sempre sobra pelo menos um binder. Ver o retorno no fim desta função:
+        // omite só o PREFIXO "\exists binders;" quando binders está vazio, preservando
+        // guardText/thenText.
         List<String> binders = new ArrayList<>();
         for (Element vid : varIds) {
             String vn = vid.getAttribute("value").trim();
@@ -568,9 +639,6 @@ public final class BxmlInitialisationTranslator {
             }
             String ty = BxmlPredicateToAcsl.acslQuantifierLogicTypeForAnyVariable(predEl, vid, ctx);
             binders.add(ty + " " + vn);
-        }
-        if (binders.isEmpty()) {
-            return "";
         }
 
         Set<String> assignedRealNames = new LinkedHashSet<>();
@@ -625,6 +693,13 @@ public final class BxmlInitialisationTranslator {
                 guardParts.isEmpty() ? "\\true" : String.join(" && ", parenthesizeEach(guardParts));
         String thenText =
                 thenParts.isEmpty() ? "\\true" : String.join(" && ", parenthesizeEach(thenParts));
+        if (binders.isEmpty()) {
+            // Todas as variáveis do ANY foram eliminadas como alias puro — nada resta para
+            // quantificar existencialmente, "\exists ;" seria sintaxe ACSL inválida. O conteúdo
+            // (guarda + corpo, já com os aliases substituídos pela variável real) é uma conjunção
+            // comum, não mais existencial.
+            return guardText + " && " + thenText;
+        }
         return "\\exists " + String.join(", ", binders) + "; " + guardText + " && " + thenText;
     }
 
@@ -664,8 +739,16 @@ public final class BxmlInitialisationTranslator {
         return out;
     }
 
-    /** Troca (fronteira de palavra) cada variável eliminada pelo nome da variável real correspondente. */
-    private static String renameEliminatedAuxVars(
+    /**
+     * Troca (fronteira de palavra) cada variável eliminada pelo nome da variável real
+     * correspondente. Visibilidade de pacote: também usada por {@code
+     * BxmlComprehensionRegistry#appendComprehensionAxiom} para substituir, no CORPO da própria
+     * compreensão (ex. {@code ih(ii)} -> {@code function_apply(island_happiness,ii)}), o mesmo
+     * alias que {@code freeVarsForComprehension} já exclui da sua lista de parâmetros livres — sem
+     * isto o corpo ainda referenciaria {@code ih} cru, sem declaração nenhuma no axioma gerado
+     * ("unbound logic variable").
+     */
+    static String renameEliminatedAuxVars(
             String text, Set<String> eliminated, Map<String, String> aliasRealName) {
         String out = text;
         for (String aux : eliminated) {

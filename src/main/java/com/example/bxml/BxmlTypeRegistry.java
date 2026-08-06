@@ -28,6 +28,20 @@ public final class BxmlTypeRegistry {
     public static final Pattern TUPLE_CODOMAIN_RELATION_NAME = Pattern.compile(
             "^(?:Relation|Function)_(integer|boolean)((?:_Tuple)+)((?:_(?:integer|boolean))+)$");
 
+    /**
+     * Espelho de {@link #TUPLE_CODOMAIN_RELATION_NAME} para o caso oposto: domínio composto (tupla
+     * de N&gt;=2 elementos, qualquer mistura de inteiro/booleano) + codomínio escalar — ex. {@code
+     * "Relation_Tuple_integer_integer_boolean"} para a matriz característica {@code PLAYER*ISLAND
+     * --> BOOL}. Grupo 1 = os {@code "Tuple_"} (contagem = N-1), grupo 2 = os N tipos-folha do
+     * domínio em ordem (cada um com {@code "_"} à direita), grupo 3 = o tipo escalar do codomínio.
+     * {@code Tuple} logo após {@code Relation_}/{@code Function_} (sem nenhum escalar antes) é o que
+     * distingue este caso do de {@link #TUPLE_CODOMAIN_RELATION_NAME} (que exige um escalar
+     * IMEDIATAMENTE após o prefixo) — mutuamente exclusivos por construção, nunca ambos batem na
+     * mesma string. Ver {@link #compoundDomainCartesianProductToAcslRelationType}.
+     */
+    public static final Pattern TUPLE_DOMAIN_RELATION_NAME = Pattern.compile(
+            "^(?:Relation|Function)_((?:Tuple_)+)((?:(?:integer|boolean)_)+)(integer|boolean)$");
+
     private final Map<Integer, String> idToDisplay = new HashMap<>();
 
     public static BxmlTypeRegistry fromMachine(Element machineEl) {
@@ -146,6 +160,10 @@ public final class BxmlTypeRegistry {
         if (innerProduct == null || !innerProduct.contains("*")) {
             return "Relation_int_int";
         }
+        String trimmed = innerProduct.trim();
+        if (trimmed.startsWith("(")) {
+            return compoundDomainCartesianProductToAcslRelationType(trimmed);
+        }
         java.util.List<String> parts = new java.util.ArrayList<>();
         for (String p : innerProduct.split("\\*")) {
             String t = p.trim();
@@ -182,6 +200,76 @@ public final class BxmlTypeRegistry {
         for (int i = 2; i < acslTypes.size(); i++) {
             codomainType = "Tuple<" + codomainType + "," + acslTypes.get(i) + ">";
         }
+        return registerCartesianRelationType(domainType, codomainType);
+    }
+
+    /**
+     * Domínio composto entre parênteses (marcado por {@link #bxmlTypeExprToString} apenas no split
+     * de topo quando o filho ESQUERDO já é ele próprio um produto — ex. {@code
+     * "(PLAYER*ISLAND)*BOOL"} para a matriz característica {@code PLAYER*ISLAND --> BOOL}) →
+     * {@code Relation<Tuple<...>, ...>}, o oposto estrutural do caso tratado acima (domínio escalar
+     * + codomínio tupla, ex. {@code PERSON +-> (DAY*MONTH*YEAR)}). Sem este marcador as duas formas
+     * achatavam para a MESMA string (ex. {@code "PLAYER*ISLAND*BOOL"}) e o caminho acima assumia
+     * sempre a segunda forma — ver memória {@code project_union_inter_generalized_quantifiers}.
+     */
+    private static String compoundDomainCartesianProductToAcslRelationType(String innerProduct) {
+        int depth = 0;
+        int closeIdx = -1;
+        for (int i = 0; i < innerProduct.length(); i++) {
+            char c = innerProduct.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0) {
+                    closeIdx = i;
+                    break;
+                }
+            }
+        }
+        if (closeIdx < 0
+                || closeIdx + 2 > innerProduct.length()
+                || innerProduct.charAt(closeIdx + 1) != '*') {
+            return "Relation_int_int";
+        }
+        String domainInner = innerProduct.substring(1, closeIdx).trim();
+        String codomainInner = innerProduct.substring(closeIdx + 2).trim();
+        String domainType = leftNestedTupleType(domainInner);
+        String codomainType = leftNestedTupleType(codomainInner);
+        if (domainType == null || codomainType == null) {
+            return "Relation_int_int";
+        }
+        return registerCartesianRelationType(domainType, codomainType);
+    }
+
+    /**
+     * {@code "A*B*C"} (achatado, sem parênteses) → {@code Tuple<Tuple<tipoA,tipoB>,tipoC>} aninhado
+     * à esquerda (mesma associação B); uma única parte → o próprio tipo resolvido (escalar ou
+     * {@code Set<...>} via {@link #resolveCartesianPartType}).
+     */
+    private static String leftNestedTupleType(String flatProduct) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        for (String p : flatProduct.split("\\*")) {
+            String t = p.trim();
+            if (!t.isEmpty()) parts.add(t);
+        }
+        if (parts.isEmpty()) return null;
+        String type = resolveCartesianPartType(parts.get(0));
+        for (int i = 1; i < parts.size(); i++) {
+            type = "Tuple<" + type + "," + resolveCartesianPartType(parts.get(i)) + ">";
+        }
+        return type;
+    }
+
+    /**
+     * Regista {@code domainType}/{@code codomainType} (já resolvidos para ACSL, ex. {@code
+     * Tuple<integer,integer>}/{@code boolean}) como um par {@code Relation_X}/{@code Function_X} em
+     * {@link TupleCodomainTypeRegistry}, devolvendo o nome achatado de {@code Relation_X}. Partilhado
+     * pelos dois caminhos (domínio escalar+codomínio tupla, e domínio composto — ver {@link
+     * #compoundDomainCartesianProductToAcslRelationType}) — a forma de registo/nomeação não depende
+     * de qual dos dois lados é o composto.
+     */
+    private static String registerCartesianRelationType(String domainType, String codomainType) {
         String genericTypeExpr = "Relation<" + domainType + ", " + codomainType + ">";
         String flatName = flattenGenericTypeExprToIdentifier(genericTypeExpr);
         String definition =
@@ -290,18 +378,49 @@ public final class BxmlTypeRegistry {
 
     /** Árvore de tipo B em string (ex.: {@code POW(INTEGER*INTEGER)}, {@code POW(POW(INTEGER))}). */
     private static String bxmlTypeExprToString(Element e) {
+        return bxmlTypeExprToString(e, true);
+    }
+
+    /**
+     * {@code topLevelProduct} distingue o split de topo (domínio×codomínio de um {@code A --> B},
+     * ex. {@code POW(A*B)}) de qualquer {@code *} aninhado ENCONTRADO DENTRO de um dos dois lados
+     * (ex. um codomínio tupla {@code (DAY*MONTH)*YEAR} de {@code PERSON +-> (DAY*MONTH*YEAR)}).
+     * B associa produtos não-parentizados à ESQUERDA, então tanto {@code (A*B)-->C} (domínio
+     * composto, ex. {@code PLAYER*ISLAND --> BOOL}) como {@code A-->(B*C)} (codomínio composto,
+     * ex. {@code PERSON +-> (DAY*MONTH*YEAR)}) achatam para a MESMA string sem marcação alguma
+     * ({@code "A*B*C"}) — apesar de terem formas AST diferentes (filho esquerdo composto vs filho
+     * direito composto). Sem distinguir, {@link #powCartesianProductToAcslRelationType} assumia
+     * sempre a segunda forma (domínio escalar), dando um tipo errado para a primeira (ex.
+     * {@code player_islands_i}, uma matriz característica {@code PLAYER*ISLAND --> BOOL}). Corrigido
+     * parentizando o filho ESQUERDO apenas quando (a) estamos no split de TOPO e (b) esse filho é
+     * ele próprio um produto — nunca nos splits recursivos internos (senão contaminaria também o
+     * caso já-correto do codomínio-tupla, cujo próprio filho esquerdo interno também é composto por
+     * associatividade à esquerda). Produz no máx. 1 nível de parênteses (nunca aninhados): a
+     * recursão do lado esquerdo já usa {@code topLevelProduct=false}, então mesmo um domínio composto
+     * de aridade N&gt;=3 (ex. {@code (A*B)*C --> D}) achata o seu próprio interior sem parênteses
+     * antes de ser envolvido UMA vez pelo nível de topo (ex. {@code "(A*B*C)*D"}).
+     */
+    private static String bxmlTypeExprToString(Element e, boolean topLevelProduct) {
         String ln = e.getLocalName();
         if ("Id".equals(ln)) {
             return e.getAttribute("value");
         }
         if ("Unary_Exp".equals(ln) && "POW".equals(e.getAttribute("op"))) {
             Element inner = firstNonAttrElementChild(e);
-            return "POW(" + bxmlTypeExprToString(inner) + ")";
+            return "POW(" + bxmlTypeExprToString(inner, topLevelProduct) + ")";
         }
         if ("Binary_Exp".equals(ln) && "*".equals(e.getAttribute("op"))) {
             Element[] pair = twoNonAttrElementChildren(e);
             if (pair[0] != null && pair[1] != null) {
-                return bxmlTypeExprToString(pair[0]) + "*" + bxmlTypeExprToString(pair[1]);
+                String left = bxmlTypeExprToString(pair[0], false);
+                String right = bxmlTypeExprToString(pair[1], false);
+                boolean leftIsCompound =
+                        "Binary_Exp".equals(pair[0].getLocalName())
+                                && "*".equals(pair[0].getAttribute("op"));
+                if (topLevelProduct && leftIsCompound) {
+                    left = "(" + left + ")";
+                }
+                return left + "*" + right;
             }
         }
         return "UNKNOWN";

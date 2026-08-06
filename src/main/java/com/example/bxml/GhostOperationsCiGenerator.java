@@ -347,21 +347,26 @@ public final class GhostOperationsCiGenerator {
         LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
         String lambdaBlock = lambdaRegistry != null && !lambdaRegistry.isEmpty()
                 ? prefixLocalAxiomaticBlockForGhost(
-                        lambdaRegistry.formatAxiomaticBlock(), ctx, concreteConstants, abstractSet)
+                        renameGhostAxiomaticBlock(lambdaRegistry.formatAxiomaticBlock(), "lambda_functions"),
+                        ctx, concreteConstants, abstractSet)
                 : null;
         if (lambdaBlock != null) allGhostEnsureLines.add(lambdaBlock);
 
         SigmaFunctionRegistry sigmaRegistry = ctx.sigmaRegistry();
         String sigmaBlock = sigmaRegistry != null && !sigmaRegistry.isEmpty()
                 ? prefixLocalAxiomaticBlockForGhost(
-                        sigmaRegistry.formatAxiomaticBlock(), ctx, concreteConstants, abstractSet)
+                        renameGhostAxiomaticBlock(
+                                sigmaRegistry.formatAxiomaticBlock(), "generalized_quantifier_functions"),
+                        ctx, concreteConstants, abstractSet)
                 : null;
         if (sigmaBlock != null) allGhostEnsureLines.add(sigmaBlock);
 
         UnionInterFunctionRegistry unionInterRegistry = ctx.unionInterRegistry();
         String unionInterBlock = unionInterRegistry != null && !unionInterRegistry.isEmpty()
                 ? prefixLocalAxiomaticBlockForGhost(
-                        unionInterRegistry.formatAxiomaticBlock(), ctx, concreteConstants, abstractSet)
+                        renameGhostAxiomaticBlock(
+                                unionInterRegistry.formatAxiomaticBlock(), "generalized_union_inter_functions"),
+                        ctx, concreteConstants, abstractSet)
                 : null;
         if (unionInterBlock != null) allGhostEnsureLines.add(unionInterBlock);
 
@@ -785,8 +790,16 @@ public final class GhostOperationsCiGenerator {
      * {@code v := v <+ %z.(...)} ) — não há bicondicional que sirva, precisa da forma com duas
      * implicações. Só reescreve quando o ternário ocupa TODO o lado direito de um {@code \forall}
      * simples (não tenta cobrir aninhamento arbitrário); nas demais formas não mexe.
+     *
+     * <p>Visibilidade de pacote: também usada por {@link BxmlOperationsTranslator} para o mesmo
+     * padrão fora do universo ghost — o contrato REAL de {@code v := v <+ %z.(...)} passa pelo
+     * mesmo {@link BxmlExpressionToAcsl#formatOverwriteWithLambdaAssignment} e sofre exatamente o
+     * mesmo erro do kernel (ex.: {@code RulerOfTheSeas__NextTurn}, {@code player_coins := player_coins
+     * <+ %pp.(pp:players | player_coins(pp)+1)} — {@code players} é variável de máquina, não conjunto
+     * literal, então a guarda {@code pp:players} traduz para {@code belongs(pp, players)}, um
+     * predicado da lib, não uma função).
      */
-    private static String rewriteIntegerTernaryPredicateConditionForGhost(String ensure) {
+    static String rewriteIntegerTernaryPredicateConditionForGhost(String ensure) {
         if (ensure == null || !ensure.startsWith("\\forall ") || !ensure.contains(" ? ")) {
             return ensure;
         }
@@ -1838,11 +1851,86 @@ public final class GhostOperationsCiGenerator {
     }
 
     /**
+     * Chamadas a {@code sigma_funcNN}/{@code lambda_funcNN}/{@code union_funcNN}/{@code
+     * inter_funcNN} (nomes sintéticos de {@code SigmaFunctionRegistry}/{@code
+     * LambdaFunctionRegistry}/{@code UnionInterFunctionRegistry}, sempre {@code prefixo + 2
+     * dígitos}) — precisam do MESMO prefixo {@code ghost_} que {@link #renameGhostAxiomaticBlock}
+     * já aplica à DECLARAÇÃO destas funções dentro do bloco axiomatic do registo. Sem isto, texto
+     * ghost construído FORA desse bloco (ex.: a asserção de {@code ghost__attackplayer}, que chama
+     * {@code sigma_func01}/{@code sigma_func02} tal como o {@code ensures} real que a originou)
+     * continua a referenciar o nome NÃO renomeado — "unbound logic function sigma_func02" na fase
+     * {@code -acsl-import} original (aqui a isolação do {@code .ci} SE aplica: só descoberto ao
+     * corrigir {@link #renameGhostAxiomaticBlock} e re-rodar RulerOfTheSeas). {@code (?&lt;!ghost_)}
+     * evita prefixar duas vezes texto que já veio de dentro do bloco já renomeado.
+     */
+    private static final Pattern GENERALIZED_QUANTIFIER_CALL_NAME =
+            Pattern.compile("(?<!ghost_)\\b(?:sigma_func|lambda_func|union_func|inter_func)\\d{2}\\b");
+
+    /**
      * Funções da {@code ACSL_Lib} usadas nos contratos ghost: prefixo {@code dummy_} alinhado com
-     * {@link DummyGhostAxiomaticBuilder}.
+     * {@link DummyGhostAxiomaticBuilder}; mais o prefixo {@code ghost_} em chamadas às funções
+     * geradoras de quantificador generalizado (ver {@link #GENERALIZED_QUANTIFIER_CALL_NAME}).
      */
     private static String prefixAcslLibFunctionsForGhost(String text) {
-        return DummyGhostAxiomaticBuilder.prefixLibCallsInSignature(text);
+        String prefixed = DummyGhostAxiomaticBuilder.prefixLibCallsInSignature(text);
+        return GENERALIZED_QUANTIFIER_CALL_NAME.matcher(prefixed).replaceAll("ghost_$0");
+    }
+
+    /**
+     * Renomeia o wrapper {@code axiomatic <name> { ... }} PARA {@code axiomatic ghost_<name> { ... }}
+     * — E TAMBÉM cada {@code axiom}/{@code lemma}/{@code admit lemma} DECLARADO dentro do bloco
+     * (ex. {@code axiom sigma_func01_empty:} → {@code axiom ghost_sigma_func01_empty:}).
+     * {@code LambdaFunctionRegistry}/{@code SigmaFunctionRegistry}/{@code UnionInterFunctionRegistry}
+     * usam nomes FIXOS (não qualificados por máquina, ao contrário de {@code
+     * BxmlComprehensionRegistry}/{@code BxmlMachineVariables}, cujos blocos já levam o nome da
+     * máquina) — partilhados entre esta cópia ghost e a cópia REAL emitida por {@code
+     * AcslGenerator}. Quando ambas têm conteúdo não-vazio no MESMO projeto (ex.: {@code Attack} usa
+     * {@code sigma_func01}/{@code sigma_func02} tanto no ensures real como no ghost), o KERNEL do
+     * Frama-C — não o parser do {@code -acsl-import}, uma fase ainda mais tardia — rejeita com
+     * {@code Failure: trying to register twice property 'axiomatic <name>'} (bloco) OU
+     * {@code 'axiom <name>'} (axioma/lema individual, um erro DIFERENTE encontrado só depois de
+     * corrigir o primeiro — cada axioma/lema é a SUA PRÓPRIA "property" com estado de prova
+     * rastreado, tal como o bloco): nomes de propriedade são globalmente únicos mesmo entre o
+     * front-end isolado do {@code .ci} e o ficheiro {@code -acsl-import} principal, apesar de tudo
+     * o resto nesse front-end estar isolado (dummy-prefixado, {@code DSet} em vez de {@code Set},
+     * …). Os nomes de SÍMBOLO ({@code logic}/{@code predicate}, ex. {@code sigma_func01} em si)
+     * também precisam do MESMO tratamento — ao contrário do que uma nota anterior aqui assumia
+     * ("podem coexistir redeclarados de forma idêntica entre os dois front-ends sem erro"): essa
+     * conclusão vinha de testar só a fase {@code -acsl-import} original (isolamento genuíno entre
+     * {@code .ci} e {@code .acsl}); a fase SEGUINTE do WP (ver {@link B2ACSLPipeline}) reimprime
+     * TUDO junto num único {@code merged_code.c} plano e reanalisa esse ficheiro do zero — sem
+     * fronteira de front-end nenhuma nesse ponto, dois {@code logic integer sigma_func01(...)}
+     * idênticos (um do lado real, outro daqui) colidem com "logic function sigma_func01 is already
+     * declared with the same profile". Só exposto ao correr RulerOfTheSeas (primeiro exemplo cujo
+     * SIGMA ghost e real ambos sobrevivem até o merge da fase WP). Renomeia cada nome declarado via
+     * {@code logic ... NOME(} / {@code predicate NOME(} para {@code ghost_NOME}, por fronteira de
+     * palavra, tanto na própria declaração quanto em toda chamada dentro deste MESMO bloco — seguro
+     * porque {@code LambdaFunctionRegistry}/{@code SigmaFunctionRegistry}/
+     * {@code UnionInterFunctionRegistry} usam nomes sintéticos ({@code sigma_func01}, …) que nunca
+     * colidem com identificadores B reais.
+     */
+    private static String renameGhostAxiomaticBlock(String block, String name) {
+        if (block == null) return null;
+        String renamed =
+                block.replaceFirst(
+                        "(?m)^axiomatic\\s+" + java.util.regex.Pattern.quote(name) + "\\s*\\{",
+                        "axiomatic ghost_" + name + " {");
+        renamed = renamed.replaceAll(
+                "(?m)^(\\s*)((?:admit\\s+)?(?:axiom|lemma))(\\s+)([A-Za-z_]\\w*)",
+                "$1$2$3ghost_$4");
+        java.util.regex.Matcher declMatcher =
+                java.util.regex.Pattern.compile("(?m)^\\s*(?:logic\\s+\\S.*?|predicate)\\s+([A-Za-z_]\\w*)\\s*\\(")
+                        .matcher(renamed);
+        java.util.LinkedHashSet<String> declaredNames = new java.util.LinkedHashSet<>();
+        while (declMatcher.find()) {
+            declaredNames.add(declMatcher.group(1));
+        }
+        for (String declared : declaredNames) {
+            renamed = renamed.replaceAll(
+                    "(?<![A-Za-z0-9_])" + java.util.regex.Pattern.quote(declared) + "(?![A-Za-z0-9_])",
+                    "ghost_" + declared);
+        }
+        return renamed;
     }
 
     /**

@@ -59,6 +59,10 @@ public final class SpecificationAxiomaticInstantiator {
     private static final Pattern TUPLE_CODOMAIN_RELATION_NAME =
             com.example.bxml.BxmlTypeRegistry.TUPLE_CODOMAIN_RELATION_NAME;
 
+    /** Ver {@link com.example.bxml.BxmlTypeRegistry#TUPLE_DOMAIN_RELATION_NAME}. */
+    private static final Pattern TUPLE_DOMAIN_RELATION_NAME =
+            com.example.bxml.BxmlTypeRegistry.TUPLE_DOMAIN_RELATION_NAME;
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0;
         int idx = 0;
@@ -180,6 +184,28 @@ public final class SpecificationAxiomaticInstantiator {
                         setElem.add(domain);
                         setElem.addAll(leaves);
                     }
+                } else if (!t.contains("<") && TUPLE_DOMAIN_RELATION_NAME.matcher(t).matches()) {
+                    // Espelho do ramo acima para o caso oposto: domínio composto (matriz
+                    // característica, ex. "Relation_Tuple_integer_integer_boolean" para
+                    // player_islands_i : PLAYER*ISLAND --> BOOL) + codomínio escalar — ver
+                    // BxmlTypeRegistry#TUPLE_DOMAIN_RELATION_NAME.
+                    Matcher tdm = TUPLE_DOMAIN_RELATION_NAME.matcher(t);
+                    tdm.matches();
+                    int nestingCount = countOccurrences(tdm.group(1), "Tuple_");
+                    List<String> domainLeaves = new ArrayList<>();
+                    for (String leaf : tdm.group(2).split("_")) {
+                        if (!leaf.isBlank()) domainLeaves.add(leaf);
+                    }
+                    String codomain = tdm.group(3);
+                    if (nestingCount == domainLeaves.size() - 1) {
+                        String domain = domainLeaves.get(0);
+                        for (int i = 1; i < domainLeaves.size(); i++) {
+                            domain = "Tuple<" + domain + "," + domainLeaves.get(i) + ">";
+                        }
+                        pairs.add(List.of(domain, codomain));
+                        setElem.add(codomain);
+                        setElem.addAll(domainLeaves);
+                    }
                 } else if (!t.contains("<") && (t.startsWith("Relation_") || t.startsWith("Function_"))) {
                     // Tipos legados no formato underscore: Relation_int_int, Function_integer_boolean, etc.
                     Matcher legacyM = LEGACY_PAIR_TYPE.matcher(t);
@@ -225,19 +251,69 @@ public final class SpecificationAxiomaticInstantiator {
             }
             pairs = withSwapped;
 
+            // Renormaliza espaçamento de vírgula em cada elemento do par: normalizeTypeWhitespace
+            // (linha ~114) só é aplicada aos textos CRUS lidos de specTypes — pares construídos por
+            // OUTROS caminhos (ex. registos de tipo dinâmicos por-máquina de BxmlTypeRegistry, como
+            // Relation<boolean, Tuple<integer,integer>>) chegam aqui com o espaçamento que a chamada
+            // de origem usou, potencialmente inconsistente com uma entrada semanticamente igual mas
+            // textualmente diferente já presente (ex. "Tuple<integer,integer>" vs "Tuple<integer,
+            // integer>"). Como pairs é um Set<List<String>>, dois elementos que só diferem neste
+            // espaçamento cosmético NÃO deduplicam (List.equals é elemento-a-elemento por String) —
+            // cada um gera a sua PRÓPRIA declaração "logic Tuple<...> couple(...)" em
+            // merged_code.c, e o Frama-C rejeita a segunda ("already declared with the same
+            // profile"). Só descoberto ao correr RulerOfTheSeas (primeiro exemplo com dois sítios de
+            // registo colidindo neste tipo específico) — mesma causa raiz do fix em
+            // buildConcreteNewTypesBlock/normalizeTypeSpacing, aplicada aqui na fonte para não
+            // precisar repetir o mesmo patch em cada consumidor downstream de pairTypes.
+            Set<List<String>> normalizedPairs = new LinkedHashSet<>();
+            for (List<String> pair : pairs) {
+                normalizedPairs.add(
+                        pair.stream()
+                                .map(SpecificationAxiomaticInstantiator::normalizeTypeWhitespace)
+                                .toList());
+            }
+            pairs = normalizedPairs;
+
             // Para cada par (A, B), adiciona Tuple<A, B> como tipo elemento de Set.
             // Necessário para instanciar axiomas de conjunto puro (belongs, dom, ran, etc.)
             // com Tuple<A,B> como tipo concreto de A (e.g. belongs_Tuple_integer_integer).
             // NÃO é usado em axiomas com \list<A> (ver buildSubstitutions).
+            //
+            // Também adiciona A e B individualmente: cartesian_product_def_A_B (instanciado para
+            // TODO par em pairTypes, ver a simetrização acima) usa "belongs(y, tt)" com
+            // tt : Set<B> — se B for ele próprio um tipo composto (ex.: Set<integer>, típico de uma
+            // relação PLAYER +-> POW(ISLAND), codomínio Set<integer>) e nunca aparecer como entrada
+            // CRUA de specTypes, belongs nunca ganha o overload (Set<integer>, Set<Set<integer>>) —
+            // "no such predicate or logic function belongs(Set<ℤ>, Set<Set<ℤ>>)". Só descoberto ao
+            // correr RulerOfTheSeas (primeiro exemplo com uma relação de codomínio Set<...>).
             Set<String> tupleElems = new LinkedHashSet<>();
             for (List<String> pair : pairs) {
                 if (pair.size() == 2
                         && !isTypeVariable(pair.get(0))
                         && !isTypeVariable(pair.get(1))) {
                     tupleElems.add("Tuple<" + pair.get(0) + ", " + pair.get(1) + ">");
+                    tupleElems.add(pair.get(0));
+                    tupleElems.add(pair.get(1));
                 }
             }
             setElem.addAll(tupleElems);
+
+            // pow_set (POW(X) em posição de valor) é um bloco genérico de UM parâmetro de tipo,
+            // instanciado automaticamente para TODO tipo em setElem — incluindo tipos-base sempre
+            // presentes como boolean, mesmo quando o único POW(...) da especificação é sobre outro
+            // tipo (ex.: PLAYER/integer). pow_set_def_T usa "belongs(s, pow_set(universe))" com
+            // s, universe : Set<T> — exige belongs(Set<T>, Set<Set<T>>), ou seja, Set<T> precisa
+            // ele próprio estar em setElem. Sem este fecho, só o T literal do POW(...) da
+            // especificação ganhava Set<T> (via o ramo de pairs acima) e as instanciações pow_set
+            // para os DEMAIS tipos-base (ex. boolean) ficavam com belongs em falta. Fecho de UM
+            // nível só (não recursivo): basta para o uso atual de pow_set, que não aninha POW(POW(X)).
+            Set<String> setClosure = new LinkedHashSet<>();
+            for (String e : setElem) {
+                if (!isTypeVariable(e)) {
+                    setClosure.add("Set<" + e + ">");
+                }
+            }
+            setElem.addAll(setClosure);
 
             return new MonoContext(List.copyOf(setElem), List.copyOf(listElem), List.copyOf(pairs));
         }
@@ -515,6 +591,18 @@ public final class SpecificationAxiomaticInstantiator {
                 // QUALQUER outro ponto (ex.: só {@code integer}, mesmo quando o axioma também
                 // precisa de {@code boolean}/{@code Tuple<...>}).
                 candidates.addAll(ctx.setElemTypes());
+                // pow_set<A> ("belongs(s, pow_set(universe))", s/universe : Set<A>) instancia sobre
+                // o MESMO setElemTypes que belongs — que agora inclui Set<T> sintéticos (ver fecho
+                // em MonoContext#from, necessário para belongs(Set<T>, Set<Set<T>>) quando pow_set É
+                // usado para T). Sem esta exclusão, pow_set também se auto-instancia para esses
+                // Set<T> sintéticos (pow_set_def_Set_boolean = POW(POW(boolean)), nunca usado por B
+                // aqui), cujo corpo por sua vez precisa de belongs(Set<Set<T>>, Set<Set<Set<T>>>) —
+                // lacuna em cascata, sem fim natural. B não usa POW(POW(X)) nesta base de exemplos;
+                // pow_set nunca precisa de um candidato já composto (Set<...>) como seu PRÓPRIO tipo
+                // de elemento.
+                if (content.contains("pow_set(")) {
+                    candidates.removeIf(t -> t.startsWith("Set<"));
+                }
             }
             return candidates.stream().map(List::of).toList();
         }
@@ -843,6 +931,20 @@ public final class SpecificationAxiomaticInstantiator {
         return names;
     }
 
+    /**
+     * Normaliza o espaçamento após vírgulas dentro de um tipo genérico (ex. {@code "integer,integer"}
+     * e {@code "integer, integer"} ambos viram {@code "integer, integer"}). Necessário porque {@code
+     * byInner} (abaixo) deduplica por este texto — duas chamadas de sítios diferentes construindo o
+     * MESMO tipo (ex. {@code Relation<boolean, Tuple<integer, integer>>}) mas com espaçamento
+     * cosmético diferente geravam DUAS entradas para o mesmo nome monomorfizado, e o {@code
+     * merged_code.c} saía com {@code type Relation_boolean_Tuple_integer_integer = ...;} declarado
+     * duas vezes — Frama-C rejeita a segunda ("unexpected token"), só descoberto ao correr
+     * RulerOfTheSeas (primeiro exemplo com dois sítios de registo colidindo neste tipo específico).
+     */
+    private static String normalizeTypeSpacing(String s) {
+        return s == null ? null : s.replaceAll(",\\s*", ", ").trim();
+    }
+
     private static String buildConcreteNewTypesBlock(
             Map<String, String> renames, MonoContext ctx, Set<String> alreadyDeclaredElsewhere) {
 
@@ -857,13 +959,13 @@ public final class SpecificationAxiomaticInstantiator {
         for (Map.Entry<String, String> e : renames.entrySet()) {
             String orig = e.getKey(), name = e.getValue();
             if (orig.startsWith("Relation<") && orig.endsWith(">")) {
-                String inner = orig.substring("Relation<".length(), orig.length() - 1);
+                String inner = normalizeTypeSpacing(orig.substring("Relation<".length(), orig.length() - 1));
                 byInner.merge(inner,
                         new RelFun(orig, name, null, null),
                         (existing, n) -> new RelFun(n.relOrig(), n.relName(),
                                 existing.funOrig(), existing.funName()));
             } else if (orig.startsWith("Function<") && orig.endsWith(">")) {
-                String inner = orig.substring("Function<".length(), orig.length() - 1);
+                String inner = normalizeTypeSpacing(orig.substring("Function<".length(), orig.length() - 1));
                 byInner.merge(inner,
                         new RelFun(null, null, orig, name),
                         (existing, n) -> new RelFun(existing.relOrig(), existing.relName(),

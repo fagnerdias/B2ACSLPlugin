@@ -1036,15 +1036,50 @@ public final class BxmlMachineVariables {
     public static String qualifyLoopAssignTarget(
             String varName, String machineName, Element abstractMachineEl, BxmlTranslateContext ctx,
             Path bxmlDirectory) {
+        return qualifyLoopAssignTarget(varName, machineName, abstractMachineEl, null, ctx, bxmlDirectory);
+    }
+
+    /**
+     * Como acima, mas também recebe a máquina de IMPLEMENTAÇÃO real ({@link
+     * #enclosingMachineElement}) — necessária para variáveis concretas {@code _i} (ex. {@code
+     * player_islands_i}), declaradas SÓ na implementação (a sua {@code Concrete_Variables} própria),
+     * nunca em {@code abstractMachineEl}. Sem isto, {@code declaredVariableNames(abstractMachineEl)}
+     * nunca as contém e o nome sai NÃO-qualificado (sem prefixo {@code machineName__}, sem faixa) —
+     * o Frama-C tolera isso (impreciso) para arrays 1D, mas rejeita de vez para 2D genuíno ("not an
+     * assignable left value"). {@code implementationMachineEl} também substitui
+     * {@code abstractMachineEl} como fonte da faixa ({@link #implementationAssignTargetWithRange}
+     * procura o tipo {@code -->} no {@code Invariant} PRÓPRIO do elemento recebido — só a
+     * implementação declara o tipo das suas próprias variáveis concretas).
+     */
+    public static String qualifyLoopAssignTarget(
+            String varName, String machineName, Element abstractMachineEl, Element implementationMachineEl,
+            BxmlTranslateContext ctx, Path bxmlDirectory) {
         if (varName == null || varName.isBlank() || machineName == null || abstractMachineEl == null) {
             return varName;
         }
-        if (!declaredVariableNames(abstractMachineEl).contains(varName)) {
+        boolean declaredAbstract = declaredVariableNames(abstractMachineEl).contains(varName);
+        boolean declaredConcrete =
+                implementationMachineEl != null
+                        && declaredVariableNames(implementationMachineEl).contains(varName);
+        if (!declaredAbstract && !declaredConcrete) {
             return varName;
         }
         String base = machineName.trim() + "__" + varName;
-        String ranged =
-                implementationAssignTargetWithRange(base, varName, abstractMachineEl, ctx, bxmlDirectory);
+        // Tenta a implementação PRIMEIRO (variáveis concretas só-_i, ex. player_islands_i, cujo
+        // tipo -->  só existe no Invariant da implementação), mas cai para a abstrata se não achar
+        // — variáveis COLAPSADAS (mesmo nome abstrata/concreta, sem Concrete_Variables própria, ex.
+        // filling_array's "Array") têm o seu tipo --> SÓ no Invariant abstrato; preferir SEMPRE a
+        // implementação (uma versão anterior deste fix fazia isso) as deixava sem faixa nenhuma
+        // (implementationAssignTargetWithRange retornava null por não achar Array no Invariant da
+        // implementação) — "loop assigns array__Array" sem "[0..NN]", que o Frama-C rejeita para
+        // arrays reais ("not an assignable left value"). Descoberto ao rodar filling_array pela
+        // primeira vez nesta sessão (regressão real do fix de player_islands_i/RulerOfTheSeas).
+        String ranged = implementationMachineEl != null
+                ? implementationAssignTargetWithRange(base, varName, implementationMachineEl, ctx, bxmlDirectory)
+                : null;
+        if (ranged == null) {
+            ranged = implementationAssignTargetWithRange(base, varName, abstractMachineEl, ctx, bxmlDirectory);
+        }
         return ranged != null ? ranged : base;
     }
 
@@ -1065,6 +1100,17 @@ public final class BxmlMachineVariables {
         Element arrow = concreteVariableFunctionArrowElement(implMachineEl, varName);
         if (arrow == null) {
             return null;
+        }
+        Element domain = BxmlExpressionToAcsl.twoDirectExpChildren(arrow)[0];
+        if (isCompoundProductExp(domain)) {
+            // Domínio composto (matriz característica 2D, ex. player_islands_i : PLAYER*ISLAND -->
+            // BOOL, ver implementationRhsTotalFunctionFromArray) — "assigns X[..];" é sintaxe de UMA
+            // dimensão só; para um array C genuinamente 2D o kernel rejeita com "not an assignable
+            // left value" (não infere a segunda dimensão implicitamente). "[..][..]" (ambas as
+            // dimensões por extenso) é o análogo direto do "[..]" de 1D já usado abaixo — mesma
+            // equivalência WP já confirmada para arrays de tamanho fixo (ver
+            // project_assigns_range_seen_machine), só precisa de UM "[..]" por dimensão.
+            return baseTarget + "[..][..]";
         }
         String range = arrayDomainRangeAcsl(arrow, ctx);
         if (range == null || range.isBlank()) {
@@ -1188,6 +1234,28 @@ public final class BxmlMachineVariables {
     private static boolean isRefinementMachine(Element machineEl) {
         String t = machineEl.getAttribute("type");
         return t != null && "refinement".equalsIgnoreCase(t.trim());
+    }
+
+    /**
+     * Sobe a árvore DOM a partir de {@code node} até encontrar o elemento-máquina que o contém
+     * (o primeiro ancestral com {@code type="implementation"|"abstraction"|"refinement"}) — usado
+     * por {@code BxmlLoopTranslator} para obter a máquina de IMPLEMENTAÇÃO real a partir de um nó
+     * qualquer do corpo de uma operação/loop, já que só a implementação tem loops B e só ela
+     * declara as suas próprias {@code Concrete_Variables} (ex. {@code player_islands_i}, nunca
+     * visível em {@link #declaredVariableNames} da máquina abstrata).
+     */
+    static Element enclosingMachineElement(Node node) {
+        Node cur = node;
+        while (cur != null) {
+            if (cur.getNodeType() == Node.ELEMENT_NODE) {
+                Element el = (Element) cur;
+                if (isImplementationMachine(el) || isAbstractionMachine(el) || isRefinementMachine(el)) {
+                    return el;
+                }
+            }
+            cur = cur.getParentNode();
+        }
+        return null;
     }
 
     /**
@@ -1332,6 +1400,84 @@ public final class BxmlMachineVariables {
     }
 
     /**
+     * Nomes de PARÂMETROS DE OPERAÇÃO tipados por um conjunto diferido/enumerado na PRECONDITION
+     * de UMA operação (ex. {@code "pp"} para {@code AddPlayer(pp) = PRE pp:PLAYER & ... END}) —
+     * ver {@link BxmlTranslateContext#withDeferredSetTypedParameterNames}.
+     *
+     * <p>Necessário porque, DENTRO do corpo/loop da IMPLEMENTAÇÃO (ex. usado em indexação de
+     * array), o {@code typref} do MESMO parâmetro pode legitimamente ter sido refinado pelo
+     * próprio AtelierB para {@code INTEGER} (confirmado: {@code pp} tem {@code typref} resolvendo
+     * a {@code INTEGER} em {@code RulerOfTheSeas_i.bxml}, mas a {@code PLAYER} em
+     * {@code RulerOfTheSeas.bxml}, mesmo referenciando o MESMO parâmetro da MESMA operação) — mas a
+     * assinatura C REAL gerada continua a usar o tipo enum (ex. {@code RulerOfTheSeas__PLAYER pp}
+     * em {@code RulerOfTheSeas_i.c}), então o cast {@code (integer)} continua a ser necessário
+     * sempre que o parâmetro entra num slot ACSL genérico (ex. {@code couple<A,B>}) — sem isto,
+     * "invalid cast from Tuple&lt;EnumType,...&gt; to Tuple&lt;integer,...&gt;".
+     *
+     * <p><b>Deliberadamente por OPERAÇÃO, não por máquina inteira.</b> Uma primeira versão
+     * varria TODAS as operações da máquina para um único {@code Set<String>} partilhado — quebrou
+     * o Biblioteca: {@code addBook}/{@code addCopy}/{@code removeCopy} têm um parâmetro escalar
+     * {@code cc:COPY}, mas {@code copiesQuery}'s {@code cc} é um parâmetro de SAÍDA (array/ponteiro
+     * booleano), sem relação nenhuma com {@code COPY} na sua própria precondition — o nome coincide
+     * entre operações DIFERENTES da mesma máquina, cada uma com seu próprio escopo B. Com um set
+     * global, o {@code cc} escalar de {@code addBook} "vazava" para {@code copiesQuery} e forçava
+     * um cast/deref (\{@code (integer)*cc}) sobre o array de saída, produzindo ACSL inválido
+     * ({@code lambda_func01} chamado como função quando é predicado). {@code precondition} aqui
+     * deve ser a Precondition da OPERAÇÃO ABSTRATA sendo traduzida (a implementação tipicamente
+     * OMITE a sua própria Precondition, herdando-a inteiramente da abstrata) — o chamador
+     * ({@code BxmlOperationsTranslator}) já a tem em mãos por operação, dentro do próprio laço.
+     */
+    public static Set<String> deferredSetTypedOperationParameterNames(
+            Element precondition, Set<String> declaredSetNames) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        if (precondition == null || declaredSetNames == null || declaredSetNames.isEmpty()) {
+            return out;
+        }
+        collectDeferredSetTypedParamNames(firstPredChild(precondition), declaredSetNames, out);
+        return out;
+    }
+
+    private static void collectDeferredSetTypedParamNames(
+            Element pred, Set<String> enumeratedSetNames, Set<String> out) {
+        if (pred == null) return;
+        String ln = pred.getLocalName();
+        if ("Exp_Comparison".equals(ln)) {
+            String op = normalizeColonLikeOp(pred.getAttribute("op"));
+            if (":".equals(op)) {
+                Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
+                if (pair[0] != null
+                        && "Id".equals(pair[0].getLocalName())
+                        && pair[1] != null
+                        && "Id".equals(pair[1].getLocalName())
+                        && enumeratedSetNames.contains(pair[1].getAttribute("value").trim())) {
+                    out.add(pair[0].getAttribute("value").trim());
+                }
+            }
+            return;
+        }
+        if ("Nary_Pred".equals(ln)) {
+            NodeList nl = pred.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element ch = (Element) n;
+                if ("Attr".equals(ch.getLocalName())) continue;
+                collectDeferredSetTypedParamNames(ch, enumeratedSetNames, out);
+            }
+            return;
+        }
+        if ("Unary_Pred".equals(ln)) {
+            collectDeferredSetTypedParamNames(firstPredChild(pred), enumeratedSetNames, out);
+            return;
+        }
+        if ("Binary_Pred".equals(ln)) {
+            Element[] pair = twoDirectPredChildren(pred);
+            collectDeferredSetTypedParamNames(pair[0], enumeratedSetNames, out);
+            collectDeferredSetTypedParamNames(pair[1], enumeratedSetNames, out);
+        }
+    }
+
+    /**
      * B: {@code v : Dom --> Cod} num invariante → tipo {@code logic} como função total ({@code
      * Function_*_*}) em vez de {@code Relation_*_*}.
      */
@@ -1455,15 +1601,45 @@ public final class BxmlMachineVariables {
             BxmlTranslateContext ctx,
             Path bxmlDirectory) {
         Element arrow = concreteVariableFunctionArrowElement(implMachineEl, varName);
+        boolean boolCodomain = arrow != null && arrowCodomainIsBool(arrow);
+        String cast = boolCodomain ? "(_Bool*)(" : "(int*)(";
+        String q = rootAbstractName + "__" + varName;
+        Element domain = arrow != null ? BxmlExpressionToAcsl.twoDirectExpChildren(arrow)[0] : null;
+        if (isCompoundProductExp(domain)) {
+            // Domínio composto (ex. player_islands_i : PLAYER*ISLAND --> BOOL, matriz
+            // característica 2D) — cada lado tem a SUA PRÓPRIA cardinalidade, resolvida
+            // separadamente (ver #domainElementCardinalityAcsl); array_to_function_bool/int só
+            // sabe construir uma Function_integer_X de domínio ESCALAR a partir de um array 1D, por
+            // isso usa-se aqui o par array2d_to_relation_bool/int (domínio Tuple<integer,integer>,
+            // array C genuinamente 2D, layout row-major — ver
+            // B2ACSLLib/function_functions/array2d_to_relation_*.acsl).
+            Element[] domainParts = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
+            String rows = domainElementCardinalityAcsl(domainParts[0], ctx, implMachineEl, bxmlDirectory);
+            String cols = domainElementCardinalityAcsl(domainParts[1], ctx, implMachineEl, bxmlDirectory);
+            if (rows == null || rows.isBlank()) rows = "1";
+            if (cols == null || cols.isBlank()) cols = "1";
+            String funcName2d = boolCodomain ? "array2d_to_relation_bool" : "array2d_to_relation_int";
+            return funcName2d + "(" + cast + q + "), " + rows + ", " + cols + ")";
+        }
         String len = arrow != null ? arrayDomainCardinalityAcsl(arrow, ctx, implMachineEl, bxmlDirectory) : null;
         if (len == null || len.isBlank()) {
             len = "1";
         }
-        boolean boolCodomain = arrow != null && arrowCodomainIsBool(arrow);
         String funcName = boolCodomain ? "array_to_function_bool" : "array_to_function_int";
-        String cast = boolCodomain ? "(_Bool*)(" : "(int*)(";
-        String q = rootAbstractName + "__" + varName;
         return funcName + "(" + cast + q + "), " + len + ")";
+    }
+
+    /**
+     * Produto B {@code A*B} (ex. domínio composto de um {@code -->}) em {@code Binary_Exp}. Na
+     * árvore de EXPRESSÃO (invariante, ao contrário da tabela {@code TypeInfos} usada por {@link
+     * BxmlTypeRegistry}) o BXML grava o produto cartesiano de conjuntos como {@code *s}, não
+     * {@code *} nu (que aqui significaria multiplicação aritmética) — ver
+     * {@link BxmlExpressionToAcsl#isCartesianProduct}.
+     */
+    private static boolean isCompoundProductExp(Element e) {
+        return e != null
+                && "Binary_Exp".equals(e.getLocalName())
+                && BxmlExpressionToAcsl.isCartesianProduct(e.getAttribute("op"));
     }
 
     /**
@@ -1481,7 +1657,20 @@ public final class BxmlMachineVariables {
         if (domRng[0] == null) {
             return null;
         }
-        Element domain = domRng[0];
+        return domainElementCardinalityAcsl(domRng[0], ctx, implMachineEl, bxmlDirectory);
+    }
+
+    /**
+     * Cardinalidade de UM lado de um domínio (intervalo, ou nome de conjunto via VALUES) —
+     * extraído de {@link #arrayDomainCardinalityAcsl} para ser reutilizável tanto no domínio
+     * inteiro de um {@code -->} escalar quanto em CADA lado, separadamente, de um domínio composto
+     * {@code A*B --> C} (ver {@link #implementationRhsTotalFunctionFromArray}).
+     */
+    private static String domainElementCardinalityAcsl(Element domain, BxmlTranslateContext ctx,
+            Element implMachineEl, Path bxmlDirectory) {
+        if (domain == null || ctx == null) {
+            return null;
+        }
         if (BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
             Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
             if (lr[0] != null && lr[1] != null) {
@@ -1700,8 +1889,27 @@ public final class BxmlMachineVariables {
             int close = t.lastIndexOf(']');
             if (open < 0 || close < open) continue;
             String name = t.substring(0, open).trim();
+            if (name.isEmpty()) continue;
+            // Array 2D+ (ex. "Nome[..][..]", matriz característica genuína — ver
+            // implementationAssignTargetWithRange): "Nome + (range)" só faz sentido para UM par
+            // de colchetes — extrair "entre o primeiro '[' e o último ']'" para 2+ pares dava
+            // "..][.." (colchetes internos sobreviviam dentro do "range", "[Syntax error] ]").
+            // Uma primeira tentativa usava o nome NU (\separated(p, Nome)) assumindo que isso
+            // denotasse o objeto inteiro — Frama-C rejeita: "there is no implicit conversion
+            // between a C array and a pointer" (\separated exige algo pointer-like, ao contrário
+            // de "assigns Nome[..]", que é sintaxe de localização, não uma chamada de predicado).
+            // "&Nome[0][0] + (0 .. rows*cols-1)" resolveria, mas exigiria threading das dimensões
+            // concretas até aqui (perdidas: o alvo já chega como "[..][..]" genérico, sem
+            // rows/cols) — sem isso, omite-se a cláusula para este alvo em vez de emitir ACSL
+            // inválido; o modelo de memória "typed" do WP continua a assumir a separação
+            // implicitamente (ver javadoc de listArraySeparationTargets), só perde a documentação
+            // explícita que esta função dá aos casos 1D.
+            int firstClose = t.indexOf(']');
+            if (firstClose >= 0 && firstClose != close) {
+                continue;
+            }
             String range = t.substring(open + 1, close).trim();
-            if (name.isEmpty() || range.isEmpty()) continue;
+            if (range.isEmpty()) continue;
             out.add(name + " + (" + range + ")");
         }
         return List.copyOf(out);

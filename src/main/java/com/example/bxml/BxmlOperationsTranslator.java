@@ -261,6 +261,7 @@ public final class BxmlOperationsTranslator {
         Element operationsEl = (Element) ops.item(0);
 
         Set<String> promotedOpNames = listPromotedOperationNames(mergedRefinementChain);
+        Set<String> declaredSetNamesForParams = BxmlSetsTranslator.declaredSetNames(machineEl);
 
         NodeList children = operationsEl.getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
@@ -283,15 +284,23 @@ public final class BxmlOperationsTranslator {
                 requires.addAll(requiresOnlyPredicateNames);
             }
             Element pre = firstChildElement(child, "Precondition");
+            // Por-operação, não por máquina inteira: nomes de parâmetro colidem entre operações
+            // diferentes com papéis diferentes (ex.: Biblioteca's "cc" é escalar COPY em addBook
+            // mas array de saída em copiesQuery) — ver javadoc de
+            // BxmlMachineVariables#deferredSetTypedOperationParameterNames.
+            BxmlTranslateContext opCtx =
+                    ctx.withDeferredSetTypedParameterNames(
+                            BxmlMachineVariables.deferredSetTypedOperationParameterNames(
+                                    pre, declaredSetNamesForParams));
             List<String> outputParams = parseOutputParameterNames(child);
-            Map<String, ArrayFunctionParamInfo> arrayParamLens = inferArrayFunctionParamLengths(child, ctx);
+            Map<String, ArrayFunctionParamInfo> arrayParamLens = inferArrayFunctionParamLengths(child, opCtx);
             if (pre != null) {
-                requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
+                requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, opCtx));
                 rewriteAcslListForArrayBackedParams(requires, arrayParamLens);
-                rewriteRequiresForOutputParameters(requires, outputParams, boolOutputParameterNames(child, ctx));
+                rewriteRequiresForOutputParameters(requires, outputParams, boolOutputParameterNames(child, opCtx));
             }
 
-            Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, ctx);
+            Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, opCtx);
             for (String p : outputParams) {
                 // Saídas array-backed (função/relação B) têm o \valid deferido: precisa do
                 // intervalo do domínio (ex.: "0 .. MAX_COPY"), só conhecido após o laço da
@@ -331,7 +340,7 @@ public final class BxmlOperationsTranslator {
             List<String> ensures = new ArrayList<>();
             Element body = firstChildElement(child, "Body");
             if (body != null) {
-                BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
+                BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, opCtx);
             }
             applyStarPrefixToEnsures(ensures, outputParams);
             // Antes de rewriteEnsuresBoolOutputEquality (que só troca o LHS "*p" por "(integer)(*p !=
@@ -340,10 +349,16 @@ public final class BxmlOperationsTranslator {
             // function") — precisa virar bicondicional ANTES, enquanto o LHS ainda é "*p" (o regex
             // desta função exige esse formato). Mesma correção já usada no lado ghost; só nunca
             // apareceu aqui porque este ensures era descartado do contrato real (ver abaixo).
+            // rewriteIntegerTernaryPredicateConditionForGhost cobre a forma irmã (ternário INTEIRO,
+            // não booleano — ex. "v := v <+ %z.(...)" via formatOverwriteWithLambdaAssignment,
+            // mesmo erro do kernel "symbol X is a predicate, not a function" quando a guarda B
+            // testa pertença a uma variável de máquina em vez de um conjunto literal).
             for (int ei = 0; ei < ensures.size(); ei++) {
-                ensures.set(ei, GhostOperationsCiGenerator.rewriteBoolOutputPredicateTernary(ensures.get(ei)));
+                String e = GhostOperationsCiGenerator.rewriteBoolOutputPredicateTernary(ensures.get(ei));
+                e = GhostOperationsCiGenerator.rewriteIntegerTernaryPredicateConditionForGhost(e);
+                ensures.set(ei, e);
             }
-            rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, ctx);
+            rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, opCtx);
             // Parâmetros de entrada escalares (C "int") ficam sem cast no ensures cru — comparados
             // com um Set<integer> (ex. "singleton(bb)" dentro de "equals(books, ...)") o Frama-C
             // infere o tipo lógico do parâmetro a partir do seu uso e rejeita ("invalid cast from
@@ -417,7 +432,7 @@ public final class BxmlOperationsTranslator {
                                     mergedRefinementChain,
                                     assignedAbs,
                                     gluing,
-                                    ctx,
+                                    opCtx,
                                     bxmlDirectory);
                     if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
                         connectionConcreteAssigns =
@@ -425,7 +440,7 @@ public final class BxmlOperationsTranslator {
                                         rootAbstractMachineName,
                                         mergedRefinementChain,
                                         assignedAbs,
-                                        ctx);
+                                        opCtx);
                     }
                     if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
                         connectionConcreteAssigns =
@@ -434,7 +449,7 @@ public final class BxmlOperationsTranslator {
                                         machineEl,
                                         mergedRefinementChain,
                                         assignedAbs,
-                                        ctx,
+                                        opCtx,
                                         varRhsOverrides);
                     }
                 }
@@ -446,7 +461,7 @@ public final class BxmlOperationsTranslator {
                 implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
                 if (implOp != null) {
                     loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(
-                            implOp, ctx, machineEl, importedOpAssigns, bxmlDirectory);
+                            implOp, opCtx, machineEl, importedOpAssigns, bxmlDirectory);
                 }
             }
             if (importedOpAssigns != null && !importedOpAssigns.isEmpty() && implOp != null) {
