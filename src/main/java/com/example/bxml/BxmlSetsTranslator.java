@@ -170,6 +170,41 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Nomes de TODOS os conjuntos declarados em {@code <Sets>} da máquina (deferred E enumerados) —
+     * ao contrário de {@link #buildEnumeratedSetNames}, que só cobre os enumerados. Usado por
+     * {@link BxmlTranslateContext} para excluir nomes de conjunto (ex.: {@code COPY}, um deferred
+     * set) da deteção de "variável livre" de uma lambda B {@code %} — sem isto, {@code %cc.(cc :
+     * COPY | …)} trata {@code COPY} (o próprio conjunto do domínio) como um parâmetro extra da
+     * função lógica gerada, quando é apenas um identificador de conjunto fixo, resolvível
+     * diretamente em ACSL ({@code Biblioteca_COPY}), nunca um valor que precise de ser passado.
+     */
+    public static Set<String> declaredSetNames(Element machineEl) {
+        Element setsEl = firstChildElement(machineEl, "Sets");
+        if (setsEl == null) return Set.of();
+        Set<String> names = new LinkedHashSet<>();
+        NodeList ch = setsEl.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element setEl = (Element) n;
+            if (!"Set".equals(setEl.getLocalName())) continue;
+            NodeList setChildren = setEl.getChildNodes();
+            for (int j = 0; j < setChildren.getLength(); j++) {
+                Node sn = setChildren.item(j);
+                if (sn.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element idEl = (Element) sn;
+                if (!"Id".equals(idEl.getLocalName())) continue;
+                String name = idEl.getAttribute("value");
+                if (name != null && !name.isBlank()) {
+                    names.add(name.trim());
+                    break;
+                }
+            }
+        }
+        return names;
+    }
+
+    /**
      * Constrói o mapa B-name → ACSL-name para os valores enumerados de todos os conjuntos de uma
      * máquina. Ex.: {@code "normal" → "switch__normal"}.
      *
@@ -965,6 +1000,43 @@ public final class BxmlSetsTranslator {
                 Element abs = firstChildElement(el, "Abstraction");
                 String absName = abs != null ? abs.getTextContent().trim() : null;
                 if (abstractMachineName.equals(absName)) {
+                    return el;
+                }
+            } catch (Exception ignored) {
+                // ficheiro malformado ou não-BXML; ignora e tenta o próximo
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Encontra o ficheiro {@code .bxml} ABSTRATO ({@code type='abstraction'}, {@code name=machineName})
+     * em {@code bxmlDirectory} — irmão de {@link #findImplementationMachineElement}, para quando o
+     * tipo {@code logic} de uma variável só está disponível no invariante da camada ABSTRATA (ex.:
+     * {@code contents : seq(Fifo_ctx_ELEM)} em {@code Fifo.bxml}), não na implementação (cujo próprio
+     * invariante de colagem usa {@code contents} sem o retipar).
+     */
+    static Element findAbstractMachineElement(String machineName, Path bxmlDirectory) {
+        if (machineName == null || machineName.isBlank()
+                || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return null;
+        }
+        List<Path> candidates;
+        try (Stream<Path> files = Files.list(bxmlDirectory)) {
+            candidates = files
+                    .filter(p -> p.getFileName().toString().endsWith(".bxml"))
+                    .sorted()
+                    .toList();
+        } catch (IOException e) {
+            return null;
+        }
+        for (Path p : candidates) {
+            try {
+                Element el = parseMachineElement(p);
+                if (!"abstraction".equalsIgnoreCase(el.getAttribute("type"))) {
+                    continue;
+                }
+                if (machineName.equals(el.getAttribute("name"))) {
                     return el;
                 }
             } catch (Exception ignored) {

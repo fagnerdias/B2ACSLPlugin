@@ -1426,6 +1426,29 @@ public final class B2ACSLPipeline {
     private static final Pattern LABELED_ARRAY_TO_FUNCTION_REF =
             Pattern.compile("array_to_function_\\w+\\(\\([^()]*\\)\\s*([A-Za-z_]\\w*)\\s*,");
 
+    /**
+     * {@code true} se {@code name} aparece em {@code text} como PARÂMETRO FORMAL de uma declaração
+     * {@code logic}/{@code predicate} própria (ex.: {@code Relation_int_int array} num {@code logic
+     * \list<integer> lambda_func01(Relation_int_int array, integer lo, integer hi) = …}) — nesse
+     * caso todas as ocorrências de {@code name} dentro de {@code text} referem-se ao PARÂMETRO
+     * local, não a uma variável/constante global de mesmo nome ({@code array{L}= …}). Sem esta
+     * distinção, um lambda "sequence builder" cujo parâmetro livre reusa o nome de uma variável de
+     * OUTRA máquina (ex. {@code array}, parâmetro de {@code lambda_func01} vs a variável concreta
+     * {@code array} de {@code VArray}) cria uma dependência de ordenação ESPÚRIA — o texto "contém a
+     * palavra array", mas não depende de facto da declaração global — e como essa falsa dependência
+     * contradiz a ordenação real (o global tem de vir DEPOIS do seu próprio C {@code static}, mas
+     * "antes do lambda" que na realidade não o usa), as duas regras de reposicionamento entram em
+     * oscilação perpétua sem nunca convergir.
+     */
+    private static boolean isNameShadowedAsParameter(String text, String name) {
+        Pattern paramDecl =
+                Pattern.compile(
+                        "(?:[A-Za-z_]\\w*|\\\\list\\s*<[^()]*>)\\s+"
+                                + Pattern.quote(name)
+                                + "\\s*[,)]");
+        return paramDecl.matcher(text).find();
+    }
+
     private static String moveOneMemoryDependentVariableBlockIfNeeded(String content) {
         List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
         // Nome declarado {L}= -> span que o declara, para localizar dependências entre blocos
@@ -1468,6 +1491,7 @@ public final class B2ACSLPipeline {
                 if (Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(depName) + "(?![A-Za-z0-9_])")
                         .matcher(sp.text)
                         .find()
+                        && !isNameShadowedAsParameter(sp.text, depName)
                         && depSpan.end > latestDepEnd) {
                     latestDepEnd = depSpan.end;
                 }
@@ -1501,7 +1525,8 @@ public final class B2ACSLPipeline {
                 }
                 if (Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(name) + "(?![A-Za-z0-9_])")
                         .matcher(sp.text)
-                        .find()) {
+                        .find()
+                        && !isNameShadowedAsParameter(sp.text, name)) {
                     earliestUseStart = Math.min(earliestUseStart, sp.start);
                 }
             }
@@ -1715,10 +1740,24 @@ public final class B2ACSLPipeline {
         return true;
     }
 
-    /** Substitui {@code assert ghost__} por {@code ghost } nas anotações Frama-C. */
+    /**
+     * Substitui {@code assert ghost__} por {@code ghost } nas anotações Frama-C.
+     *
+     * <p>Usa {@code \s+} (não um espaço literal) entre {@code assert} e {@code ghost__}: o
+     * pretty-printer do {@code -print} do Frama-C QUEBRA a linha quando é longa o suficiente (ex.:
+     * {@code attackplayer}, cuja lista de 4 parâmetros é mais longa que a de qualquer outra operação
+     * ghost neste projeto) — {@code "assert\n        ghost__attackplayer(...)"}, com quebra de linha
+     * e indentação em vez de um único espaço. Um {@code String.replace} literal (a versão anterior)
+     * nunca casava nesse caso, deixando {@code ghost__attackplayer} para trás como uma referência a
+     * PREDICADO ACSL normal dentro do {@code assert} — mas só {@code void attackplayer(...)} (a
+     * função ghost em si, sem o prefixo {@code ghost__}) sobrevive até {@code merged_code.c}, daí
+     * "unbound logic predicate ghost__attackplayer". Só descoberto ao correr RulerOfTheSeas
+     * (primeira operação ghost deste projeto cuja lista de parâmetros é longa o suficiente para
+     * quebrar linha).
+     */
     private static void replaceAssertGhostWithGhostKeyword(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
-        content = content.replace("assert ghost__", "ghost ");
+        content = content.replaceAll("assert\\s+ghost__", "ghost ");
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -1915,13 +1954,20 @@ public final class B2ACSLPipeline {
      */
     private static void liftPureGhostEnsuresToOperationContracts(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
-        // Group 1 uses (?:[^*]|\*(?!/))* instead of [\s\S]*? to prevent the lazy quantifier from
-        // backtracking past the closing */ of the ghost annotation. Without this, a short ghost
-        // call like /*@ ghost add(ee); */ inside a function body could extend (via backtracking)
-        // all the way to the next /*@…*/ block, consuming the C body of the preceding function.
+        // Group 1 usa [^*]*(?:\*(?!/)[^*]*)* — "loop desenrolado" equivalente a (?:[^*]|\*(?!/))*
+        // (mesma linguagem: qualquer texto até o primeiro "*/" literal) mas SEM repetir um GRUPO de
+        // alternação via "*": em Java, Pattern$Loop recursa uma stack frame por repetição de um
+        // GRUPO (Pattern$GroupHead/GroupTail/Branch/BranchConn no stack trace), então o "(?:X|Y)*"
+        // original recursava uma vez por CARACTER do bloco ghost — StackOverflowError em blocos
+        // ghost grandes (ex.: RulerOfTheSeas, com muito mais conteúdo ghost que os exemplos
+        // anteriores — nunca disparou até rodar esse exemplo). A forma desenrolada só recursa uma
+        // vez por "*" literal (raro em texto ACSL), com o grosso do texto consumido pelas classes de
+        // caracteres [^*]* (repetição eficiente, não-recursiva-por-caractere em Java). Mesma proteção
+        // do original contra a cauda "\*/" ser ultrapassada por backtracking: um "*" só é consumido
+        // pelo grupo interno quando NÃO é seguido de "/".
         Pattern ghostThenNormalBeforeDefinition =
                 Pattern.compile(
-                        "(/\\*@\\s*ghost\\b(?:[^*]|\\*(?!/))*\\*/\\s*)"
+                        "(/\\*@\\s*ghost\\b[^*]*(?:\\*(?!/)[^*]*)*\\*/\\s*)"
                                 + "(?s)(/\\*@(?!\\s*(?:ghost|axiomatic)\\b)[\\s\\S]*?\\*/\\s*)"
                                 + "(void\\s+[A-Za-z_]\\w*__([A-Za-z_]\\w*)\\s*\\([^;{}]*\\)\\s*\\{)");
         Pattern pureGhostAssignsNothing =
@@ -2867,6 +2913,14 @@ public final class B2ACSLPipeline {
         if (insertAt < 0) {
             insertAt = findPreambleInsertIndex(cut);
         }
+        // sequence_list_to_function_axioms usa outros símbolos da lib no seu PRÓPRIO corpo (ex.
+        // length(list_to_function(l)), is_sequence(...), function_apply(...)) — mover o bloco para
+        // logo antes do seu primeiro USO real, sem olhar para essas dependências, pode reintroduzir a
+        // MESMA violação declare-antes-de-usar que este passo tenta resolver, só que para o símbolo
+        // dependente (ex. "length") em vez de para list_to_function. Empurra o ponto de inserção para
+        // depois de qualquer declaração (logic/predicate) já presente no ficheiro de que
+        // list_to_function dependa transitivamente.
+        insertAt = pushInsertAfterSymbolDeclDependencies(cut, insertAt, "list_to_function");
 
         StringBuilder sb = new StringBuilder();
         for (AcsCommentSpan sp : toMove) {
@@ -2884,6 +2938,48 @@ public final class B2ACSLPipeline {
             }
         }
         return findPreambleInsertIndex(cut);
+    }
+
+    /**
+     * Empurra {@code insertAt} para depois de qualquer declaração ({@code logic}/{@code predicate})
+     * já presente em {@code content}, de um símbolo do qual {@code rootSymbol} dependa transitivamente
+     * (ver {@link AcslLibSymbolDependencyMap#transitiveDependencySymbols(String)}) — necessário quando
+     * se reposiciona {@code rootSymbol} (ex. {@code list_to_function}) para logo antes do seu próprio
+     * primeiro USO: se um símbolo de que ele depende (ex. {@code length}, referenciado dentro do
+     * próprio corpo dos axiomas de {@code list_to_function}) já estiver declarado MAIS À FRENTE no
+     * ficheiro do que o ponto de inserção calculado, mover para lá deixaria essa dependência por
+     * declarar nesse ponto — a mesma violação declare-antes-de-usar que esta função tenta resolver,
+     * só que para o símbolo dependente. Devolve {@code insertAt} inalterado se nenhuma dependência
+     * conhecida tiver uma declaração no ficheiro em posição igual/posterior.
+     */
+    private static int pushInsertAfterSymbolDeclDependencies(
+            String content, int insertAt, String rootSymbol) {
+        Set<String> deps =
+                AcslLibSymbolDependencyMap.instance().transitiveDependencySymbols(rootSymbol);
+        if (deps.isEmpty()) {
+            return insertAt;
+        }
+        List<AcsCommentSpan> spans = findAllAcsCommentSpans(content);
+        int result = insertAt;
+        for (String dep : deps) {
+            if (dep.equals(rootSymbol)) {
+                continue;
+            }
+            Pattern declPattern =
+                    Pattern.compile(
+                            "(?m)^.*\\b(?:logic|predicate)\\b.*?\\b"
+                                    + Pattern.quote(dep)
+                                    + "\\s*\\(");
+            for (AcsCommentSpan sp : spans) {
+                if (sp.end <= result) {
+                    continue;
+                }
+                if (declPattern.matcher(sp.text).find()) {
+                    result = Math.max(result, sp.end);
+                }
+            }
+        }
+        return result;
     }
 
 }

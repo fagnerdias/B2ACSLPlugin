@@ -36,6 +36,8 @@ import com.example.bxml.BxmlSetsTranslator;
 import com.example.bxml.BxmlTranslateContext;
 import com.example.bxml.BxmlTypeRegistry;
 import com.example.bxml.LambdaFunctionRegistry;
+import com.example.bxml.SigmaFunctionRegistry;
+import com.example.bxml.UnionInterFunctionRegistry;
 import com.example.model.Machine;
 
 /**
@@ -306,22 +308,31 @@ public final class AcslGenerator {
         // sequence_ran/relation_ran trocados.
         Map<String, String> refinementChainVariableLogicTypes =
                 refinementChainVariableLogicTypes(machineEl, mergedMachineElements);
+        Set<String> enumeratedSetNamesForCtx = BxmlSetsTranslator.buildEnumeratedSetNames(machineEl);
         BxmlTranslateContext ctx =
                 BxmlTranslateContext.forMachineWithSharedComprehensions(
                         machineEl, sharedComprehensions, gluing)
                         .withLambdaRegistry(new LambdaFunctionRegistry())
+                        .withSigmaRegistry(new SigmaFunctionRegistry())
+                        .withUnionInterRegistry(new UnionInterFunctionRegistry())
                         .withEnumRenames(
                                 BxmlSetsTranslator.buildEnumRenamesWithSees(
                                         machineEl, mergedMachineElements, bxmlDirectory))
                         .withEnumeratedSetRenames(
                                 BxmlSetsTranslator.buildEnumeratedSetRenamesWithSees(
                                         machineEl, mergedMachineElements, bxmlDirectory))
-                        .withEnumeratedSetNames(
-                                BxmlSetsTranslator.buildEnumeratedSetNames(machineEl))
+                        .withEnumeratedSetNames(enumeratedSetNamesForCtx)
                         .withCrossMachineVariableNames(
                                 BxmlMachineVariables.transitiveCrossMachineVariableNames(
                                         invariantSourceMachineNames, bxmlDirectory))
+                        .withCrossMachineVariableLogicTypes(
+                                BxmlMachineVariables.transitiveCrossMachineVariableLogicTypes(
+                                        invariantSourceMachineNames, bxmlDirectory))
                         .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
+        // deferredSetTypedParameterNames NÃO é preenchido aqui: é por-OPERAÇÃO (nomes de parâmetro
+        // colidem entre operações diferentes da mesma máquina com papéis diferentes — ver javadoc
+        // de BxmlMachineVariables.deferredSetTypedOperationParameterNames), preenchido dentro do
+        // laço de BxmlOperationsTranslator#translateOperations com a Precondition de cada operação.
 
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
@@ -463,6 +474,8 @@ public final class AcslGenerator {
         // variáveis de estado (ex.: copyOf) que só ficam declaradas após as variáveis.
         String propertiesBlock = BxmlConstantsAndProperties.formatPropertiesBlock(machineEl, ctx);
         int lambdaEmittedUpTo = 0;
+        int sigmaEmittedUpTo = 0;
+        int unionInterEmittedUpTo = 0;
         String valuesRoot = BxmlConstantsAndProperties.formatValuesBlock(machineEl, ctx);
         if (!valuesRoot.isBlank()) {
             sb.append(valuesRoot);
@@ -551,7 +564,10 @@ public final class AcslGenerator {
                             mel, ctx.comprehensions(), gluing, machineEl)
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                     .withLambdaRegistry(ctx.lambdaRegistry())
+                    .withSigmaRegistry(ctx.sigmaRegistry())
+                    .withUnionInterRegistry(ctx.unionInterRegistry())
                     .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
+                    .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
             String varsMerged =
                     BxmlMachineVariables.formatAxiomaticBlock(
@@ -589,7 +605,10 @@ public final class AcslGenerator {
                             mel, ctx.comprehensions(), gluing, machineEl)
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                     .withLambdaRegistry(ctx.lambdaRegistry())
+                    .withSigmaRegistry(ctx.sigmaRegistry())
+                    .withUnionInterRegistry(ctx.unionInterRegistry())
                     .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
+                    .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
             String constsMerged = BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx);
             if (!constsMerged.isBlank()) {
@@ -618,7 +637,10 @@ public final class AcslGenerator {
                             mel, ctx.comprehensions(), gluing, machineEl)
                     .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                     .withLambdaRegistry(ctx.lambdaRegistry())
+                    .withSigmaRegistry(ctx.sigmaRegistry())
+                    .withUnionInterRegistry(ctx.unionInterRegistry())
                     .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
+                    .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
             String valuesMerged =
                     BxmlConstantsAndProperties.formatValuesBlock(mel, mctx, machineEl);
@@ -629,28 +651,69 @@ public final class AcslGenerator {
             }
         }
 
-        // 2) Todos os predicate (invariantes)
+        // 2) Todos os predicate (invariantes) — traduzidos já aqui (podem registar lambdas, ex. um
+        // invariante de colagem que chama directamente uma "sequence builder"), mas o texto fica em
+        // buffers separados e só é anexado a 'sb' DEPOIS do bloco lambda_functions abaixo: um
+        // invariante como Fifo_i_2_invariant pode referenciar lambda_func01 directamente (não só
+        // através de Properties), e ACSL exige declare-antes-de-usar.
         String invariantPredicates = BxmlInvariantTranslator.formatInvariantPredicates(machineEl, ctx);
-        if (!invariantPredicates.isBlank()) {
-            sb.append("\n");
-            sb.append(invariantPredicates);
-            if (!invariantPredicates.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
-        }
+        StringBuilder mergedInvariantsSb = new StringBuilder();
         appendMergedInvariantPredicatesOnly(
-                sb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
-                ctx.enumeratedSetRenames(), mergedVariableRenames, ctx.lambdaRegistry(),
-                ctx.crossMachineVariableNames(), refinementChainVariableLogicTypes);
+                mergedInvariantsSb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
+                ctx.enumeratedSetRenames(), mergedVariableRenames, ctx.lambdaRegistry(), ctx.sigmaRegistry(),
+                ctx.unionInterRegistry(), ctx.crossMachineVariableNames(),
+                ctx.crossMachineVariableLogicTypes(), refinementChainVariableLogicTypes);
 
         // 2b) Lambdas (emissão tardia, após variáveis): lambda_functions pode referenciar variáveis
-        // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima.
-        // Properties da máquina raiz é emitido a seguir, pois pode referenciar predicados lambda.
+        // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima. Emitido
+        // antes dos invariantes/properties bufferizados acima/abaixo, que podem referenciar
+        // predicados/funções lambda.
         LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
         if (lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo) {
             sb.append("\n");
             sb.append(lambdaRegistry.formatAxiomaticBlockFrom(lambdaEmittedUpTo));
             sb.append("\n");
         }
+        // 2c) SIGMA/PI/MIN/MAX (mesma emissão tardia que os lambdas, pelo mesmo motivo: podem
+        // referenciar variáveis de estado só declaradas nos blocos de variáveis acima). Ao
+        // contrário dos lambdas (só predicate/logic escalares), este bloco usa Set<A> genérico
+        // (ex.: Set<integer> no caso de domínio-conjunto) — -acsl-import só aceita instanciação
+        // genérica concreta dentro de um ficheiro alcançado via include, nunca inline num ficheiro
+        // de topo (confirmado empiricamente: "[Syntax error] <" na primeira ocorrência de "Set<" se
+        // deixado inline aqui — mesma restrição que TupleCodomainTypeRegistry já contorna para
+        // "type X = Y;"). Escreve num .acsl próprio da máquina e inclui NESTA MESMA posição (não no
+        // preâmbulo: o bloco referencia variáveis de estado só declaradas ANTES deste ponto).
+        SigmaFunctionRegistry sigmaRegistry = ctx.sigmaRegistry();
+        if (sigmaRegistry != null && sigmaRegistry.size() > sigmaEmittedUpTo) {
+            String sigmaBlock = sigmaRegistry.formatAxiomaticBlockFrom(sigmaEmittedUpTo);
+            String sigmaFileName = baseName + "_sigma_functions.acsl";
+            Files.writeString(outputDir.resolve(sigmaFileName), sigmaBlock);
+            // O conteúdo saiu de 'sb' (só o include entra) — sem isto, símbolos da lib usados só lá
+            // dentro (is_finite, belongs, singleton, …) nunca apareceriam no texto varrido para
+            // decidir os includes do ficheiro raiz (mesmo padrão de connection.acsl, ver acima).
+            libScanRemovedBodies.append(sigmaBlock).append('\n');
+            sb.append("\n");
+            sb.append("include \"").append(sigmaFileName).append("\";\n");
+            sb.append("\n");
+        }
+        // 2d) UNION/INTER (mesmo motivo e mesma técnica de include separado que 2c — Set<T> genérico).
+        UnionInterFunctionRegistry unionInterRegistry = ctx.unionInterRegistry();
+        if (unionInterRegistry != null && unionInterRegistry.size() > unionInterEmittedUpTo) {
+            String unionInterBlock = unionInterRegistry.formatAxiomaticBlockFrom(unionInterEmittedUpTo);
+            String unionInterFileName = baseName + "_union_inter_functions.acsl";
+            Files.writeString(outputDir.resolve(unionInterFileName), unionInterBlock);
+            libScanRemovedBodies.append(unionInterBlock).append('\n');
+            sb.append("\n");
+            sb.append("include \"").append(unionInterFileName).append("\";\n");
+            sb.append("\n");
+        }
+        if (!invariantPredicates.isBlank()) {
+            sb.append("\n");
+            sb.append(invariantPredicates);
+            if (!invariantPredicates.endsWith("\n")) sb.append("\n");
+            sb.append("\n");
+        }
+        sb.append(mergedInvariantsSb);
         if (!propertiesBlock.isBlank()) {
             sb.append(propertiesBlock);
             if (!propertiesBlock.endsWith("\n")) sb.append("\n");
@@ -765,11 +828,19 @@ public final class AcslGenerator {
             tupleTypesInclude = "include \"" + baseName + "_tuple_types.acsl\";\n";
         }
         StringBuilder preambleIncludes = new StringBuilder();
-        if (!tupleTypesInclude.isEmpty()) {
-            preambleIncludes.append(tupleTypesInclude);
-        }
+        // import/types.acsl PRIMEIRO: declara os tipos genéricos Set<A>/Tuple<A,B> em si (ver
+        // "axiomatic new_types" nesse ficheiro — "type Set<A>;"/"type Tuple<A,B>;", sem corpo). O
+        // ficheiro de tipos-tupla desta máquina só usa "Set<Tuple<...>>" já assumindo que ambos
+        // estão conhecidos — invertido, o front-end do acsl-import (mais estrito que o "-print" só
+        // do kernel, usado para verificar progresso durante o desenvolvimento) rejeita com
+        // "[Syntax error] <" logo no primeiro uso, por não saber ainda que "Set"/"Tuple" são
+        // genéricos (confirmado: isolar SÓ o alias mais antigo, já usado noutros exemplos, sem
+        // nenhum tipo introduzido por esta sessão, reproduz o mesmo erro na mesma posição).
         if (!omitLibIncludesFromPreamble && !libIncludes.isEmpty()) {
             preambleIncludes.append(libIncludes);
+        }
+        if (!tupleTypesInclude.isEmpty()) {
+            preambleIncludes.append(tupleTypesInclude);
         }
         appendAcslMachineIncludes(preambleIncludes, machineDependencyIncludes);
         if (!preambleIncludes.isEmpty()) {
@@ -873,7 +944,10 @@ public final class AcslGenerator {
             Map<String, String> enumeratedSetRenames,
             Map<Element, Map<String, String>> variableRenamesByMachine,
             LambdaFunctionRegistry lambdaRegistry,
+            SigmaFunctionRegistry sigmaRegistry,
+            UnionInterFunctionRegistry unionInterRegistry,
             Set<String> crossMachineVariableNames,
+            Map<String, String> crossMachineVariableLogicTypes,
             Map<String, String> refinementChainVariableLogicTypes) {
         if (mergedMachineRoots == null || mergedMachineRoots.isEmpty()) {
             return;
@@ -884,7 +958,10 @@ public final class AcslGenerator {
                             mel, sharedComprehensions, gluing, rootAbstractMachineEl)
                     .withEnumeratedSetRenames(enumeratedSetRenames)
                     .withLambdaRegistry(lambdaRegistry)
+                    .withSigmaRegistry(sigmaRegistry)
+                    .withUnionInterRegistry(unionInterRegistry)
                     .withCrossMachineVariableNames(crossMachineVariableNames)
+                    .withCrossMachineVariableLogicTypes(crossMachineVariableLogicTypes)
                     .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
             String inv = BxmlInvariantTranslator.formatInvariantPredicates(mel, ctx);
             if (inv.isBlank()) continue;
