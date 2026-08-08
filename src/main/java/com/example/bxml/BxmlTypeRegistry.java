@@ -406,7 +406,7 @@ public final class BxmlTypeRegistry {
             return e.getAttribute("value");
         }
         if ("Unary_Exp".equals(ln) && "POW".equals(e.getAttribute("op"))) {
-            Element inner = firstNonAttrElementChild(e);
+            Element inner = BxmlDomUtils.firstNonAttrElementChild(e);
             return "POW(" + bxmlTypeExprToString(inner, topLevelProduct) + ")";
         }
         if ("Binary_Exp".equals(ln) && "*".equals(e.getAttribute("op"))) {
@@ -424,18 +424,6 @@ public final class BxmlTypeRegistry {
             }
         }
         return "UNKNOWN";
-    }
-
-    private static Element firstNonAttrElementChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element el = (Element) n;
-            if ("Attr".equals(el.getLocalName())) continue;
-            return el;
-        }
-        return null;
     }
 
     private static Element[] twoNonAttrElementChildren(Element parent) {

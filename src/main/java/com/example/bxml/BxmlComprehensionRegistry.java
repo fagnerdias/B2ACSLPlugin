@@ -164,7 +164,7 @@ public final class BxmlComprehensionRegistry {
     /** Intervalos e compreensões em {@code INVARIANT}/{@code VARIANT} de loops WHILE na implementação. */
     private static void registerComprehensionsInImplementationLoops(
             Element operation, BxmlComprehensionRegistry r, BxmlTypeRegistry types, String machineName) {
-        Element body = firstChildElement(operation, "Body");
+        Element body = BxmlDomUtils.firstChildElement(operation, "Body");
         if (body != null) {
             walkWhileLoopComprehensions(body, r, types, machineName);
         }
@@ -176,15 +176,15 @@ public final class BxmlComprehensionRegistry {
             return;
         }
         if ("While".equals(sub.getLocalName())) {
-            Element inv = firstChildElement(sub, "Invariant");
+            Element inv = BxmlDomUtils.firstChildElement(sub, "Invariant");
             if (inv != null) {
                 walkComprehensionSubtree(inv, r, types, machineName);
             }
-            Element variant = firstChildElement(sub, "Variant");
+            Element variant = BxmlDomUtils.firstChildElement(sub, "Variant");
             if (variant != null) {
                 walkComprehensionSubtree(variant, r, types, machineName);
             }
-            walkWhileLoopComprehensions(firstChildElement(sub, "Body"), r, types, machineName);
+            walkWhileLoopComprehensions(BxmlDomUtils.firstChildElement(sub, "Body"), r, types, machineName);
             return;
         }
         NodeList nl = sub.getChildNodes();
@@ -212,21 +212,6 @@ public final class BxmlComprehensionRegistry {
             }
             walkComprehensionSubtree((Element) n, r, types, machineName);
         }
-    }
-
-    private static Element firstChildElement(Element parent, String localName) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) {
-                continue;
-            }
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) {
-                return e;
-            }
-        }
-        return null;
     }
 
     /**
@@ -265,8 +250,8 @@ public final class BxmlComprehensionRegistry {
             String bounds = intervalBoundsFingerprint(qs, types);
             return tr + "|interval|integer:x|(" + BxmlGluingNormalizer.applySubstitutions(bounds, g) + ")";
         }
-        Element vars = firstChildElement(qs, "Variables");
-        Element body = firstChildElement(qs, "Body");
+        Element vars = BxmlDomUtils.firstChildElement(qs, "Variables");
+        Element body = BxmlDomUtils.firstChildElement(qs, "Body");
         String tr = qs.getAttribute("typref");
         if (vars == null || body == null) {
             return tr + "|invalid";
@@ -532,8 +517,8 @@ public final class BxmlComprehensionRegistry {
             appendIntervalComprehensionAxiom(sb, qs, index, machineName, types, ctx);
             return;
         }
-        Element vars = firstChildElement(qs, "Variables");
-        Element body = firstChildElement(qs, "Body");
+        Element vars = BxmlDomUtils.firstChildElement(qs, "Variables");
+        Element body = BxmlDomUtils.firstChildElement(qs, "Body");
         if (vars == null || body == null) return;
 
         List<Element> idNodes = new ArrayList<>();
@@ -609,8 +594,8 @@ public final class BxmlComprehensionRegistry {
     private static List<String>[] freeVarsForComprehension(
             Element qs, BxmlTranslateContext ctx, BxmlTypeRegistry types,
             Map<String, String> anyAliases) {
-        Element vars = firstChildElement(qs, "Variables");
-        Element body = firstChildElement(qs, "Body");
+        Element vars = BxmlDomUtils.firstChildElement(qs, "Variables");
+        Element body = BxmlDomUtils.firstChildElement(qs, "Body");
         if (vars == null || body == null) {
             return new List[] {List.of(), List.of()};
         }
@@ -622,7 +607,7 @@ public final class BxmlComprehensionRegistry {
             Element e = (Element) n;
             if ("Id".equals(e.getLocalName())) boundNames.add(e.getAttribute("value"));
         }
-        List<String>[] ft = BxmlExpressionToAcsl.freeVarsAndTypes(boundNames, ctx, body);
+        List<String>[] ft = GeneralizedQuantifierTranslator.freeVarsAndTypes(boundNames, ctx, body);
         List<String> names = new ArrayList<>();
         List<String> resolvedTypes = new ArrayList<>();
         for (int i = 0; i < ft[0].size(); i++) {

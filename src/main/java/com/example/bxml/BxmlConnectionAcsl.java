@@ -175,7 +175,7 @@ public final class BxmlConnectionAcsl {
 
     private static List<String> listIdValuesInSection(Element machineEl, String sectionLocalName) {
         List<String> out = new ArrayList<>();
-        Element block = firstChildElement(machineEl, sectionLocalName);
+        Element block = BxmlDomUtils.firstChildElement(machineEl, sectionLocalName);
         if (block == null) return out;
         NodeList ch = block.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -205,7 +205,7 @@ public final class BxmlConnectionAcsl {
     private static Set<String> collectIdValuesInInvariant(Element machineEl) {
         Set<String> out = new LinkedHashSet<>();
         for (Element inv : BxmlInvariantTranslator.listDirectInvariants(machineEl)) {
-            Element p = firstPredChild(inv);
+            Element p = BxmlDomUtils.firstPredChild(inv);
             if (p != null) collectIdsRecursive(p, out);
         }
         return out;
@@ -224,29 +224,6 @@ public final class BxmlConnectionAcsl {
             if ("Attr".equals(ch.getLocalName())) continue;
             collectIdsRecursive(ch, out);
         }
-    }
-
-    private static Element firstPredChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            return e;
-        }
-        return null;
-    }
-
-    private static Element firstChildElement(Element parent, String localName) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) return e;
-        }
-        return null;
     }
 
     private static boolean isImplementationMachine(Element machineEl) {

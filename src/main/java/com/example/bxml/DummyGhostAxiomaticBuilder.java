@@ -5,7 +5,6 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -308,7 +307,7 @@ final class DummyGhostAxiomaticBuilder {
             out.addAll(abstractVarNames);
         }
         if (machineEl != null) {
-            Element block = firstChildElement(machineEl, "Concrete_Constants");
+            Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");
             if (block != null) {
                 NodeList ch = block.getChildNodes();
                 for (int i = 0; i < ch.getLength(); i++) {
@@ -664,7 +663,7 @@ final class DummyGhostAxiomaticBuilder {
         if (machineEl == null || ctx == null) {
             return;
         }
-        Element block = firstChildElement(machineEl, "Concrete_Constants");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");
         if (block == null) {
             return;
         }
@@ -773,15 +772,4 @@ final class DummyGhostAxiomaticBuilder {
         return sb.toString();
     }
 
-    private static Element firstChildElement(Element parent, String localName) {
-        if (parent == null) return null;
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) return e;
-        }
-        return null;
-    }
 }

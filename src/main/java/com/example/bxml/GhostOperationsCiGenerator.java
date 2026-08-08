@@ -41,167 +41,6 @@ public final class GhostOperationsCiGenerator {
         return cDir.resolve(GHOST_FILE);
     }
 
-    /** Slug C/ACSL da operação (ex. {@code Add} → {@code add}, {@code INITIALISATION} → {@code initialisation}). */
-    public static String ghostOperationSlug(String bxmlOperationName) {
-        return sanitizeGhostFunctionName(bxmlOperationName);
-    }
-
-    public static boolean initialisationAssignsAbstract(
-            Element abstractMachineEl, Set<String> abstractVariableNames) {
-        return !variablesAssignedInInitialisation(abstractMachineEl, abstractVariableNames)
-                .isEmpty();
-    }
-
-    /**
-     * Variáveis da máquina (em {@code candidateNames}) atribuídas na cláusula {@code Initialisation}.
-     */
-    public static Set<String> variablesAssignedInInitialisation(
-            Element machineEl, Set<String> candidateNames) {
-        Set<String> out = new LinkedHashSet<>();
-        if (machineEl == null || candidateNames == null || candidateNames.isEmpty()) {
-            return out;
-        }
-        collectAssignedAbstractVarsInInit(machineEl, candidateNames, out);
-        return out;
-    }
-
-    public static boolean operationAssignsAbstract(
-            Element operation, Set<String> abstractVariableNames) {
-        if (operation == null
-                || abstractVariableNames == null
-                || abstractVariableNames.isEmpty()) {
-            return false;
-        }
-        return !assignedAbstractVariablesInOperation(operation, abstractVariableNames).isEmpty();
-    }
-
-    /**
-     * Operação cujo corpo é (ou contém no topo) {@code ANY_Sub}: tem contrato ghost mesmo sem
-     * atribuir variável abstrata (ex.: {@code get OUT ee, ii := ANY xx WHERE … THEN ee := xx || ii := …}).
-     */
-    public static boolean operationBodyHasAnySub(Element operation) {
-        if (operation == null) return false;
-        Element body = firstChildElement(operation, "Body");
-        return BxmlInitialisationTranslator.findTopLevelAnySub(body) != null;
-    }
-
-    /** Tem contrato ghost por mutar variável abstrata ou por usar {@code ANY_Sub}. */
-    public static boolean operationNeedsGhostContract(
-            Element operation, Set<String> abstractVariableNames) {
-        return operationAssignsAbstract(operation, abstractVariableNames)
-                || operationBodyHasAnySub(operation);
-    }
-
-    /**
-     * Nomes dos {@code Output_Parameters} (na ordem do BXML); usado pelos geradores ghost que
-     * precisam construir a assinatura {@code void op(... outputs ...)} ou listar argumentos para
-     * {@code at return: assert ghost__op(... outputs ...)}.
-     */
-    public static List<String> listOutputParameterNames(Element operation) {
-        List<String> out = new ArrayList<>();
-        if (operation == null) return out;
-        Element outEl = firstChildElement(operation, "Output_Parameters");
-        if (outEl == null) return out;
-        NodeList ch = outEl.getChildNodes();
-        for (int i = 0; i < ch.getLength(); i++) {
-            Node n = ch.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            if (!"Id".equals(e.getLocalName())) continue;
-            String name = e.getAttribute("value");
-            if (name == null || name.isBlank()) continue;
-            out.add(sanitizeCIdent(name.trim()));
-        }
-        return out;
-    }
-
-    /** Variáveis abstratas atribuídas no {@code Body} da operação (lado esquerdo de {@code :=}). */
-    public static Set<String> assignedAbstractVariablesInOperation(
-            Element operation, Set<String> abstractVariableNames) {
-        Set<String> out = new LinkedHashSet<>();
-        if (operation == null
-                || abstractVariableNames == null
-                || abstractVariableNames.isEmpty()) {
-            return out;
-        }
-        Element body = firstChildElement(operation, "Body");
-        if (body == null) return out;
-        collectAssignedAbstractVarsInBody(body, abstractVariableNames, out);
-        return out;
-    }
-
-    /**
-     * Bloco {@code axiomatic Nome_ghost_patterns} com {@code logic … dummy_ghost_<v>} e predicados
-     * {@code ghost_<op>} para inicialização e operações não puras.
-     */
-    public static String formatGhostPatternsAxiomaticBlock(
-            Element abstractMachineEl, String machineNamePrefix) {
-        return formatGhostPatternsAxiomaticBlock(abstractMachineEl, machineNamePrefix, Map.of());
-    }
-
-    public static String formatGhostPatternsAxiomaticBlock(
-            Element abstractMachineEl,
-            String machineNamePrefix,
-            Map<String, String> variableLogicTypes) {
-        if (abstractMachineEl == null
-                || machineNamePrefix == null
-                || machineNamePrefix.isBlank()) {
-            return "";
-        }
-        List<String> vars = listAbstractVariableNames(abstractMachineEl);
-        if (vars.isEmpty()) return "";
-
-        Map<String, String> types =
-                variableLogicTypes == null ? Map.of() : variableLogicTypes;
-        Set<String> abstractSet = new LinkedHashSet<>(vars);
-        StringBuilder sb = new StringBuilder();
-        sb.append("axiomatic ").append(machineNamePrefix).append("_ghost_patterns {\n\n");
-        for (String v : vars) {
-            sb.append("    logic ")
-                    .append(ghostLogicTypeFromInferred(types.get(v)))
-                    .append(" dummy_ghost_")
-                    .append(v)
-                    .append(";\n\n");
-        }
-        if (initialisationAssignsAbstract(abstractMachineEl, abstractSet)) {
-            sb.append("    predicate ghost__")
-              .append(machineNamePrefix.toLowerCase())
-              .append("__initialisation;\n\n");
-        }
-        Element operationsEl = firstChildElement(abstractMachineEl, "Operations");
-        if (operationsEl != null) {
-            NodeList opNodes = operationsEl.getChildNodes();
-            for (int i = 0; i < opNodes.getLength(); i++) {
-                Node n = opNodes.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element op = (Element) n;
-                if (!"Operation".equals(op.getLocalName())) continue;
-                String opName = op.getAttribute("name");
-                if (opName == null || opName.isBlank()) continue;
-                if (!operationNeedsGhostContract(op, abstractSet)) continue;
-                String slug = ghostOperationSlug(opName);
-                sb.append("    predicate ghost__").append(slug);
-                List<Param> params = listInputParameters(op);
-                if (operationBodyHasAnySub(op) || operationAssignsAbstract(op, abstractSet)) {
-                    params = appendOutputParametersAsPointers(params, op);
-                }
-                if (params.isEmpty()) {
-                    sb.append(";\n\n");
-                } else {
-                    sb.append("(");
-                    List<String> parts = new ArrayList<>();
-                    for (Param p : params) {
-                        parts.add(formatCParameterDecl(p.type(), p.name()));
-                    }
-                    sb.append(String.join(", ", parts)).append(");\n\n");
-                }
-            }
-        }
-        sb.append("}\n");
-        return sb.toString();
-    }
-
     /**
      * Escreve {@link #GHOST_FILE} em {@code cDir} a partir da máquina abstrata raiz.
      */
@@ -301,7 +140,7 @@ public final class GhostOperationsCiGenerator {
         Map<String, List<String>> abstractConstParams =
                 BxmlConstantsAndProperties.collectLambdaDefsFromProperties(abstractMachineEl);
         Map<String, String> abstractConstDecls =
-                buildAbstractConstantDecls(abstractMachineEl, ctx, abstractConstParams);
+                GhostParamTypeResolver.buildAbstractConstantDecls(abstractMachineEl, ctx, abstractConstParams);
         List<GhostOp> ghostOps =
                 buildGhostOperations(
                         abstractMachineEl,
@@ -322,7 +161,7 @@ public final class GhostOperationsCiGenerator {
                 .append(" */\n\n");
 
         for (String v : abstractVarNames) {
-            String cType = ghostCTypeFromLogicType(varTypes.get(v));
+            String cType = GhostParamTypeResolver.ghostCTypeFromLogicType(varTypes.get(v));
             sb.append("//@ ghost ").append(cType).append(" ghost_").append(v).append(";\n");
         }
         if (!abstractVarNames.isEmpty()) sb.append("\n");
@@ -346,16 +185,16 @@ public final class GhostOperationsCiGenerator {
         // (AcslGenerator emite lambda_functions antes de generalized_quantifier_functions).
         LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
         String lambdaBlock = lambdaRegistry != null && !lambdaRegistry.isEmpty()
-                ? prefixLocalAxiomaticBlockForGhost(
-                        renameGhostAxiomaticBlock(lambdaRegistry.formatAxiomaticBlock(), "lambda_functions"),
+                ? GhostNamespacePrefixer.prefixLocalAxiomaticBlockForGhost(
+                        GhostNamespacePrefixer.renameGhostAxiomaticBlock(lambdaRegistry.formatAxiomaticBlock(), "lambda_functions"),
                         ctx, concreteConstants, abstractSet)
                 : null;
         if (lambdaBlock != null) allGhostEnsureLines.add(lambdaBlock);
 
         SigmaFunctionRegistry sigmaRegistry = ctx.sigmaRegistry();
         String sigmaBlock = sigmaRegistry != null && !sigmaRegistry.isEmpty()
-                ? prefixLocalAxiomaticBlockForGhost(
-                        renameGhostAxiomaticBlock(
+                ? GhostNamespacePrefixer.prefixLocalAxiomaticBlockForGhost(
+                        GhostNamespacePrefixer.renameGhostAxiomaticBlock(
                                 sigmaRegistry.formatAxiomaticBlock(), "generalized_quantifier_functions"),
                         ctx, concreteConstants, abstractSet)
                 : null;
@@ -363,8 +202,8 @@ public final class GhostOperationsCiGenerator {
 
         UnionInterFunctionRegistry unionInterRegistry = ctx.unionInterRegistry();
         String unionInterBlock = unionInterRegistry != null && !unionInterRegistry.isEmpty()
-                ? prefixLocalAxiomaticBlockForGhost(
-                        renameGhostAxiomaticBlock(
+                ? GhostNamespacePrefixer.prefixLocalAxiomaticBlockForGhost(
+                        GhostNamespacePrefixer.renameGhostAxiomaticBlock(
                                 unionInterRegistry.formatAxiomaticBlock(), "generalized_union_inter_functions"),
                         ctx, concreteConstants, abstractSet)
                 : null;
@@ -487,7 +326,7 @@ public final class GhostOperationsCiGenerator {
     }
 
     public static boolean machineHasAnySubOperations(Element machineEl) {
-        Element opsEl = firstChildElement(machineEl, "Operations");
+        Element opsEl = BxmlDomUtils.firstChildElement(machineEl, "Operations");
         if (opsEl == null) return false;
         NodeList ch = opsEl.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -495,7 +334,7 @@ public final class GhostOperationsCiGenerator {
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Element op = (Element) n;
             if (!"Operation".equals(op.getLocalName())) continue;
-            if (operationBodyHasAnySub(op)) return true;
+            if (GhostContractPredicates.operationBodyHasAnySub(op)) return true;
         }
         return false;
     }
@@ -515,11 +354,11 @@ public final class GhostOperationsCiGenerator {
         if (!initAssigned.isEmpty()) {
             List<String> prefixedInitEnsures = new ArrayList<>();
             for (String e : initEnsures) {
-                String ge = prefixAcslLibFunctionsForGhost(e);
-                ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
-                ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
-                ge = prefixGlobalLogicSetsForGhost(ge);
-                ge = prefixSetComprehensionsForGhost(ge);
+                String ge = GhostNamespacePrefixer.prefixAcslLibFunctionsForGhost(e);
+                ge = GhostNamespacePrefixer.prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
+                ge = GhostNamespacePrefixer.prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
+                ge = GhostNamespacePrefixer.prefixGlobalLogicSetsForGhost(ge);
+                ge = GhostNamespacePrefixer.prefixSetComprehensionsForGhost(ge);
                 ge = ghostDummyConcreteRefs(ge, concreteConstants);
                 ge = stripBTypingCommentsForGhost(ge);
                 ge = normalizeBooleanLiteralsForGhost(ge);
@@ -529,7 +368,7 @@ public final class GhostOperationsCiGenerator {
             ops.add(new GhostOp(initSlug, List.of(), initAssigned, prefixedInitEnsures));
         }
 
-        Element operationsEl = firstChildElement(abstractMachineEl, "Operations");
+        Element operationsEl = BxmlDomUtils.firstChildElement(abstractMachineEl, "Operations");
         if (operationsEl != null) {
             NodeList opNodes = operationsEl.getChildNodes();
             for (int i = 0; i < opNodes.getLength(); i++) {
@@ -540,7 +379,7 @@ public final class GhostOperationsCiGenerator {
                 String opName = op.getAttribute("name");
                 if (opName == null || opName.isBlank()) continue;
 
-                Element body = firstChildElement(op, "Body");
+                Element body = BxmlDomUtils.firstChildElement(op, "Body");
                 if (body == null) continue;
                 Set<String> assigned = new LinkedHashSet<>();
                 collectAssignedAbstractVarsInBody(body, abstractSet, assigned);
@@ -550,16 +389,16 @@ public final class GhostOperationsCiGenerator {
                     String existsForm = BxmlInitialisationTranslator.translateAnySubAsExists(anySub, ctx);
                     if (existsForm == null || existsForm.isBlank()) continue;
                     List<Param> params =
-                            appendOutputParametersAsPointers(listInputParameters(op), op, false);
+                            GhostParamTypeResolver.appendOutputParametersAsPointers(GhostParamTypeResolver.listInputParameters(op), op, false);
                     existsForm =
-                            rewriteAnySubEnsureForGhost(
+                            GhostNamespacePrefixer.rewriteAnySubEnsureForGhost(
                                     existsForm, abstractSet, concreteConstants, op, anySub, ctx,
                                     abstractConstParams);
                     existsForm = rewriteBoolOutputPredicateTernary(existsForm);
-                    existsForm = castScalarIntGhostParamsInEnsure(existsForm, params);
+                    existsForm = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(existsForm, params);
                     ops.add(
                             new GhostOp(
-                                    sanitizeGhostFunctionName(opName),
+                                    GhostParamTypeResolver.sanitizeGhostFunctionName(opName),
                                     params,
                                     assigned,
                                     List.of(existsForm)));
@@ -569,7 +408,7 @@ public final class GhostOperationsCiGenerator {
                 if (assigned.isEmpty()) continue;
 
                 List<Param> params =
-                        appendOutputParametersAsPointers(listInputParameters(op), op, false);
+                        GhostParamTypeResolver.appendOutputParametersAsPointers(GhostParamTypeResolver.listInputParameters(op), op, false);
                 List<String> ensures = new ArrayList<>();
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
                 List<String> ghostEnsures = new ArrayList<>();
@@ -578,27 +417,27 @@ public final class GhostOperationsCiGenerator {
                             isPostStatePredicateEnsure(e)
                                     ? toGhostEnsurePostState(e, abstractSet)
                                     : toGhostEnsure(e, abstractSet);
-                    ge = rewriteGhostEnsureForListDomainRestriction(
+                    ge = GhostDomainRestrictionRewriter.rewriteGhostEnsureForListDomainRestriction(
                             ge, op, varTypes, params, ctx, concreteConstants);
-                    ge = prefixAcslLibFunctionsForGhost(ge);
-                    ge = prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
-                    ge = prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
-                    ge = prefixGlobalLogicSetsForGhost(ge);
-                    ge = prefixSetComprehensionsForGhost(ge);
+                    ge = GhostNamespacePrefixer.prefixAcslLibFunctionsForGhost(ge);
+                    ge = GhostNamespacePrefixer.prefixEnumValuesForGhost(ge, ctx.enumValueRenames());
+                    ge = GhostNamespacePrefixer.prefixEnumeratedSetsForGhost(ge, enumeratedSetsForGhost);
+                    ge = GhostNamespacePrefixer.prefixGlobalLogicSetsForGhost(ge);
+                    ge = GhostNamespacePrefixer.prefixSetComprehensionsForGhost(ge);
                     ge = ghostDummyConcreteRefs(ge, concreteConstants);
                     ge = stripBTypingCommentsForGhost(ge);
                     ge = normalizeBooleanLiteralsForGhost(ge);
-                    ge = dereferenceScalarOutputParams(ge, op);
+                    ge = GhostNamespacePrefixer.dereferenceScalarOutputParams(ge, op);
                     ge = rewriteBoolOutputPredicateTernary(ge);
                     ge = rewriteIntegerTernaryPredicateConditionForGhost(ge);
-                    ge = castScalarIntGhostParamsInEnsure(ge, params);
+                    ge = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
                 if (ghostEnsures.isEmpty()) continue;
 
                 ops.add(
                         new GhostOp(
-                                sanitizeGhostFunctionName(opName),
+                                GhostParamTypeResolver.sanitizeGhostFunctionName(opName),
                                 params,
                                 assigned,
                                 ghostEnsures));
@@ -613,41 +452,6 @@ public final class GhostOperationsCiGenerator {
     /** Para contar índices em ensures completos (subexpressão). */
     private static final Pattern SET_COMPREHENSION_INDEX_IN_TEXT =
             Pattern.compile("(?:\\w+__)?set_comprehension_(\\d+)");
-
-    /**
-     * Após {@link #toGhostEnsure}: {@code \\old(dummy_seq)==domain_restriction(rel, S)} vindo de
-     * {@code myseq == domain_restriction(...)}.
-     */
-    private static final Pattern GHOST_ENSURE_OLD_EQ_DOMAIN_RESTRICTION =
-            Pattern.compile(
-                    "^\\\\old\\(dummy_(\\w+)\\)\\s*==\\s*domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*$");
-
-    /** Idem no formato {@code equals(dummy_seq, domain_restriction(rel, S))}. */
-    private static final Pattern GHOST_ENSURE_EQUALS_DOMAIN_RESTRICTION =
-            Pattern.compile(
-                    "^equals\\(dummy_(\\w+)\\s*,\\s*domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\)\\s*$");
-
-    /**
-     * Variante equivalente após {@link #toGhostEnsure}: {@code domain_restriction(rel, S) ==
-     * dummy_list_to_function(\\old(dummy_seq))}.
-     */
-    private static final Pattern GHOST_ENSURE_DOMAIN_RESTRICTION_EQ_LIST_OLD =
-            Pattern.compile(
-                    "^domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*==\\s*(?:dummy_)?list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)\\s*$");
-
-    /**
-     * Variante simétrica: {@code dummy_list_to_function(\\old(dummy_seq)) == domain_restriction(rel, S)}.
-     */
-    private static final Pattern GHOST_ENSURE_LIST_OLD_EQ_DOMAIN_RESTRICTION =
-            Pattern.compile(
-                    "^(?:dummy_)?list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)\\s*==\\s*domain_restriction\\((\\w+)\\s*,\\s*([^)]+)\\)\\s*$");
-
-    /**
-     * Caso legado de listas: o tradutor pode produzir {@code lhs == dummy_list_to_function((list_expr))}.
-     * Para variáveis de tipo lista, a comparação deve permanecer lista-vs-lista.
-     */
-    private static final Pattern GHOST_ENSURE_EQ_LIST_TO_FUNCTION_OF_LIST_EXPR =
-            Pattern.compile("^(.+?)\\s*==\\s*(?:dummy_)?list_to_function\\(\\((.+)\\)\\)\\s*$");
 
     private static int maxSetComprehensionIndexInGhostText(Iterable<String> lines) {
         int m = 0;
@@ -681,7 +485,7 @@ public final class GhostOperationsCiGenerator {
     /** Nomes em {@code Concrete_Constants} (ordem de declaração no BXML). */
     private static Set<String> concreteConstantNames(Element machineEl) {
         Set<String> out = new LinkedHashSet<>();
-        Element block = firstChildElement(machineEl, "Concrete_Constants");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");
         if (block == null) {
             return out;
         }
@@ -701,7 +505,7 @@ public final class GhostOperationsCiGenerator {
     }
 
     /** Substitui referências a constantes concretas por {@code dummy_<nome>} numa expressão ACSL já escrita. */
-    private static String ghostDummyConcreteRefs(String acslExpr, Set<String> concreteConstantNames) {
+    static String ghostDummyConcreteRefs(String acslExpr, Set<String> concreteConstantNames) {
         if (acslExpr == null || concreteConstantNames == null || concreteConstantNames.isEmpty()) {
             return acslExpr;
         }
@@ -750,7 +554,7 @@ public final class GhostOperationsCiGenerator {
         if (belongsM.matches()) {
             return toGhostEnsure(s, abstractVars);
         }
-        return prefixAbstractVarsForGhost(s, abstractVars);
+        return GhostNamespacePrefixer.prefixAbstractVarsForGhost(s, abstractVars);
     }
 
     /** Anotações de tipo B ({@code x /&#42; : BOOL &#42;/}) quebram comentários ACSL em {@code .ci}. */
@@ -894,7 +698,7 @@ public final class GhostOperationsCiGenerator {
                                 String rhs = tail.substring(2).trim();
                                 if (abstractVars.contains(v)) {
                                     String vGhost = "dummy_" + v;
-                                    String rhsGhost = prefixAbstractVarsForGhost(rhs, abstractVars);
+                                    String rhsGhost = GhostNamespacePrefixer.prefixAbstractVarsForGhost(rhs, abstractVars);
                                     return forallPrefix + " function_apply(" + vGhost + ", "
                                             + boundVarRef + ") == " + rhsGhost;
                                 }
@@ -921,8 +725,8 @@ public final class GhostOperationsCiGenerator {
                         String idx = argsPart.substring(argComma + 1).trim();
                         String rhs = rest.substring(2).trim();
                         if (abstractVars.contains(v)) {
-                            String idxGhost = prefixAbstractVarsForGhost(idx, abstractVars);
-                            String rhsGhost = prefixAbstractVarsForGhost(rhs, abstractVars);
+                            String idxGhost = GhostNamespacePrefixer.prefixAbstractVarsForGhost(idx, abstractVars);
+                            String rhsGhost = GhostNamespacePrefixer.prefixAbstractVarsForGhost(rhs, abstractVars);
                             return "function_apply(dummy_" + v + ", " + idxGhost + ") == " + rhsGhost;
                         }
                     }
@@ -936,7 +740,7 @@ public final class GhostOperationsCiGenerator {
                     return "dummy_belongs(dummy_"
                             + v
                             + ", "
-                            + prefixGlobalLogicSetsForGhost(setExpr)
+                            + GhostNamespacePrefixer.prefixGlobalLogicSetsForGhost(setExpr)
                             + ")";
                 }
             }
@@ -945,7 +749,7 @@ public final class GhostOperationsCiGenerator {
                 String lhs = simpleEq.group(1);
                 String rhs = simpleEq.group(2).trim();
                 if (abstractVars.contains(lhs)) {
-                    return "dummy_" + lhs + " == " + prefixAbstractVarsForGhost(rhs, abstractVars);
+                    return "dummy_" + lhs + " == " + GhostNamespacePrefixer.prefixAbstractVarsForGhost(rhs, abstractVars);
                 }
             }
             return rewriteAbstractIdsWithOld(s, abstractVars);
@@ -970,7 +774,7 @@ public final class GhostOperationsCiGenerator {
         return "equals(" + lhsGhost + ", " + rhsGhost + ")";
     }
 
-    private static int findTopLevelComma(String s, int start) {
+    static int findTopLevelComma(String s, int start) {
         int depth = 0;
         for (int i = start; i < s.length(); i++) {
             char c = s.charAt(i);
@@ -1058,355 +862,12 @@ public final class GhostOperationsCiGenerator {
         return s.substring(1, s.length() - 1).trim();
     }
 
-    /**
-     * Sequência atribuída por restrição de domínio sobre array (função parcial em B): compara como
-     * relações via {@code list_to_function} / {@code array_to_function}.
-     */
-    private static String rewriteGhostEnsureForListDomainRestriction(
-            String ensure,
-            Element operation,
-            Map<String, String> varTypes,
-            List<Param> params,
-            BxmlTranslateContext ctx,
-            Set<String> concreteConstantNames) {
-        if (ensure == null || operation == null || varTypes == null || ctx == null) {
-            return ensure;
-        }
-        String t = ensure.trim();
-        Matcher mOld = GHOST_ENSURE_OLD_EQ_DOMAIN_RESTRICTION.matcher(t);
-        if (mOld.matches()) {
-            String r =
-                    tryRewriteListDomainRestrictionEquality(
-                            mOld.group(1),
-                            mOld.group(2),
-                            mOld.group(3).trim(),
-                            varTypes,
-                            params,
-                            operation,
-                            ctx,
-                            concreteConstantNames);
-            if (r != null) {
-                return r;
-            }
-        }
-        Matcher mEq = GHOST_ENSURE_EQUALS_DOMAIN_RESTRICTION.matcher(t);
-        if (mEq.matches()) {
-            String r =
-                    tryRewriteListDomainRestrictionEquality(
-                            mEq.group(1),
-                            mEq.group(2),
-                            mEq.group(3).trim(),
-                            varTypes,
-                            params,
-                            operation,
-                            ctx,
-                            concreteConstantNames);
-            if (r != null) {
-                return r;
-            }
-        }
-        // Balanced-paren-aware fallback for domain_restriction(param, <nested-expr>) == list_to_function(\old(...))
-        // Regex patterns above fail when the second arg of domain_restriction contains nested parens.
-        String drBalanced = tryRewriteDomainRestrictionParamBalanced(
-                t, varTypes, params, operation, ctx, concreteConstantNames);
-        if (drBalanced != null) return drBalanced;
-
-        Matcher mDrEqListOld = GHOST_ENSURE_DOMAIN_RESTRICTION_EQ_LIST_OLD.matcher(t);
-        if (mDrEqListOld.matches()) {
-            String r =
-                    tryRewriteListDomainRestrictionEquality(
-                            mDrEqListOld.group(3),
-                            mDrEqListOld.group(1),
-                            mDrEqListOld.group(2).trim(),
-                            varTypes,
-                            params,
-                            operation,
-                            ctx,
-                            concreteConstantNames);
-            if (r != null) {
-                return r;
-            }
-        }
-        Matcher mListOldEqDr = GHOST_ENSURE_LIST_OLD_EQ_DOMAIN_RESTRICTION.matcher(t);
-        if (mListOldEqDr.matches()) {
-            String r =
-                    tryRewriteListDomainRestrictionEquality(
-                            mListOldEqDr.group(1),
-                            mListOldEqDr.group(2),
-                            mListOldEqDr.group(3).trim(),
-                            varTypes,
-                            params,
-                            operation,
-                            ctx,
-                            concreteConstantNames);
-            if (r != null) {
-                return r;
-            }
-        }
-        String listEq =
-                tryRewriteListEqualityWithoutListToFunction(
-                        t, varTypes, concreteConstantNames);
-        if (listEq != null) {
-            return listEq;
-        }
-        return ensure;
-    }
-
-    private static String tryRewriteListEqualityWithoutListToFunction(
-            String ensure,
-            Map<String, String> varTypes,
-            Set<String> concreteConstantNames) {
-        if (ensure == null || varTypes == null) {
-            return null;
-        }
-        Matcher m = GHOST_ENSURE_EQ_LIST_TO_FUNCTION_OF_LIST_EXPR.matcher(ensure);
-        if (!m.matches()) {
-            return null;
-        }
-        String lhs = m.group(1).trim();
-        String rhsListExpr = m.group(2).trim();
-        String seqVar = extractOldDummyListVarFromExpr(lhs);
-        if (seqVar == null) {
-            return null;
-        }
-        String listType = varTypes.get(seqVar);
-        if (listType == null || !listType.startsWith("\\list")) {
-            return null;
-        }
-        return lhs + " == " + ghostDummyConcreteRefs(rhsListExpr, concreteConstantNames);
-    }
-
-    private static String extractOldDummyListVarFromExpr(String expr) {
-        if (expr == null) {
-            return null;
-        }
-        String t = expr.trim();
-        Matcher mOld = Pattern.compile("^\\\\old\\(dummy_(\\w+)\\)$").matcher(t);
-        if (mOld.matches()) {
-            return mOld.group(1);
-        }
-        // Pós-estado ghost: toGhostEnsure produz dummy_<seq> == list_to_function((…))
-        Matcher mDummy = Pattern.compile("^dummy_(\\w+)$").matcher(t);
-        if (mDummy.matches()) {
-            return mDummy.group(1);
-        }
-        return null;
-    }
-
-    private static String tryRewriteListDomainRestrictionEquality(
-            String seqVar,
-            String relationParam,
-            String domainRestrictionSecondArg,
-            Map<String, String> varTypes,
-            List<Param> params,
-            Element operation,
-            BxmlTranslateContext ctx,
-            Set<String> concreteConstantNames) {
-        String listType = varTypes.get(seqVar);
-        if (listType == null || !listType.startsWith("\\list")) {
-            return null;
-        }
-        if (!isPointerGhostParam(params, relationParam)) {
-            return null;
-        }
-        String len =
-                inferPartialFunctionDomainLengthAcsl(
-                        operation, relationParam, ctx, concreteConstantNames);
-        if (len == null || len.isBlank()) {
-            return null;
-        }
-        return "domain_restriction(dummy_array_to_function("
-                + relationParam
-                + ", "
-                + len
-                + "), "
-                + "dummy_"
-                + domainRestrictionSecondArg
-                + ") == dummy_list_to_function(\\old(dummy_"
-                + seqVar
-                + "))";
-    }
-
-    /**
-     * Balanced-paren-aware version of the domain_restriction(param, …) == list_to_function(\old(…))
-     * check. The regex patterns fail when the second arg of {@code domain_restriction} contains
-     * nested parentheses (e.g. {@code interval_set(1, \length(\old(dummy_myseq)))}). Also corrects
-     * the double-\old that arises when {@code rewriteAbstractIdsWithOld} wraps an already-wrapped
-     * {@code \old(myseq)}.
-     */
-    private static String tryRewriteDomainRestrictionParamBalanced(
-            String t,
-            Map<String, String> varTypes,
-            List<Param> params,
-            Element operation,
-            BxmlTranslateContext ctx,
-            Set<String> concreteConstantNames) {
-        if (t == null || !t.startsWith("domain_restriction(")) return null;
-        int open = "domain_restriction".length(); // index of '('
-        // First arg must be a plain identifier
-        int comma1 = findTopLevelComma(t, open + 1);
-        if (comma1 < 0) return null;
-        String firstArg = t.substring(open + 1, comma1).trim();
-        if (!firstArg.matches("\\w+")) return null;
-        // Find matching close of domain_restriction(...)
-        int close = findMatchingClose(t, open);
-        if (close < 0) return null;
-        String rest = t.substring(close + 1).trim();
-        if (!rest.startsWith("==")) return null;
-        String rhs = rest.substring(2).trim();
-        // RHS: (dummy_)?list_to_function(\old(dummy_seqVar)) — single old (normal case after fix)
-        // or list_to_function(\old(\old(dummy_seqVar))) — double old (legacy/defensive)
-        Pattern rhsPat = Pattern.compile(
-                "^(?:dummy_)?list_to_function\\(\\\\old\\(\\\\old\\(dummy_(\\w+)\\)\\)\\)$"
-                + "|^(?:dummy_)?list_to_function\\(\\\\old\\(dummy_(\\w+)\\)\\)$");
-        Matcher m = rhsPat.matcher(rhs);
-        if (!m.matches()) return null;
-        String seqVar = m.group(1) != null ? m.group(1) : m.group(2);
-        String listType = varTypes == null ? null : varTypes.get(seqVar);
-        if (listType == null || !listType.startsWith("\\list")) return null;
-        if (!isPointerGhostParam(params, firstArg)) return null;
-        String len = inferPartialFunctionDomainLengthAcsl(operation, firstArg, ctx, concreteConstantNames);
-        if (len == null || len.isBlank()) return null;
-        String domainArg = t.substring(comma1 + 1, close).trim();
-        return "domain_restriction(dummy_array_to_function("
-                + firstArg + ", " + len + "), "
-                + domainArg
-                + ") == dummy_list_to_function(\\old(dummy_" + seqVar + "))";
-    }
-
-    private static boolean isPointerGhostParam(List<Param> params, String name) {
-        if (params == null || name == null || name.isBlank()) {
-            return false;
-        }
-        for (Param p : params) {
-            if (name.equals(p.name())) {
-                String tp = p.type();
-                return tp != null && tp.endsWith("*");
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Expressão ACSL para o segundo argumento de {@code array_to_function}: obtida do domínio da função
-     * parcial em B ({@code low..high}), tipicamente o nome da constante do limite superior (ex.
-     * {@code maximum} para {@code 0..maximum}).
-     */
-    private static String inferPartialFunctionDomainLengthAcsl(
-            Element operation,
-            String paramName,
-            BxmlTranslateContext ctx,
-            Set<String> concreteConstantNames) {
-        Element domain = partialFunctionDomainFromPrecondition(operation, paramName);
-        return arrayLengthAcslFromDomain(domain, ctx, concreteConstantNames);
-    }
-
-    private static Element partialFunctionDomainFromPrecondition(Element operation, String paramName) {
-        Element pre = firstChildElement(operation, "Precondition");
-        if (pre == null) {
-            return null;
-        }
-        return partialFunctionDomainFromPreconditionInPred(pre, paramName);
-    }
-
-    private static Element partialFunctionDomainFromPreconditionInPred(Element pred, String paramName) {
-        if (pred == null) {
-            return null;
-        }
-        String ln = pred.getLocalName();
-        if ("Precondition".equals(ln)) {
-            NodeList nl = pred.getChildNodes();
-            for (int i = 0; i < nl.getLength(); i++) {
-                Node n = nl.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element ch = (Element) n;
-                if ("Attr".equals(ch.getLocalName())) continue;
-                Element d = partialFunctionDomainFromPreconditionInPred(ch, paramName);
-                if (d != null) {
-                    return d;
-                }
-            }
-            return null;
-        }
-        if ("Exp_Comparison".equals(ln)) {
-            String op = normalizeColonLikeOp(pred.getAttribute("op"));
-            if (":".equals(op)) {
-                Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
-                if (pair[0] != null
-                        && "Id".equals(pair[0].getLocalName())
-                        && paramName.equals(pair[0].getAttribute("value").trim())
-                        && pair[1] != null
-                        && BxmlExpressionToAcsl.isFunctionArrowType(pair[1])) {
-                    Element[] arrow = BxmlExpressionToAcsl.twoDirectExpChildren(pair[1]);
-                    if (arrow[0] != null) {
-                        return arrow[0];
-                    }
-                }
-            }
-            return null;
-        }
-        if ("Nary_Pred".equals(ln)) {
-            NodeList nl = pred.getChildNodes();
-            for (int i = 0; i < nl.getLength(); i++) {
-                Node n = nl.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element ch = (Element) n;
-                if ("Attr".equals(ch.getLocalName())) continue;
-                Element d = partialFunctionDomainFromPreconditionInPred(ch, paramName);
-                if (d != null) {
-                    return d;
-                }
-            }
-            return null;
-        }
-        if ("Unary_Pred".equals(ln)) {
-            Element inner = firstPredChildElement(pred);
-            return partialFunctionDomainFromPreconditionInPred(inner, paramName);
-        }
-        if ("Binary_Pred".equals(ln)) {
-            Element[] pair = twoDirectPredChildren(pred);
-            if (pair[0] != null) {
-                Element d = partialFunctionDomainFromPreconditionInPred(pair[0], paramName);
-                if (d != null) {
-                    return d;
-                }
-            }
-            if (pair[1] != null) {
-                return partialFunctionDomainFromPreconditionInPred(pair[1], paramName);
-            }
-        }
-        return null;
-    }
-
-    private static String arrayLengthAcslFromDomain(
-            Element domain, BxmlTranslateContext ctx, Set<String> concreteConstantNames) {
-        if (domain == null || ctx == null) {
-            return null;
-        }
-        if (BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
-            Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
-            if (lr[0] == null || lr[1] == null) {
-                return null;
-            }
-            String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
-            String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
-            String raw;
-            if ("0".equals(low)) {
-                raw = high;
-            } else {
-                raw = "(" + high + " - (" + low + ") + 1)";
-            }
-            return ghostDummyConcreteRefs(raw, concreteConstantNames);
-        }
-        return null;
-    }
-
     private static List<String> collectGhostEnsuresFromInit(
             Element machineEl, Set<String> abstractSet, BxmlTranslateContext ctx) {
         List<String> out = new ArrayList<>();
-        Element init = firstChildElement(machineEl, "Initialisation");
+        Element init = BxmlDomUtils.firstChildElement(machineEl, "Initialisation");
         if (init == null) return out;
-        Element sub = firstSubChild(init);
+        Element sub = BxmlDomUtils.firstSubChild(init);
         collectGhostEnsuresFromSubstitution(sub, abstractSet, ctx, out);
         return out;
     }
@@ -1417,11 +878,11 @@ public final class GhostOperationsCiGenerator {
         String ln = sub.getLocalName();
         switch (ln) {
             case "Assignement_Sub" -> {
-                Element vars = firstChildElement(sub, "Variables");
-                Element vals = firstChildElement(sub, "Values");
+                Element vars = BxmlDomUtils.firstChildElement(sub, "Variables");
+                Element vals = BxmlDomUtils.firstChildElement(sub, "Values");
                 if (vars == null || vals == null) return;
-                List<Element> lhs = directExpChildren(vars);
-                List<Element> rhs = directExpChildren(vals);
+                List<Element> lhs = BxmlDomUtils.directExpChildren(vars);
+                List<Element> rhs = BxmlDomUtils.directExpChildren(vals);
                 int n = Math.min(lhs.size(), rhs.size());
                 for (int i = 0; i < n; i++) {
                     String g =
@@ -1430,17 +891,17 @@ public final class GhostOperationsCiGenerator {
                 }
             }
             case "Becomes_In" -> {
-                Element vars = firstChildElement(sub, "Variables");
-                Element value = firstChildElement(sub, "Value");
+                Element vars = BxmlDomUtils.firstChildElement(sub, "Variables");
+                Element value = BxmlDomUtils.firstChildElement(sub, "Value");
                 if (vars == null || value == null) return;
                 Element valExp = null;
-                for (Element ve : directExpChildren(value)) {
+                for (Element ve : BxmlDomUtils.directExpChildren(value)) {
                     valExp = ve;
                     break;
                 }
                 if (valExp == null) return;
                 List<String> parts = new ArrayList<>();
-                for (Element varExp : directExpChildren(vars)) {
+                for (Element varExp : BxmlDomUtils.directExpChildren(vars)) {
                     if (!"Id".equals(varExp.getLocalName())) continue;
                     String v = varExp.getAttribute("value");
                     if (!abstractSet.contains(v)) continue;
@@ -1465,14 +926,14 @@ public final class GhostOperationsCiGenerator {
                         collectGhostEnsuresFromSubstitution(ch, abstractSet, ctx, out);
                     }
                 } else {
-                    collectGhostEnsuresFromSubstitution(firstSubChild(sub), abstractSet, ctx, out);
+                    collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, ctx, out);
                 }
             }
-            case "Bloc_Sub" -> collectGhostEnsuresFromSubstitution(firstSubChild(sub), abstractSet, ctx, out);
+            case "Bloc_Sub" -> collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, ctx, out);
             case "ANY_Sub" -> {
-                Element thenEl = firstChildElement(sub, "Then");
+                Element thenEl = BxmlDomUtils.firstChildElement(sub, "Then");
                 if (thenEl != null) {
-                    collectGhostEnsuresFromSubstitution(firstSubChild(thenEl), abstractSet, ctx, out);
+                    collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, ctx, out);
                 }
             }
             default -> { }
@@ -1536,16 +997,16 @@ public final class GhostOperationsCiGenerator {
         return t != null && t.startsWith("\\list");
     }
 
-    private static void collectAssignedAbstractVarsInInit(
+    static void collectAssignedAbstractVarsInInit(
             Element machineEl, Set<String> abstractSet, Set<String> out) {
-        Element init = firstChildElement(machineEl, "Initialisation");
+        Element init = BxmlDomUtils.firstChildElement(machineEl, "Initialisation");
         if (init == null) return;
-        collectAssignedInSubstitution(firstSubChild(init), abstractSet, out);
+        collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(init), abstractSet, out);
     }
 
-    private static void collectAssignedAbstractVarsInBody(
+    static void collectAssignedAbstractVarsInBody(
             Element body, Set<String> abstractSet, Set<String> out) {
-        Element sub = firstSubChild(body);
+        Element sub = BxmlDomUtils.firstSubChild(body);
         collectAssignedInSubstitution(sub, abstractSet, out);
     }
 
@@ -1554,9 +1015,9 @@ public final class GhostOperationsCiGenerator {
         String ln = sub.getLocalName();
         switch (ln) {
             case "Assignement_Sub", "Becomes_In", "Becomes_Such_That" -> {
-                Element vars = firstChildElement(sub, "Variables");
+                Element vars = BxmlDomUtils.firstChildElement(sub, "Variables");
                 if (vars == null) return;
-                for (Element id : directExpChildren(vars)) {
+                for (Element id : BxmlDomUtils.directExpChildren(vars)) {
                     String overridden = functionOverrideTargetName(id);
                     if (overridden != null) {
                         if (abstractSet.contains(overridden)) out.add(overridden);
@@ -1580,26 +1041,26 @@ public final class GhostOperationsCiGenerator {
                         collectAssignedInSubstitution(ch, abstractSet, out);
                     }
                 } else {
-                    collectAssignedInSubstitution(firstSubChild(sub), abstractSet, out);
+                    collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, out);
                 }
             }
-            case "Bloc_Sub" -> collectAssignedInSubstitution(firstSubChild(sub), abstractSet, out);
+            case "Bloc_Sub" -> collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, out);
             case "If_Sub" -> {
                 // Coleta assigns do ramo THEN (e ELSE, se existir)
-                Element thenEl = firstChildElement(sub, "Then");
+                Element thenEl = BxmlDomUtils.firstChildElement(sub, "Then");
                 if (thenEl != null) {
-                    collectAssignedInSubstitution(firstSubChild(thenEl), abstractSet, out);
+                    collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, out);
                 }
-                Element elseEl = firstChildElement(sub, "Else");
+                Element elseEl = BxmlDomUtils.firstChildElement(sub, "Else");
                 if (elseEl != null) {
-                    collectAssignedInSubstitution(firstSubChild(elseEl), abstractSet, out);
+                    collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(elseEl), abstractSet, out);
                 }
             }
             case "Select" -> collectAssignedInSelect(sub, abstractSet, out);
             case "ANY_Sub" -> {
-                Element thenEl = firstChildElement(sub, "Then");
+                Element thenEl = BxmlDomUtils.firstChildElement(sub, "Then");
                 if (thenEl != null) {
-                    collectAssignedInSubstitution(firstSubChild(thenEl), abstractSet, out);
+                    collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, out);
                 }
             }
             default -> { }
@@ -1608,7 +1069,7 @@ public final class GhostOperationsCiGenerator {
 
     private static void collectAssignedInSelect(
             Element select, Set<String> abstractSet, Set<String> out) {
-        Element whenClauses = firstChildElement(select, "When_Clauses");
+        Element whenClauses = BxmlDomUtils.firstChildElement(select, "When_Clauses");
         if (whenClauses != null) {
             NodeList children = whenClauses.getChildNodes();
             for (int i = 0; i < children.getLength(); i++) {
@@ -1616,22 +1077,22 @@ public final class GhostOperationsCiGenerator {
                 if (n.getNodeType() != Node.ELEMENT_NODE) continue;
                 Element when = (Element) n;
                 if (!"When".equals(when.getLocalName())) continue;
-                Element thenEl = firstChildElement(when, "Then");
+                Element thenEl = BxmlDomUtils.firstChildElement(when, "Then");
                 if (thenEl != null) {
-                    collectAssignedInSubstitution(firstSubChild(thenEl), abstractSet, out);
+                    collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, out);
                 }
             }
         }
-        Element elseEl = firstChildElement(select, "Else");
+        Element elseEl = BxmlDomUtils.firstChildElement(select, "Else");
         if (elseEl != null) {
-            collectAssignedInSubstitution(firstSubChild(elseEl), abstractSet, out);
+            collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(elseEl), abstractSet, out);
         }
     }
 
     /** Nomes em {@code Abstract_Variables} (ordem do BXML). */
     public static List<String> listAbstractVariableNames(Element machineEl) {
         List<String> out = new ArrayList<>();
-        Element block = firstChildElement(machineEl, "Abstract_Variables");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Abstract_Variables");
         if (block == null) return out;
         NodeList ch = block.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -1647,197 +1108,7 @@ public final class GhostOperationsCiGenerator {
         return out;
     }
 
-    /**
-     * Em contratos ghost ({@code ghost_operations.ci}), tipos de função na biblioteca ACSL aparecem
-     * com prefixo {@code dummy_} (ex.: {@code Function_int_int} → {@code dummy_Function_int_int}),
-     * alinhados ao alias declarado em {@link DummyGhostAxiomaticBuilder} dentro de {@code dummy_ghost}.
-     *
-     * <p>Apenas reescreve o token quando não está já prefixado por {@code dummy_}.
-     */
-    private static String prefixFunctionTypesForGhost(String text) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        String s = text.replaceAll("(?<!dummy_)\\bFunction_(\\w+)\\b", "dummy_Function_$1");
-        // Set<A> → DSet<A>, Tuple<A,B> → DTuple<A,B> no mundo ghost
-        s = s.replaceAll("(?<!D)\\bSet<", "DSet<");
-        s = s.replaceAll("(?<!D)\\bTuple<", "DTuple<");
-        return s;
-    }
-
-    /**
-     * Prefixa {@code set_comprehension_<k>} com {@code dummy_} (alinhado às declarações
-     * {@code logic DSet<integer> dummy_set_comprehension_k} em {@link DummyGhostAxiomaticBuilder}).
-     */
-    private static String prefixSetComprehensionsForGhost(String text) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        return text.replaceAll(
-                "(?<!dummy_)\\b((?:\\w+__)?set_comprehension_\\d+)\\b", "dummy_$1");
-    }
-
-    /**
-     * Prefixa cada variável abstrata com {@code dummy_} sem usar {@code \\old(...)}: aplicável a
-     * contratos ghost de operações que NÃO mutam o estado abstrato (ex.: corpo {@code ANY_Sub} sem
-     * atribuição a variáveis abstratas — {@code dummy_<v>} é igual a {@code \\old(dummy_<v>)} aqui).
-     */
-    private static String prefixAbstractVarsForGhost(String text, Set<String> abstractVars) {
-        if (text == null || text.isEmpty() || abstractVars == null || abstractVars.isEmpty()) {
-            return text;
-        }
-        List<String> names = new ArrayList<>(abstractVars);
-        names.sort((a, b) -> Integer.compare(b.length(), a.length()));
-        String out = text;
-        for (String v : names) {
-            out =
-                    out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(v) + "\\b", "dummy_" + v);
-        }
-        return out;
-    }
-
-    /**
-     * Reescreve uma cláusula {@code ensures} derivada de {@code ANY_Sub} para o universo
-     * {@code dummy_ghost}: prefixa tipos de função, funções da lib, conjuntos em compreensão,
-     * constantes concretas e variáveis abstratas com {@code dummy_}; substitui o conjunto
-     * {@code NAT} por {@code dummy_NAT}; e converte parâmetros de saída do tipo função
-     * (modelados como {@code int *} em C) para {@code dummy_Function_*} via
-     * {@code dummy_array_to_function(...)} ao serem comparados, com {@code equals}, à variável da
-     * cláusula {@code WHERE} (ex.: {@code equals(ee, xx)} → {@code equals(dummy_array_to_function(ee, len), xx)}).
-     *
-     * <p>Não envolve em {@code \\old(...)} porque a operação não muta variáveis abstratas (caso
-     * típico de {@code get OUT ee, ii := ANY ... THEN ...}).
-     */
-    private static String rewriteAnySubEnsureForGhost(
-            String text,
-            Set<String> abstractVars,
-            Set<String> concreteConstantNames,
-            Element operation,
-            Element anySub,
-            BxmlTranslateContext ctx,
-            Map<String, List<String>> abstractConstParams) {
-        String s = prefixFunctionTypesForGhost(text);
-        s = uncurryAbstractConstantApplications(s, abstractConstParams);
-        s = fixForallQuantifierTypeAfterUncurry(s, abstractConstParams);
-        s = prefixAcslLibFunctionsForGhost(s);
-        s = prefixEnumValuesForGhost(s, ctx.enumValueRenames());
-        s = prefixGlobalLogicSetsForGhost(s);
-        s = prefixSetComprehensionsForGhost(s);
-        s = ghostDummyConcreteRefs(s, concreteConstantNames);
-        s = prefixAbstractVarsForGhost(s, abstractVars);
-        s = wrapOutputArraysInEquals(s, operation, anySub, ctx, concreteConstantNames);
-        s = wrapEqualsForRelationEqualities(s);
-        s = dereferenceScalarOutputParams(s, operation);
-        return prefixAcslLibFunctionsForGhost(s);
-    }
-
-    /**
-     * Funções na ACSL_Lib (e respetivas {@code dummy_*}) cujo valor é uma relação/função; usadas
-     * por {@link #wrapEqualsForRelationEqualities} para detetar comparações onde {@code ==} deve
-     * ser substituído por {@code equals(...)} (no universo {@code dummy_ghost}).
-     */
-    private static final Set<String> RELATION_TYPED_FUNCTIONS_GHOST = Set.of(
-            "domain_restriction",
-            "dummy_domain_restriction",
-            "dummy_list_to_function",
-            "dummy_array_to_function",
-            "list_to_function",
-            "array_to_function");
-
-    /**
-     * Reescreve {@code <relCall> == <relCall>} para {@code equals(<relCall>, <relCall>)} (set/relation
-     * em ACSL não suporta {@code ==} estrutural — ver {@code ACSL_Lib/set_functions/equals.acsl}).
-     */
-    private static String wrapEqualsForRelationEqualities(String text) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        String s = text;
-        boolean changed = true;
-        while (changed) {
-            changed = false;
-            int i = 0;
-            while (i < s.length()) {
-                int callStart = findFunctionCallStart(s, i, RELATION_TYPED_FUNCTIONS_GHOST);
-                if (callStart < 0) break;
-                int openParen = s.indexOf('(', callStart);
-                if (openParen < 0) {
-                    i = callStart + 1;
-                    continue;
-                }
-                int closeLeft = findMatchingClose(s, openParen);
-                if (closeLeft < 0) {
-                    i = callStart + 1;
-                    continue;
-                }
-                int k = closeLeft + 1;
-                while (k < s.length() && Character.isWhitespace(s.charAt(k))) k++;
-                if (k + 1 >= s.length() || s.charAt(k) != '=' || s.charAt(k + 1) != '=') {
-                    i = closeLeft + 1;
-                    continue;
-                }
-                int m = k + 2;
-                while (m < s.length() && Character.isWhitespace(s.charAt(m))) m++;
-                int rightStart = findFunctionCallStart(s, m, RELATION_TYPED_FUNCTIONS_GHOST);
-                if (rightStart != m) {
-                    i = closeLeft + 1;
-                    continue;
-                }
-                int rightOpen = s.indexOf('(', rightStart);
-                if (rightOpen < 0) {
-                    i = closeLeft + 1;
-                    continue;
-                }
-                int closeRight = findMatchingClose(s, rightOpen);
-                if (closeRight < 0) {
-                    i = closeLeft + 1;
-                    continue;
-                }
-                String left = s.substring(callStart, closeLeft + 1);
-                String right = s.substring(rightStart, closeRight + 1);
-                s =
-                        s.substring(0, callStart)
-                                + "equals(" + left + ", " + right + ")"
-                                + s.substring(closeRight + 1);
-                changed = true;
-                break;
-            }
-        }
-        return s;
-    }
-
-    /** Posição do início do identificador de uma chamada de função em {@code names} a partir de {@code from}. */
-    private static int findFunctionCallStart(String s, int from, Set<String> names) {
-        int n = s.length();
-        for (int i = from; i < n; i++) {
-            char c = s.charAt(i);
-            if (!(c == '_' || Character.isLetter(c))) continue;
-            if (i > 0) {
-                char prev = s.charAt(i - 1);
-                if (prev == '_' || Character.isLetterOrDigit(prev)) continue;
-            }
-            int j = i;
-            while (j < n) {
-                char cj = s.charAt(j);
-                if (cj == '_' || Character.isLetterOrDigit(cj)) {
-                    j++;
-                } else {
-                    break;
-                }
-            }
-            if (j >= n || s.charAt(j) != '(') {
-                continue;
-            }
-            String name = s.substring(i, j);
-            if (names.contains(name)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static int findMatchingClose(String s, int openIdx) {
+    static int findMatchingClose(String s, int openIdx) {
         int depth = 0;
         for (int i = openIdx; i < s.length(); i++) {
             char c = s.charAt(i);
@@ -1848,313 +1119,6 @@ public final class GhostOperationsCiGenerator {
             }
         }
         return -1;
-    }
-
-    /**
-     * Chamadas a {@code sigma_funcNN}/{@code lambda_funcNN}/{@code union_funcNN}/{@code
-     * inter_funcNN} (nomes sintéticos de {@code SigmaFunctionRegistry}/{@code
-     * LambdaFunctionRegistry}/{@code UnionInterFunctionRegistry}, sempre {@code prefixo + 2
-     * dígitos}) — precisam do MESMO prefixo {@code ghost_} que {@link #renameGhostAxiomaticBlock}
-     * já aplica à DECLARAÇÃO destas funções dentro do bloco axiomatic do registo. Sem isto, texto
-     * ghost construído FORA desse bloco (ex.: a asserção de {@code ghost__attackplayer}, que chama
-     * {@code sigma_func01}/{@code sigma_func02} tal como o {@code ensures} real que a originou)
-     * continua a referenciar o nome NÃO renomeado — "unbound logic function sigma_func02" na fase
-     * {@code -acsl-import} original (aqui a isolação do {@code .ci} SE aplica: só descoberto ao
-     * corrigir {@link #renameGhostAxiomaticBlock} e re-rodar RulerOfTheSeas). {@code (?&lt;!ghost_)}
-     * evita prefixar duas vezes texto que já veio de dentro do bloco já renomeado.
-     */
-    private static final Pattern GENERALIZED_QUANTIFIER_CALL_NAME =
-            Pattern.compile("(?<!ghost_)\\b(?:sigma_func|lambda_func|union_func|inter_func)\\d{2}\\b");
-
-    /**
-     * Funções da {@code ACSL_Lib} usadas nos contratos ghost: prefixo {@code dummy_} alinhado com
-     * {@link DummyGhostAxiomaticBuilder}; mais o prefixo {@code ghost_} em chamadas às funções
-     * geradoras de quantificador generalizado (ver {@link #GENERALIZED_QUANTIFIER_CALL_NAME}).
-     */
-    private static String prefixAcslLibFunctionsForGhost(String text) {
-        String prefixed = DummyGhostAxiomaticBuilder.prefixLibCallsInSignature(text);
-        return GENERALIZED_QUANTIFIER_CALL_NAME.matcher(prefixed).replaceAll("ghost_$0");
-    }
-
-    /**
-     * Renomeia o wrapper {@code axiomatic <name> { ... }} PARA {@code axiomatic ghost_<name> { ... }}
-     * — E TAMBÉM cada {@code axiom}/{@code lemma}/{@code admit lemma} DECLARADO dentro do bloco
-     * (ex. {@code axiom sigma_func01_empty:} → {@code axiom ghost_sigma_func01_empty:}).
-     * {@code LambdaFunctionRegistry}/{@code SigmaFunctionRegistry}/{@code UnionInterFunctionRegistry}
-     * usam nomes FIXOS (não qualificados por máquina, ao contrário de {@code
-     * BxmlComprehensionRegistry}/{@code BxmlMachineVariables}, cujos blocos já levam o nome da
-     * máquina) — partilhados entre esta cópia ghost e a cópia REAL emitida por {@code
-     * AcslGenerator}. Quando ambas têm conteúdo não-vazio no MESMO projeto (ex.: {@code Attack} usa
-     * {@code sigma_func01}/{@code sigma_func02} tanto no ensures real como no ghost), o KERNEL do
-     * Frama-C — não o parser do {@code -acsl-import}, uma fase ainda mais tardia — rejeita com
-     * {@code Failure: trying to register twice property 'axiomatic <name>'} (bloco) OU
-     * {@code 'axiom <name>'} (axioma/lema individual, um erro DIFERENTE encontrado só depois de
-     * corrigir o primeiro — cada axioma/lema é a SUA PRÓPRIA "property" com estado de prova
-     * rastreado, tal como o bloco): nomes de propriedade são globalmente únicos mesmo entre o
-     * front-end isolado do {@code .ci} e o ficheiro {@code -acsl-import} principal, apesar de tudo
-     * o resto nesse front-end estar isolado (dummy-prefixado, {@code DSet} em vez de {@code Set},
-     * …). Os nomes de SÍMBOLO ({@code logic}/{@code predicate}, ex. {@code sigma_func01} em si)
-     * também precisam do MESMO tratamento — ao contrário do que uma nota anterior aqui assumia
-     * ("podem coexistir redeclarados de forma idêntica entre os dois front-ends sem erro"): essa
-     * conclusão vinha de testar só a fase {@code -acsl-import} original (isolamento genuíno entre
-     * {@code .ci} e {@code .acsl}); a fase SEGUINTE do WP (ver {@link B2ACSLPipeline}) reimprime
-     * TUDO junto num único {@code merged_code.c} plano e reanalisa esse ficheiro do zero — sem
-     * fronteira de front-end nenhuma nesse ponto, dois {@code logic integer sigma_func01(...)}
-     * idênticos (um do lado real, outro daqui) colidem com "logic function sigma_func01 is already
-     * declared with the same profile". Só exposto ao correr RulerOfTheSeas (primeiro exemplo cujo
-     * SIGMA ghost e real ambos sobrevivem até o merge da fase WP). Renomeia cada nome declarado via
-     * {@code logic ... NOME(} / {@code predicate NOME(} para {@code ghost_NOME}, por fronteira de
-     * palavra, tanto na própria declaração quanto em toda chamada dentro deste MESMO bloco — seguro
-     * porque {@code LambdaFunctionRegistry}/{@code SigmaFunctionRegistry}/
-     * {@code UnionInterFunctionRegistry} usam nomes sintéticos ({@code sigma_func01}, …) que nunca
-     * colidem com identificadores B reais.
-     */
-    private static String renameGhostAxiomaticBlock(String block, String name) {
-        if (block == null) return null;
-        String renamed =
-                block.replaceFirst(
-                        "(?m)^axiomatic\\s+" + java.util.regex.Pattern.quote(name) + "\\s*\\{",
-                        "axiomatic ghost_" + name + " {");
-        renamed = renamed.replaceAll(
-                "(?m)^(\\s*)((?:admit\\s+)?(?:axiom|lemma))(\\s+)([A-Za-z_]\\w*)",
-                "$1$2$3ghost_$4");
-        java.util.regex.Matcher declMatcher =
-                java.util.regex.Pattern.compile("(?m)^\\s*(?:logic\\s+\\S.*?|predicate)\\s+([A-Za-z_]\\w*)\\s*\\(")
-                        .matcher(renamed);
-        java.util.LinkedHashSet<String> declaredNames = new java.util.LinkedHashSet<>();
-        while (declMatcher.find()) {
-            declaredNames.add(declMatcher.group(1));
-        }
-        for (String declared : declaredNames) {
-            renamed = renamed.replaceAll(
-                    "(?<![A-Za-z0-9_])" + java.util.regex.Pattern.quote(declared) + "(?![A-Za-z0-9_])",
-                    "ghost_" + declared);
-        }
-        return renamed;
-    }
-
-    /**
-     * Adapta um bloco {@code axiomatic} gerado por {@link LambdaFunctionRegistry}/{@link
-     * SigmaFunctionRegistry} para o universo {@code dummy_ghost}: mesmo tratamento que uma linha de
-     * {@code ensures} ghost normal (ver {@link #rewriteAnySubEnsureForGhost}), já que este bloco não
-     * passa pelo pipeline por-linha (é uma declaração à parte, não uma cláusula de contrato).
-     */
-    private static String prefixLocalAxiomaticBlockForGhost(
-            String rawBlock, BxmlTranslateContext ctx, Set<String> concreteConstantNames,
-            Set<String> abstractVars) {
-        String s = stripCommentLines(rawBlock);
-        s = prefixAcslLibFunctionsForGhost(s);
-        s = prefixEnumValuesForGhost(s, ctx.enumValueRenames());
-        s = prefixGlobalLogicSetsForGhost(s);
-        s = prefixSetComprehensionsForGhost(s);
-        s = ghostDummyConcreteRefs(s, concreteConstantNames);
-        s = prefixAbstractVarsForGhost(s, abstractVars);
-        // Set<A> não existe neste front-end isolado — só o tipo-sombra DSet<A> (ver
-        // DummyGhostAxiomaticBuilder#rewriteDummyTypes, mesma substituição). \list<T> é builtin
-        // nativo da ACSL (não da lib), por isso não precisa de sombra equivalente.
-        return s.replaceAll("\\bSet<", "DSet<");
-    }
-
-    /**
-     * Remove linhas que são inteiramente um comentário de uma linha só (uma linha por comentário —
-     * ver {@link SigmaFunctionRegistry}) antes de embrulhar um bloco no comentário de anotação
-     * {@code .ci}: comentários ACSL não aninham, e o texto livre de um TODO pode colidir com o regex
-     * de {@link DummyGhostAxiomaticBuilder#prefixLibCallsInSignature} (ex.: fronteira de palavra
-     * ASCII não trata acentos — "domínio" casava com o símbolo da lib {@code dom}).
-     */
-    private static String stripCommentLines(String text) {
-        if (text == null || text.isEmpty()) return text;
-        String[] lines = text.split("\n", -1);
-        StringBuilder out = new StringBuilder();
-        for (int i = 0; i < lines.length; i++) {
-            String t = lines[i].trim();
-            if (t.startsWith("/*") && t.endsWith("*/") && t.length() >= 4) continue;
-            out.append(lines[i]);
-            if (i < lines.length - 1) out.append("\n");
-        }
-        return out.toString();
-    }
-
-    /**
-     * Valores enumerados → {@code dummy_<Maquina>__<Valor>} (ex. {@code dummy_Airlock__ACQ}), alinhado a
-     * {@link DummyGhostAxiomaticBuilder} e a {@link BxmlSetsTranslator#buildEnumRenamesWithSees}.
-     */
-    private static String prefixEnumValuesForGhost(
-            String text, Map<String, String> enumValueRenames) {
-        if (text == null || text.isEmpty() || enumValueRenames == null || enumValueRenames.isEmpty()) {
-            return text;
-        }
-        List<Map.Entry<String, String>> entries = new ArrayList<>(enumValueRenames.entrySet());
-        entries.sort((a, b) -> Integer.compare(b.getValue().length(), a.getValue().length()));
-        String out = text;
-        for (Map.Entry<String, String> e : entries) {
-            String bName = e.getKey();
-            if (bName == null || bName.isBlank()) {
-                continue;
-            }
-            String acslName = e.getValue();
-            String dummyVal =
-                    acslName != null && !acslName.isBlank() ? "dummy_" + acslName : "dummy_" + bName;
-            if (acslName != null && !acslName.isBlank()) {
-                out =
-                        out.replaceAll(
-                                "(?<!dummy_)\\b" + Pattern.quote(acslName) + "\\b",
-                                Matcher.quoteReplacement(dummyVal));
-            }
-            out =
-                    out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(bName) + "\\b",
-                            Matcher.quoteReplacement(dummyVal));
-        }
-        return out;
-    }
-
-    /**
-     * Reescreve {@code function_apply(NAME, couple(...))} → {@code NAME(arg1, arg2, ...)} para
-     * constantes abstratas declaradas como funções lógicas (não como relações B).
-     */
-    private static String uncurryAbstractConstantApplications(
-            String text, Map<String, List<String>> abstractConstParams) {
-        if (text == null || abstractConstParams == null || abstractConstParams.isEmpty()) {
-            return text;
-        }
-        String result = text;
-        for (String prefix : new String[]{"function_apply(", "dummy_function_apply("}) {
-            StringBuilder sb = new StringBuilder();
-            int idx = 0;
-            while (idx < result.length()) {
-                int callStart = result.indexOf(prefix, idx);
-                if (callStart < 0) {
-                    sb.append(result.substring(idx));
-                    break;
-                }
-                if (callStart > 0) {
-                    char before = result.charAt(callStart - 1);
-                    if (Character.isLetterOrDigit(before) || before == '_') {
-                        sb.append(result.charAt(idx));
-                        idx = callStart + 1;
-                        continue;
-                    }
-                }
-                int openParen = callStart + prefix.length() - 1;
-                int closeParen = findMatchingClose(result, openParen);
-                if (closeParen < 0) {
-                    sb.append(result.substring(idx, openParen + 1));
-                    idx = openParen + 1;
-                    continue;
-                }
-                String argsStr = result.substring(openParen + 1, closeParen);
-                int commaIdx = findTopLevelCommaInText(argsStr, 0);
-                if (commaIdx < 0) {
-                    sb.append(result.substring(idx, closeParen + 1));
-                    idx = closeParen + 1;
-                    continue;
-                }
-                String constName = argsStr.substring(0, commaIdx).trim();
-                if (!abstractConstParams.containsKey(constName)) {
-                    sb.append(result.substring(idx, closeParen + 1));
-                    idx = closeParen + 1;
-                    continue;
-                }
-                String coupleExpr = argsStr.substring(commaIdx + 1).trim();
-                List<String> flatArgs = extractCoupleArgs(coupleExpr);
-                sb.append(result.substring(idx, callStart));
-                sb.append(constName).append("(").append(String.join(", ", flatArgs)).append(")");
-                idx = closeParen + 1;
-            }
-            result = sb.toString();
-        }
-        return result;
-    }
-
-    private static List<String> extractCoupleArgs(String expr) {
-        String trimmed = expr.trim();
-        boolean isCouple = trimmed.startsWith("dummy_couple(") || trimmed.startsWith("couple(");
-        if (!isCouple) {
-            return new ArrayList<>(List.of(trimmed));
-        }
-        int openParen = trimmed.indexOf('(');
-        int closeParen = findMatchingClose(trimmed, openParen);
-        if (closeParen < 0 || closeParen != trimmed.length() - 1) {
-            return new ArrayList<>(List.of(trimmed));
-        }
-        String inner = trimmed.substring(openParen + 1, closeParen);
-        int comma = findTopLevelCommaInText(inner, 0);
-        if (comma < 0) {
-            return new ArrayList<>(List.of(trimmed));
-        }
-        List<String> result = new ArrayList<>(extractCoupleArgs(inner.substring(0, comma).trim()));
-        result.add(inner.substring(comma + 1).trim());
-        return result;
-    }
-
-    private static int findTopLevelCommaInText(String text, int start) {
-        int depth = 0;
-        for (int i = start; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c == '(') depth++;
-            else if (c == ')') depth--;
-            else if (c == ',' && depth == 0) return i;
-        }
-        return -1;
-    }
-
-    /**
-     * Quando um quantificador {@code \\forall integer VAR} é seguido de {@code VAR == NAME(...)}
-     * onde NAME é uma constante abstrata que retorna boolean, muda para {@code \\forall boolean VAR}.
-     */
-    private static String fixForallQuantifierTypeAfterUncurry(
-            String text, Map<String, List<String>> abstractConstParams) {
-        if (text == null || abstractConstParams.isEmpty()) return text;
-        java.util.regex.Pattern forallPat =
-                java.util.regex.Pattern.compile("\\\\forall\\s+integer\\s+(\\w+)\\b");
-        java.util.regex.Matcher m = forallPat.matcher(text);
-        while (m.find()) {
-            String varName = m.group(1);
-            for (String name : abstractConstParams.keySet()) {
-                if (text.contains(varName + " == " + name + "(")
-                        || text.contains(varName + "==" + name + "(")) {
-                    text = text.replaceFirst(
-                            "\\\\forall\\s+integer\\s+" + java.util.regex.Pattern.quote(varName) + "\\b",
-                            "\\\\forall boolean " + varName);
-                    m = forallPat.matcher(text);
-                    break;
-                }
-            }
-        }
-        return text;
-    }
-
-    private static Map<String, String> buildAbstractConstantDecls(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            Map<String, List<String>> lambdaParams) {
-        Map<String, String> result = new java.util.LinkedHashMap<>();
-        Element block = firstChildElement(machineEl, "Abstract_Constants");
-        if (block == null) return result;
-        org.w3c.dom.NodeList ch = block.getChildNodes();
-        for (int i = 0; i < ch.getLength(); i++) {
-            org.w3c.dom.Node n = ch.item(i);
-            if (n.getNodeType() != org.w3c.dom.Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName()) || !"Id".equals(e.getLocalName())) continue;
-            String name = e.getAttribute("value");
-            if (name == null || name.isBlank()) continue;
-            name = name.trim();
-            List<String> params = lambdaParams.get(name);
-            if (params != null && !params.isEmpty()) {
-                String paramStr = params.stream()
-                        .map(v -> "integer " + v)
-                        .collect(java.util.stream.Collectors.joining(", "));
-                result.put(name, "logic boolean " + name + "(" + paramStr + ")");
-            } else {
-                String tr = e.getAttribute("typref");
-                int typref = (tr == null || tr.isBlank()) ? -1 : Integer.parseInt(tr.trim());
-                String logicType = ctx.types().acslVariableLogicTypeFromTypref(typref);
-                result.put(name, "logic " + logicType + " " + name);
-            }
-        }
-        return result;
     }
 
     /**
@@ -2208,384 +1172,7 @@ public final class GhostOperationsCiGenerator {
                 .replaceAll("!=\\s*\\\\true\\b", "!= 1");
     }
 
-    /**
-     * Conjuntos enumerados B → {@code dummy_<Maquina>__<Conjunto>} nos {@code ensures} ghost (ex.
-     * {@code belongs(v, PRESSURE)} → {@code belongs(v, dummy_Airlock_pressure_bs__PRESSURE)}).
-     */
-    private static String prefixEnumeratedSetsForGhost(
-            String text, List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSets) {
-        if (text == null || text.isEmpty() || enumeratedSets == null || enumeratedSets.isEmpty()) {
-            return text;
-        }
-        List<BxmlSetsTranslator.EnumeratedSetInfo> sorted = new ArrayList<>(enumeratedSets);
-        sorted.sort(
-                (a, b) ->
-                        Integer.compare(
-                                b.setName().length(), a.setName().length()));
-        String out = text;
-        for (BxmlSetsTranslator.EnumeratedSetInfo set : sorted) {
-            String dummySet = set.dummySetLogicName();
-            String setName = set.setName();
-            if (setName == null || setName.isBlank()) {
-                continue;
-            }
-            out =
-                    out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(setName) + "\\b",
-                            Matcher.quoteReplacement(dummySet));
-            String acslSetRef = BxmlSetsTranslator.enumeratedSetAcslName(set.machineName(), setName);
-            out =
-                    out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(acslSetRef) + "\\b",
-                            Matcher.quoteReplacement(dummySet));
-        }
-        return out;
-    }
-
-    /**
-     * Conjuntos globais da ACSL_Lib ({@code NAT}, {@code NAT1}, {@code INT}, {@code BOOL}) →
-     * variáveis lógicas {@code dummy_NAT} / {@code dummy_NAT1} / {@code dummy_INT} /
-     * {@code dummy_BOOL} declaradas em {@link DummyGhostAxiomaticBuilder}.
-     */
-    private static String prefixGlobalLogicSetsForGhost(String text) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        String out =
-                text.replaceAll(
-                        "(?<!dummy_)\\bNAT1\\b", Matcher.quoteReplacement("dummy_NAT1"));
-        out =
-                out.replaceAll(
-                        "(?<!dummy_)\\bNAT\\b", Matcher.quoteReplacement("dummy_NAT"));
-        out =
-                out.replaceAll(
-                        "(?<!dummy_)\\bINT\\b", Matcher.quoteReplacement("dummy_INT"));
-        return out.replaceAll(
-                "(?<!dummy_)\\bBOOL\\b", Matcher.quoteReplacement("dummy_BOOL"));
-    }
-
-    /**
-     * Em ACSL os parâmetros de saída são modelados como ponteiros C ({@code int *}); os escalares
-     * (não-relação/função) precisam de desreferenciamento ao serem usados como valor (ex.:
-     * {@code ii == \length(...)} → {@code *ii == \length(...)}).
-     *
-     * <p>Aplica-se apenas dentro de cláusulas {@code ensures} ghost geradas a partir de
-     * {@code ANY_Sub}, onde a referência ao output é por valor.
-     */
-    private static String dereferenceScalarOutputParams(String text, Element operation) {
-        if (text == null || text.isEmpty() || operation == null) {
-            return text;
-        }
-        Element outEl = firstChildElement(operation, "Output_Parameters");
-        if (outEl == null) return text;
-        String result = text;
-        NodeList ch = outEl.getChildNodes();
-        for (int i = 0; i < ch.getLength(); i++) {
-            Node n = ch.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            if (!"Id".equals(e.getLocalName())) continue;
-            String name = e.getAttribute("value");
-            if (name == null || name.isBlank()) continue;
-            name = name.trim();
-            if (outputParamIsFunctionTyped(operation, name)) continue;
-            result =
-                    result.replaceAll(
-                            "(?<!\\*)\\b" + Pattern.quote(name) + "\\b",
-                            Matcher.quoteReplacement("*" + name));
-        }
-        return result;
-    }
-
-    /**
-     * Para cada par {@code (output_pointer, anySubVar)}, onde o {@code output_pointer} é um
-     * parâmetro de saída de tipo função (relação em B) e {@code anySubVar} é uma variável quantificada
-     * de função na cláusula {@code WHERE}, reescreve as comparações
-     * {@code equals(output_pointer, anySubVar)} (e simétrica) para envolver o ponteiro com
-     * {@code dummy_array_to_function(<param>, <len>)}, onde {@code <len>} provém do intervalo do
-     * domínio em {@code WHERE}.
-     */
-    private static String wrapOutputArraysInEquals(
-            String text,
-            Element operation,
-            Element anySub,
-            BxmlTranslateContext ctx,
-            Set<String> concreteConstantNames) {
-        if (text == null || text.isEmpty() || operation == null || anySub == null || ctx == null) {
-            return text;
-        }
-        List<String> outputs = listOutputParameterNames(operation);
-        if (outputs.isEmpty()) return text;
-        Element vars = firstChildElement(anySub, "Variables");
-        if (vars == null) return text;
-        Element predWrapper = firstChildElement(anySub, "Pred");
-        Element predRoot = predWrapper != null ? firstSubChild(predWrapper) : null;
-        if (predRoot == null) return text;
-        String result = text;
-        for (Element v : directExpChildren(vars)) {
-            if (!"Id".equals(v.getLocalName())) continue;
-            String qName = v.getAttribute("value");
-            if (qName == null) continue;
-            qName = qName.trim();
-            if (qName.isBlank()) continue;
-            Element domain = partialFunctionDomainFromPreconditionInPred(predRoot, qName);
-            if (domain == null) continue;
-            String len = arrayLengthAcslFromDomain(domain, ctx, concreteConstantNames);
-            if (len == null || len.isBlank()) continue;
-            for (String out : outputs) {
-                if (!outputParamIsFunctionTyped(operation, out)) continue;
-                String wrapped = "dummy_array_to_function(" + out + ", " + len + ")";
-                String escOut = Pattern.quote(out);
-                String escQ = Pattern.quote(qName);
-                result =
-                        result.replaceAll(
-                                "equals\\(\\s*" + escOut + "\\s*,\\s*" + escQ + "\\s*\\)",
-                                Matcher.quoteReplacement(
-                                        "equals(" + wrapped + ", " + qName + ")"));
-                result =
-                        result.replaceAll(
-                                "equals\\(\\s*" + escQ + "\\s*,\\s*" + escOut + "\\s*\\)",
-                                Matcher.quoteReplacement(
-                                        "equals(" + qName + ", " + wrapped + ")"));
-            }
-        }
-        return result;
-    }
-
-    /**
-     * {@code true} se o parâmetro de saída {@code paramName} for um tipo função/relação (modelado
-     * como {@code int *} em C); falso para escalares ({@code int}).
-     */
-    private static boolean outputParamIsFunctionTyped(Element operation, String paramName) {
-        if (operation == null || paramName == null || paramName.isBlank()) {
-            return false;
-        }
-        Element outEl = firstChildElement(operation, "Output_Parameters");
-        if (outEl == null) return false;
-        NodeList ch = outEl.getChildNodes();
-        for (int i = 0; i < ch.getLength(); i++) {
-            Node n = ch.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            if (!"Id".equals(e.getLocalName())) continue;
-            String name = e.getAttribute("value");
-            if (name == null || !paramName.equals(name.trim())) continue;
-            String tr = e.getAttribute("typref");
-            if (tr == null || tr.isBlank()) return false;
-            try {
-                int id = Integer.parseInt(tr.trim());
-                Element machine = findAncestorMachine(operation);
-                if (machine == null) return false;
-                BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machine);
-                String acsl = types.acslVariableLogicTypeFromTypref(id);
-                return acsl != null
-                        && (acsl.startsWith("Relation_") || acsl.startsWith("Function_"));
-            } catch (NumberFormatException ignored) {
-                return false;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Como {@link #appendOutputParametersAsPointers(List, Element, boolean)}, com o tipo ENUM real
-     * (ex. {@code RobustFifo__REPORT *}) quando aplicável — usado pelo {@code predicate ghost__<op>}
-     * do bloco axiomático real (importado DEPOIS dos {@code .c}, onde o typedef já é visível).
-     */
-    static List<Param> appendOutputParametersAsPointers(
-            List<Param> base, Element operation) {
-        return appendOutputParametersAsPointers(base, operation, true);
-    }
-
-    /**
-     * Acrescenta os {@code Output_Parameters} como ponteiros C ({@code int *<name>}, ou o tipo ENUM
-     * real quando {@code useConcreteEnumTypes} e o parâmetro é de um conjunto ENUMERADO) à lista de
-     * parâmetros (na ordem de declaração no BXML); usado por contratos ghost derivados de
-     * {@code ANY_Sub} (e respetivo {@code predicate ghost__<op>}).
-     *
-     * @param useConcreteEnumTypes {@code false} para o {@code void <op>(...)} dummy dentro de {@code
-     *     ghost_operations.ci}: esse ficheiro é analisado pelo Frama-C como front-end ISOLADO, ANTES
-     *     de qualquer {@code .c} (ver {@link #write}) — um typedef de enum como {@code
-     *     RobustFifo__REPORT}, só definido dentro de {@code RobustFifo_i.c}, é literalmente
-     *     desconhecido nesse ponto, e usá-lo aqui produz {@code syntax error ... before or at token:
-     *     RobustFifo__REPORT} no pré-processamento do {@code .ci}. {@code true} para o {@code
-     *     predicate ghost__<op>(...)} do bloco axiomático real (emitido no {@code .acsl}, importado
-     *     DEPOIS de todos os {@code .c} — aí o typedef já é visível, e usar {@code int *} geraria
-     *     "invalid implicit conversion" no local de chamada real ({@code assert ghost__op(…, rr)}).
-     */
-    static List<Param> appendOutputParametersAsPointers(
-            List<Param> base, Element operation, boolean useConcreteEnumTypes) {
-        List<Param> out = new ArrayList<>(base);
-        if (operation == null) return out;
-        Element outEl = firstChildElement(operation, "Output_Parameters");
-        if (outEl == null) return out;
-        NodeList ch = outEl.getChildNodes();
-        for (int i = 0; i < ch.getLength(); i++) {
-            Node n = ch.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            if (!"Id".equals(e.getLocalName())) continue;
-            String name = e.getAttribute("value");
-            if (name == null || name.isBlank()) continue;
-            String cPtrType = cPointerTypeFromTypref(findAncestorMachine(operation), e);
-            if (!useConcreteEnumTypes && !"int *".equals(cPtrType) && !"_Bool *".equals(cPtrType)) {
-                cPtrType = "int *";
-            }
-            out.add(new Param(cPtrType, sanitizeCIdent(name.trim())));
-        }
-        return out;
-    }
-
-    /**
-     * Tipo ponteiro C para um parâmetro de saída a partir do seu {@code typref}: BOOL → {@code _Bool *};
-     * qualquer outro escalar/conjunto → {@code int *}.
-     */
-    private static String cPointerTypeFromTypref(Element machine, Element paramId) {
-        if (machine == null) return "int *";
-        String tr = paramId.getAttribute("typref");
-        if (tr == null || tr.isBlank()) return "int *";
-        try {
-            int id = Integer.parseInt(tr.trim());
-            BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machine);
-            String raw = types.getRawType(id);
-            String rawTrim = raw == null ? "" : raw.trim();
-            if ("BOOL".equals(rawTrim)) {
-                return "_Bool *";
-            }
-            // Conjunto ENUMERADO declarado nesta máquina (ex.: "REPORT" em RobustFifo.bxml, com
-            // Enumerated_Values ok/failed): o C real gerado tipa o parâmetro como
-            // "<Machine>__<Set> *" (ex. "RobustFifo__REPORT *"), um enum de verdade — não "int *".
-            // Sem isto, "predicate ghost__op(..., int *rr)" não casa com o protótipo C real usado
-            // no local de chamada ("at return: assert ghost__op(..., rr);"), e o Frama-C rejeita com
-            // "invalid implicit conversion from '<Machine>__<Set> *' to 'int *'". Conjuntos DIFERIDOS
-            // (sem Enumerated_Values, ex. Fifo_ctx__ELEM) não entram aqui — mapeiam para {@code int}
-            // simples no C gerado, compatível com o "int *" por omissão.
-            if (BxmlSetsTranslator.buildEnumeratedSetNames(machine).contains(rawTrim)) {
-                String machineName = machine.getAttribute("name");
-                if (machineName != null && !machineName.isBlank()) {
-                    return machineName.trim() + "__" + rawTrim + " *";
-                }
-            }
-        } catch (NumberFormatException ignored) {}
-        return "int *";
-    }
-
-    static List<Param> listInputParameters(Element operation) {
-        List<Param> out = new ArrayList<>();
-        Element in = firstChildElement(operation, "Input_Parameters");
-        if (in == null) return out;
-        NodeList ch = in.getChildNodes();
-        for (int i = 0; i < ch.getLength(); i++) {
-            Node n = ch.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            if ("Id".equals(e.getLocalName())) {
-                String name = e.getAttribute("value");
-                if (name == null || name.isBlank()) continue;
-                String cType = ghostParamTypeFromPrecondition(operation, name.trim());
-                if (cType == null || cType.isBlank()) {
-                    cType = cGhostParamTypeFromTypref(operation, e);
-                }
-                out.add(new Param(cType, sanitizeCIdent(name)));
-            }
-        }
-        return out;
-    }
-
-    /**
-     * Tipo C do parâmetro ghost a partir do {@code Precondition} (ex. {@code ee : NAT} →
-     * {@code int}; {@code xx : S --> T} → {@code int *}; relação {@code POW(A*B)} → {@code int *}).
-     * Nos {@code ensures}, escalares {@code int} são convertidos para {@code integer} via cast.
-     */
-    private static String ghostParamTypeFromPrecondition(Element operation, String paramName) {
-        Element pre = firstChildElement(operation, "Precondition");
-        if (pre == null) {
-            return null;
-        }
-        return findMembershipTypeForParam(pre, paramName);
-    }
-
-    private static String findMembershipTypeForParam(Element pred, String paramName) {
-        if (pred == null) {
-            return null;
-        }
-        String ln = pred.getLocalName();
-        if ("Precondition".equals(ln)) {
-            NodeList nl = pred.getChildNodes();
-            for (int i = 0; i < nl.getLength(); i++) {
-                Node n = nl.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element ch = (Element) n;
-                if ("Attr".equals(ch.getLocalName())) continue;
-                String t = findMembershipTypeForParam(ch, paramName);
-                if (t != null && !t.isBlank()) {
-                    return t;
-                }
-            }
-            return null;
-        }
-        if ("Exp_Comparison".equals(ln)) {
-            String op = normalizeColonLikeOp(pred.getAttribute("op"));
-            if (":".equals(op)) {
-                Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
-                if (pair[0] != null
-                        && "Id".equals(pair[0].getLocalName())
-                        && paramName.equals(pair[0].getAttribute("value").trim())
-                        && pair[1] != null) {
-                    return cGhostParamTypeFromMembershipRhs(pair[1]);
-                }
-            }
-            return null;
-        }
-        if ("Nary_Pred".equals(ln)) {
-            NodeList nl = pred.getChildNodes();
-            for (int i = 0; i < nl.getLength(); i++) {
-                Node n = nl.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element ch = (Element) n;
-                if ("Attr".equals(ch.getLocalName())) continue;
-                String t = findMembershipTypeForParam(ch, paramName);
-                if (t != null && !t.isBlank()) {
-                    return t;
-                }
-            }
-            return null;
-        }
-        if ("Unary_Pred".equals(ln)) {
-            Element inner = firstPredChildElement(pred);
-            return findMembershipTypeForParam(inner, paramName);
-        }
-        if ("Binary_Pred".equals(ln)) {
-            Element[] pair = twoDirectPredChildren(pred);
-            if (pair[0] != null) {
-                String t = findMembershipTypeForParam(pair[0], paramName);
-                if (t != null && !t.isBlank()) {
-                    return t;
-                }
-            }
-            if (pair[1] != null) {
-                return findMembershipTypeForParam(pair[1], paramName);
-            }
-        }
-        return null;
-    }
-
-    private static String normalizeColonLikeOp(String raw) {
-        if (raw == null) {
-            return "";
-        }
-        String o = raw.trim();
-        if (":".equals(o)) {
-            return ":";
-        }
-        return o;
-    }
-
-    private static Element firstPredChildElement(Element parent) {
+    static Element firstPredChildElement(Element parent) {
         NodeList nl = parent.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
             Node n = nl.item(i);
@@ -2595,205 +1182,6 @@ public final class GhostOperationsCiGenerator {
             return e;
         }
         return null;
-    }
-
-    private static Element[] twoDirectPredChildren(Element parent) {
-        Element[] out = new Element[2];
-        int k = 0;
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            out[k++] = e;
-            if (k == 2) {
-                break;
-            }
-        }
-        return out;
-    }
-
-    /**
-     * Lado direito de {@code v : RHS} no precondition → tipo ACSL do parâmetro em
-     * {@code ghost_operations.ci} (sem tipos lógicos como {@code Relation_*}).
-     */
-    private static String cGhostParamTypeFromMembershipRhs(Element rhs) {
-        if (rhs == null) {
-            return null;
-        }
-        if ("Id".equals(rhs.getLocalName())) {
-            String v = rhs.getAttribute("value");
-            if (v == null) {
-                v = "";
-            }
-            return switch (v.trim()) {
-                case "NAT", "INTEGER", "INT" -> "int";
-                case "BOOL" -> "int";
-                default -> null;
-            };
-        }
-        if (BxmlExpressionToAcsl.isFunctionArrowType(rhs)) {
-            return "int *";
-        }
-        if ("Unary_Exp".equals(rhs.getLocalName()) && "POW".equals(rhs.getAttribute("op"))) {
-            Element inner = firstNonAttrElementChild(rhs);
-            if (inner != null
-                    && "Binary_Exp".equals(inner.getLocalName())
-                    && "*".equals(trimOp(inner.getAttribute("op")))) {
-                return "int *";
-            }
-        }
-        return null;
-    }
-
-    private static String trimOp(String op) {
-        return op == null ? "" : op.trim();
-    }
-
-    private static Element firstNonAttrElementChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            return e;
-        }
-        return null;
-    }
-
-    /** Fallback a partir de {@code typref} + {@code TypeInfos}: relações → {@code integer *}. */
-    private static String cGhostParamTypeFromTypref(Element operation, Element paramId) {
-        Element machine = findAncestorMachine(operation);
-        if (machine == null) {
-            return "int";
-        }
-        String tr = paramId.getAttribute("typref");
-        if (tr == null || tr.isBlank()) {
-            return "int";
-        }
-        try {
-            int id = Integer.parseInt(tr.trim());
-            BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machine);
-            String acsl = types.acslVariableLogicTypeFromTypref(id);
-            if (acsl != null && acsl.startsWith("Relation_")) {
-                return "int *";
-            }
-        } catch (NumberFormatException ignored) {
-            // fall through
-        }
-        return "int";
-    }
-
-    private static Element findAncestorMachine(Element el) {
-        Node n = el;
-        while (n != null) {
-            if (n.getNodeType() == Node.ELEMENT_NODE) {
-                Element e = (Element) n;
-                if ("Machine".equals(e.getLocalName())) {
-                    return e;
-                }
-            }
-            n = n.getParentNode();
-        }
-        return null;
-    }
-
-    /**
-     * Em cláusulas {@code ensures} ghost, parâmetros C {@code int} usam-se como {@code (integer)x}
-     * ao serem passados a funções do universo {@code dummy_ghost} (tipos matemáticos ACSL).
-     */
-    static String castScalarIntGhostParamsInEnsure(String ensure, List<Param> params) {
-        if (ensure == null || ensure.isBlank() || params == null || params.isEmpty()) {
-            return ensure;
-        }
-        List<Param> scalarInts = new ArrayList<>();
-        for (Param p : params) {
-            if (p.type() != null && "int".equals(p.type().trim())) {
-                scalarInts.add(p);
-            }
-        }
-        if (scalarInts.isEmpty()) {
-            return ensure;
-        }
-        scalarInts.sort((a, b) -> Integer.compare(b.name().length(), a.name().length()));
-        String out = ensure;
-        for (Param p : scalarInts) {
-            String name = p.name();
-            out =
-                    out.replaceAll(
-                            "(?<!\\(integer\\)\\s*)(?<![A-Za-z0-9_])"
-                                    + Pattern.quote(name)
-                                    + "\\b",
-                            Matcher.quoteReplacement("(integer)" + name));
-        }
-        return out;
-    }
-
-    /**
-     * Declaração de parâmetro C em {@code ghost_operations.ci}: {@code int *xx} (sem espaço entre
-     * {@code *} e o identificador); escalares mantêm espaço ({@code int ee}).
-     */
-    private static String formatCParameterDecl(String type, String name) {
-        if (type == null || type.isBlank()) {
-            return name;
-        }
-        String t = type.trim();
-        if (t.endsWith("*")) {
-            return t + name;
-        }
-        return t + " " + name;
-    }
-
-    private static String sanitizeCIdent(String name) {
-        return name.replace('-', '_');
-    }
-
-    private static String sanitizeGhostFunctionName(String opName) {
-        if (opName == null || opName.isBlank()) return "operation";
-        if ("INITIALISATION".equalsIgnoreCase(opName)) return "initialisation";
-        return opName.replace('-', '_').toLowerCase();
-    }
-
-    /** Tipo C para {@code //@ ghost T ghost_<v>;} alinhado ao {@code logic} da máquina. */
-    private static String ghostCTypeFromLogicType(String logicType) {
-        if (logicType == null || logicType.isBlank()) {
-            return "int";
-        }
-        return switch (logicType.trim()) {
-            case "boolean" -> "_Bool";
-            case "real" -> "double";
-            default -> "int";
-        };
-    }
-
-    /** Tipo {@code logic} ACSL para {@code dummy_ghost_<v>} / variáveis ghost. */
-    private static String ghostLogicTypeFromInferred(String logicType) {
-        if (logicType == null || logicType.isBlank()) {
-            return "integer";
-        }
-        String t = logicType.trim();
-        if ("boolean".equals(t) || "integer".equals(t) || "real".equals(t) || "int".equals(t)) {
-            return t.equals("int") ? "integer" : t.equals("boolean") ? "integer" : t;
-        }
-        if (t.startsWith("\\list") || t.startsWith("Set<")) {
-            return "integer";
-        }
-        return "integer";
-    }
-
-    private static List<Element> directExpChildren(Element parent) {
-        List<Element> out = new ArrayList<>();
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            out.add(e);
-        }
-        return out;
     }
 
     /**
@@ -2809,36 +1197,13 @@ public final class GhostOperationsCiGenerator {
         if (e == null || !"Binary_Exp".equals(e.getLocalName()) || !"(".equals(e.getAttribute("op"))) {
             return null;
         }
-        List<Element> children = directExpChildren(e);
+        List<Element> children = BxmlDomUtils.directExpChildren(e);
         if (children.isEmpty()) return null;
         Element first = children.get(0);
         if ("Id".equals(first.getLocalName())) {
             return first.getAttribute("value");
         }
         return functionOverrideTargetName(first);
-    }
-
-    private static Element firstSubChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            return e;
-        }
-        return null;
-    }
-
-    private static Element firstChildElement(Element parent, String localName) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) return e;
-        }
-        return null;
     }
 
     /** Visibilidade de pacote: reaproveitado por {@link BxmlOperationsTranslator} (mesmo fim). */
@@ -2875,7 +1240,7 @@ public final class GhostOperationsCiGenerator {
             if (params.isEmpty()) return "void";
             List<String> parts = new ArrayList<>();
             for (Param p : params) {
-                parts.add(formatCParameterDecl(p.type(), p.name()));
+                parts.add(GhostParamTypeResolver.formatCParameterDecl(p.type(), p.name()));
             }
             return String.join(", ", parts);
         }

@@ -26,7 +26,7 @@ public final class BxmlPredicateToAcsl {
 
     public static List<String> translatePredicateBlock(Element predParent, BxmlTranslateContext ctx) {
         List<String> out = new ArrayList<>();
-        Element first = firstPredChild(predParent);
+        Element first = BxmlDomUtils.firstPredChild(predParent);
         if (first != null) {
             String t = translatePred(first, ctx);
             if (!t.isBlank()) out.add(t);
@@ -38,7 +38,7 @@ public final class BxmlPredicateToAcsl {
      * Conteúdo de {@code <Invariant>}: primeiro elemento preditivo (ex.: {@code Exp_Comparison}, {@code Nary_Pred}).
      */
     public static String translateInvariantContent(Element invariantEl, BxmlTranslateContext ctx) {
-        Element p = firstPredChild(invariantEl);
+        Element p = BxmlDomUtils.firstPredChild(invariantEl);
         if (p == null) return "";
         return translatePred(p, ctx);
     }
@@ -76,7 +76,7 @@ public final class BxmlPredicateToAcsl {
             name = "";
         }
         name = name.trim();
-        Element p0 = firstPredChild(predParent);
+        Element p0 = BxmlDomUtils.firstPredChild(predParent);
         Element arrow = p0 != null ? findFunctionArrowRhsForVariable(p0, name) : null;
         if (arrow != null) {
             return functionArrowBinaryToAcslFunctionType(arrow);
@@ -180,10 +180,10 @@ public final class BxmlPredicateToAcsl {
             return null;
         }
         if ("Unary_Pred".equals(ln)) {
-            return findFunctionArrowRhsForVariable0(firstPredChild(pred), varName);
+            return findFunctionArrowRhsForVariable0(BxmlDomUtils.firstPredChild(pred), varName);
         }
         if ("Binary_Pred".equals(ln)) {
-            Element[] pair = twoDirectPredChildren(pred);
+            Element[] pair = BxmlDomUtils.twoDirectPredChildren(pred);
             if (pair[0] != null) {
                 Element f = findFunctionArrowRhsForVariable0(pair[0], varName);
                 if (f != null) {
@@ -200,18 +200,6 @@ public final class BxmlPredicateToAcsl {
     private static boolean isColonTypingComparison(Element cmp) {
         String op = cmp.getAttribute("op");
         return op != null && ":".equals(op.trim());
-    }
-
-    private static Element firstPredChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            return e;
-        }
-        return null;
     }
 
     private static String translatePred(Element p, BxmlTranslateContext ctx) {
@@ -233,81 +221,10 @@ public final class BxmlPredicateToAcsl {
         Element leftEl = pair[0];
         Element rightEl = pair[1];
         if ("/:".equals(op)) {
-            String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-            String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
-            return "not_belongs(" + left + ", " + right + ")";
+            return translateNotBelongsComparison(leftEl, rightEl, ctx);
         }
         if (":".equals(op)) {
-            // ss : POW(S) → inclusion(ss, S); ss : FIN(ss) → is_finite(ss)
-            if ("Unary_Exp".equals(rightEl.getLocalName())) {
-                String uop = rightEl.getAttribute("op");
-                if ("POW".equals(uop)) {
-                    String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                    Element inner = firstNonAttrElementChild(rightEl);
-                    String setAtom = bTypeArgToSeqOfSetName(inner, ctx);
-                    return "inclusion(" + left + ", " + setAtom + ")";
-                }
-                if ("FIN".equals(uop) || "fin".equals(uop)) {
-                    String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                    return "is_finite(" + left + ")";
-                }
-                if ("iseq".equals(uop)) {
-                    String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                    return "iSeq(" + left + ")";
-                }
-                if ("seq".equals(uop)) {
-                    String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                    Element typeArg = firstNonAttrElementChild(rightEl);
-                    String setAtom = bTypeArgToSeqOfSetName(typeArg, ctx);
-                    return "is_seq_of(" + left + ", " + setAtom + ")";
-                }
-            }
-            // f : (S --> T) com S intervalo/compreensão — função total (ACSL_Lib function_functions/is_total.acsl)
-            if (BxmlExpressionToAcsl.isFunctionArrowType(rightEl)) {
-                Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
-                if (domRng[0] == null || domRng[1] == null) return "";
-                String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
-                String rangeSet = functionArrowRangeSet(domRng[1], ctx);
-                return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")";
-            }
-            // f : (S +-> T) — função PARCIAL (ACSL_Lib function_functions/is_partial.acsl); mesma
-            // forma que S --> T acima, só troca is_total_function por is_partial_function. Faltava
-            // por completo antes (nenhum isPartialFunctionArrowType existia): caía no fallback
-            // genérico belongs(f, translate(S +-> T)), e translateBinary não tem caso para "+->",
-            // deixando o operador B cru vazar para o texto ACSL ("[Syntax error] ->.").
-            if (BxmlExpressionToAcsl.isPartialFunctionArrowType(rightEl)) {
-                Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
-                if (domRng[0] == null || domRng[1] == null) return "";
-                String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
-                String rangeSet = functionArrowRangeSet(domRng[1], ctx);
-                return "is_partial_function(" + fun + ", " + domainSet + ", " + rangeSet + ")";
-            }
-            // f : (S -->> T) — função total surjetiva (ACSL_Lib function_functions/is_total.acsl + is_surjective.acsl)
-            if (BxmlExpressionToAcsl.isTotalSurjectionArrowType(rightEl)) {
-                Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
-                if (domRng[0] == null || domRng[1] == null) return "";
-                String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
-                String rangeSet = functionArrowRangeSet(domRng[1], ctx);
-                return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")"
-                        + " && is_surjective(" + fun + ", " + rangeSet + ")";
-            }
-            String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-            if (BxmlExpressionToAcsl.isIntervalBinaryExp(rightEl)) {
-                String right = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(rightEl, ctx);
-                return "belongs(" + left + ", " + right + ")";
-            }
-            String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
-            // x : T — pertença (ex.: nn : NAT → belongs(nn, NAT)) — ACSL_Lib/set_functions/belongs.acsl
-            if (isPrimitiveTypeName(right)) {
-                if ("NAT".equals(right)) return "belongs(" + left + ", NAT)";
-                if ("BOOL".equals(right)) return "belongs(" + left + ", BOOL)";
-                if ("INT".equals(right)) return "belongs(" + left + ", INT)";
-                return "(" + left + " /* : " + right + " */)";
-            }
-            return "belongs(" + left + ", " + right + ")";
+            return translateMembershipComparison(leftEl, rightEl, ctx);
         }
         String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
         String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
@@ -315,64 +232,7 @@ public final class BxmlPredicateToAcsl {
             return "inclusion(" + left + ", " + right + ")";
         }
         if ("=".equals(op)) {
-            // <==> tem precedência menor que && em ACSL: sem parênteses envolvendo TODA a
-            // bicondicional, "A && flag != 0 <==> B && C" analisa como "(A && flag != 0) <==>
-            // (B && C)" em vez de "A && (flag != 0 <==> B) && C" quando este predicado é um
-            // conjunto de um Nary_Pred op='&' maior (ex.: invariante de loop). O operador nativo
-            // "<=>" do B (mais abaixo) já envolve o resultado inteiro; esta forma derivada
-            // ("v = bool(P)" -> "v <==> P") precisa do mesmo tratamento.
-            if ("Boolean_Exp".equals(rightEl.getLocalName())) {
-                Element predEl = firstNonAttrElementChild(rightEl);
-                if (predEl != null) {
-                    return "((" + left + " != 0) <==> " + translatePred(predEl, ctx) + ")";
-                }
-            }
-            if ("Boolean_Exp".equals(leftEl.getLocalName())) {
-                Element predEl = firstNonAttrElementChild(leftEl);
-                if (predEl != null) {
-                    return "((" + right + " != 0) <==> " + translatePred(predEl, ctx) + ")";
-                }
-            }
-            if ("Id".equals(leftEl.getLocalName())
-                    && "Boolean_Literal".equals(rightEl.getLocalName())) {
-                return "("
-                        + BxmlExpressionToAcsl.translate(leftEl, ctx)
-                        + " == "
-                        + BxmlExpressionToAcsl.booleanLiteralRhsForVariable(
-                                leftEl, rightEl.getAttribute("value"), ctx)
-                        + ")";
-            }
-            if ("Id".equals(rightEl.getLocalName())
-                    && "Boolean_Literal".equals(leftEl.getLocalName())) {
-                return "("
-                        + BxmlExpressionToAcsl.translate(rightEl, ctx)
-                        + " == "
-                        + BxmlExpressionToAcsl.booleanLiteralRhsForVariable(
-                                rightEl, leftEl.getAttribute("value"), ctx)
-                        + ")";
-            }
-            if (BxmlExpressionToAcsl.isListValued(leftEl, ctx)
-                    && BxmlExpressionToAcsl.isRelationOrFunctionValued(rightEl, ctx)) {
-                return "(" + right + " == list_to_function(" + left + "))";
-            }
-            if (BxmlExpressionToAcsl.isListValued(rightEl, ctx)
-                    && BxmlExpressionToAcsl.isRelationOrFunctionValued(leftEl, ctx)) {
-                return "(" + left + " == list_to_function(" + right + "))";
-            }
-            // V = %x.(x:D | {y|Q}) — lambda "mapa" valorado-em-conjunto (ver
-            // BxmlExpressionToAcsl#setValuedMapLambdaPointwiseEquality): V é a relação inteira, o
-            // corpo é só o valor pontual — precisa de \forall pontual, não igualdade nua.
-            String setValuedLambdaEq =
-                    BxmlExpressionToAcsl.setValuedMapLambdaPointwiseEquality(leftEl, rightEl, ctx);
-            if (setValuedLambdaEq != null) return setValuedLambdaEq;
-            setValuedLambdaEq =
-                    BxmlExpressionToAcsl.setValuedMapLambdaPointwiseEquality(rightEl, leftEl, ctx);
-            if (setValuedLambdaEq != null) return setValuedLambdaEq;
-            if (BxmlExpressionToAcsl.isSetValued(leftEl, ctx)
-                    && BxmlExpressionToAcsl.isSetValued(rightEl, ctx)) {
-                return "equals(" + left + ", " + right + ")";
-            }
-            return "(" + left + " == " + right + ")";
+            return translateEqualityComparison(leftEl, rightEl, left, right, ctx);
         }
         if ("!=".equals(op)) {
             if (BxmlExpressionToAcsl.isSetValued(leftEl, ctx)
@@ -381,6 +241,149 @@ public final class BxmlPredicateToAcsl {
             }
         }
         return "(" + left + " " + op + " " + right + ")";
+    }
+
+    private static String translateNotBelongsComparison(
+            Element leftEl, Element rightEl, BxmlTranslateContext ctx) {
+        String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+        String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
+        return "not_belongs(" + left + ", " + right + ")";
+    }
+
+    private static String translateMembershipComparison(
+            Element leftEl, Element rightEl, BxmlTranslateContext ctx) {
+        // ss : POW(S) → inclusion(ss, S); ss : FIN(ss) → is_finite(ss)
+        if ("Unary_Exp".equals(rightEl.getLocalName())) {
+            String uop = rightEl.getAttribute("op");
+            if ("POW".equals(uop)) {
+                String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                Element inner = BxmlDomUtils.firstNonAttrElementChild(rightEl);
+                String setAtom = bTypeArgToSeqOfSetName(inner, ctx);
+                return "inclusion(" + left + ", " + setAtom + ")";
+            }
+            if ("FIN".equals(uop) || "fin".equals(uop)) {
+                String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                return "is_finite(" + left + ")";
+            }
+            if ("iseq".equals(uop)) {
+                String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                return "iSeq(" + left + ")";
+            }
+            if ("seq".equals(uop)) {
+                String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                Element typeArg = BxmlDomUtils.firstNonAttrElementChild(rightEl);
+                String setAtom = bTypeArgToSeqOfSetName(typeArg, ctx);
+                return "is_seq_of(" + left + ", " + setAtom + ")";
+            }
+        }
+        // f : (S --> T) com S intervalo/compreensão — função total (ACSL_Lib function_functions/is_total.acsl)
+        if (BxmlExpressionToAcsl.isFunctionArrowType(rightEl)) {
+            Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+            if (domRng[0] == null || domRng[1] == null) return "";
+            String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+            String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+            return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")";
+        }
+        // f : (S +-> T) — função PARCIAL (ACSL_Lib function_functions/is_partial.acsl); mesma
+        // forma que S --> T acima, só troca is_total_function por is_partial_function. Faltava
+        // por completo antes (nenhum isPartialFunctionArrowType existia): caía no fallback
+        // genérico belongs(f, translate(S +-> T)), e translateBinary não tem caso para "+->",
+        // deixando o operador B cru vazar para o texto ACSL ("[Syntax error] ->.").
+        if (BxmlExpressionToAcsl.isPartialFunctionArrowType(rightEl)) {
+            Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+            if (domRng[0] == null || domRng[1] == null) return "";
+            String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+            String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+            return "is_partial_function(" + fun + ", " + domainSet + ", " + rangeSet + ")";
+        }
+        // f : (S -->> T) — função total surjetiva (ACSL_Lib function_functions/is_total.acsl + is_surjective.acsl)
+        if (BxmlExpressionToAcsl.isTotalSurjectionArrowType(rightEl)) {
+            Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+            if (domRng[0] == null || domRng[1] == null) return "";
+            String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+            String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+            return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")"
+                    + " && is_surjective(" + fun + ", " + rangeSet + ")";
+        }
+        String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+        if (BxmlExpressionToAcsl.isIntervalBinaryExp(rightEl)) {
+            String right = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(rightEl, ctx);
+            return "belongs(" + left + ", " + right + ")";
+        }
+        String right = BxmlExpressionToAcsl.translate(rightEl, ctx);
+        // x : T — pertença (ex.: nn : NAT → belongs(nn, NAT)) — ACSL_Lib/set_functions/belongs.acsl
+        if (isPrimitiveTypeName(right)) {
+            if ("NAT".equals(right)) return "belongs(" + left + ", NAT)";
+            if ("BOOL".equals(right)) return "belongs(" + left + ", BOOL)";
+            if ("INT".equals(right)) return "belongs(" + left + ", INT)";
+            return "(" + left + " /* : " + right + " */)";
+        }
+        return "belongs(" + left + ", " + right + ")";
+    }
+
+    private static String translateEqualityComparison(
+            Element leftEl, Element rightEl, String left, String right, BxmlTranslateContext ctx) {
+        // <==> tem precedência menor que && em ACSL: sem parênteses envolvendo TODA a
+        // bicondicional, "A && flag != 0 <==> B && C" analisa como "(A && flag != 0) <==>
+        // (B && C)" em vez de "A && (flag != 0 <==> B) && C" quando este predicado é um
+        // conjunto de um Nary_Pred op='&' maior (ex.: invariante de loop). O operador nativo
+        // "<=>" do B (mais abaixo) já envolve o resultado inteiro; esta forma derivada
+        // ("v = bool(P)" -> "v <==> P") precisa do mesmo tratamento.
+        if ("Boolean_Exp".equals(rightEl.getLocalName())) {
+            Element predEl = BxmlDomUtils.firstNonAttrElementChild(rightEl);
+            if (predEl != null) {
+                return "((" + left + " != 0) <==> " + translatePred(predEl, ctx) + ")";
+            }
+        }
+        if ("Boolean_Exp".equals(leftEl.getLocalName())) {
+            Element predEl = BxmlDomUtils.firstNonAttrElementChild(leftEl);
+            if (predEl != null) {
+                return "((" + right + " != 0) <==> " + translatePred(predEl, ctx) + ")";
+            }
+        }
+        if ("Id".equals(leftEl.getLocalName())
+                && "Boolean_Literal".equals(rightEl.getLocalName())) {
+            return "("
+                    + BxmlExpressionToAcsl.translate(leftEl, ctx)
+                    + " == "
+                    + BxmlExpressionToAcsl.booleanLiteralRhsForVariable(
+                            leftEl, rightEl.getAttribute("value"), ctx)
+                    + ")";
+        }
+        if ("Id".equals(rightEl.getLocalName())
+                && "Boolean_Literal".equals(leftEl.getLocalName())) {
+            return "("
+                    + BxmlExpressionToAcsl.translate(rightEl, ctx)
+                    + " == "
+                    + BxmlExpressionToAcsl.booleanLiteralRhsForVariable(
+                            rightEl, leftEl.getAttribute("value"), ctx)
+                    + ")";
+        }
+        if (BxmlExpressionToAcsl.isListValued(leftEl, ctx)
+                && BxmlExpressionToAcsl.isRelationOrFunctionValued(rightEl, ctx)) {
+            return "(" + right + " == list_to_function(" + left + "))";
+        }
+        if (BxmlExpressionToAcsl.isListValued(rightEl, ctx)
+                && BxmlExpressionToAcsl.isRelationOrFunctionValued(leftEl, ctx)) {
+            return "(" + left + " == list_to_function(" + right + "))";
+        }
+        // V = %x.(x:D | {y|Q}) — lambda "mapa" valorado-em-conjunto (ver
+        // BxmlExpressionToAcsl#setValuedMapLambdaPointwiseEquality): V é a relação inteira, o
+        // corpo é só o valor pontual — precisa de \forall pontual, não igualdade nua.
+        String setValuedLambdaEq =
+                GeneralizedQuantifierTranslator.setValuedMapLambdaPointwiseEquality(leftEl, rightEl, ctx);
+        if (setValuedLambdaEq != null) return setValuedLambdaEq;
+        setValuedLambdaEq =
+                GeneralizedQuantifierTranslator.setValuedMapLambdaPointwiseEquality(rightEl, leftEl, ctx);
+        if (setValuedLambdaEq != null) return setValuedLambdaEq;
+        if (BxmlExpressionToAcsl.isSetValued(leftEl, ctx)
+                && BxmlExpressionToAcsl.isSetValued(rightEl, ctx)) {
+            return "equals(" + left + ", " + right + ")";
+        }
+        return "(" + left + " == " + right + ")";
     }
 
     /**
@@ -418,7 +421,7 @@ public final class BxmlPredicateToAcsl {
 
     private static String translateUnaryPred(Element up, BxmlTranslateContext ctx) {
         String op = up.getAttribute("op");
-        Element child = firstPredChild(up);
+        Element child = BxmlDomUtils.firstPredChild(up);
         if (child == null) return "";
         String c = translatePred(child, ctx);
         if ("not".equals(op)) return "!(" + c + ")";
@@ -427,7 +430,7 @@ public final class BxmlPredicateToAcsl {
 
     private static String translateBinaryPred(Element bp, BxmlTranslateContext ctx) {
         String op = bp.getAttribute("op");
-        Element[] pair = twoDirectPredChildren(bp);
+        Element[] pair = BxmlDomUtils.twoDirectPredChildren(bp);
         if (pair[0] == null || pair[1] == null) return "";
         String a = translatePred(pair[0], ctx);
         String b = translatePred(pair[1], ctx);
@@ -457,18 +460,6 @@ public final class BxmlPredicateToAcsl {
             };
         }
         return BxmlExpressionToAcsl.translate(codomainEl, ctx);
-    }
-
-    private static Element firstNonAttrElementChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            return e;
-        }
-        return null;
     }
 
     /** Segundo argumento de {@code is_seq_of}/{@code inclusion} (conjunto ACSL da lib, ex. {@code NAT}). */
@@ -524,7 +515,7 @@ public final class BxmlPredicateToAcsl {
 
         Element bodyEl = childByName(qp, "Body");
         if (bodyEl == null) return "/* quantified pred */";
-        Element bodyPred = firstPredChild(bodyEl);
+        Element bodyPred = BxmlDomUtils.firstPredChild(bodyEl);
         if (bodyPred == null) return "/* quantified pred */";
 
         if ("#".equals(type) && varNames.size() == 1) {
@@ -630,23 +621,9 @@ public final class BxmlPredicateToAcsl {
 
     /** Predicado completo de um {@code <Body>} de operação (ex.: dentro de {@code Quantified_Set}). */
     public static String translateBodyPredicate(Element body, BxmlTranslateContext ctx) {
-        Element p = firstPredChild(body);
+        Element p = BxmlDomUtils.firstPredChild(body);
         if (p == null) return "";
         return translatePred(p, ctx);
     }
 
-    private static Element[] twoDirectPredChildren(Element parent) {
-        Element[] out = new Element[2];
-        int k = 0;
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            out[k++] = e;
-            if (k == 2) break;
-        }
-        return out;
-    }
 }

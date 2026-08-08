@@ -31,333 +31,6 @@ public final class BxmlMachineVariables {
     private BxmlMachineVariables() {}
 
     /**
-     * Bloco {@code axiomatic NomeMaquina_variables { logic … }} ou vazio se não houver variáveis
-     * declaradas ({@code name} do {@code <Machine>}).
-     */
-    public static String formatAxiomaticBlock(Element machineEl, BxmlTranslateContext ctx) {
-        return formatAxiomaticBlock(machineEl, ctx, null, null, Map.of(), (Set<String>) null);
-    }
-
-    /**
-     * Bloco de variáveis da raiz com {@code reads dummy_ghost_<v>} nas variáveis abstratas listadas.
-     */
-    public static String formatAxiomaticBlockWithGhostDummyReads(
-            Element machineEl, BxmlTranslateContext ctx, Set<String> abstractVarNamesForGhostRead) {
-        return formatAxiomaticBlockWithGhostDummyReads(
-                machineEl, ctx, null, abstractVarNamesForGhostRead);
-    }
-
-    /**
-     * Como {@link #formatAxiomaticBlockWithGhostDummyReads(Element, BxmlTranslateContext, Set)} com
-     * ligação opcional {@code logic v = Raiz__v;} quando {@code rootAbstractForConcreteLink} não é
-     * nulo (implementação sem variáveis próprias).
-     */
-    public static String formatAxiomaticBlockWithGhostDummyReads(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractForConcreteLink,
-            Set<String> abstractVarNamesForGhostRead) {
-        return formatAxiomaticBlock(
-                machineEl,
-                ctx,
-                rootAbstractForConcreteLink,
-                null,
-                Map.of(),
-                abstractVarNamesForGhostRead,
-                Map.of());
-    }
-
-    /**
-     * Como {@link #formatAxiomaticBlockWithGhostDummyReads(Element, BxmlTranslateContext, String, Set)}
-     * com sobreposições de RHS por variável (ex.: quando o estado concreto vem de máquina importada
-     * via linking invariant e o nome C real é diferente de {@code Raiz__v}).
-     */
-    public static String formatAxiomaticBlockWithGhostDummyReads(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractForConcreteLink,
-            Set<String> abstractVarNamesForGhostRead,
-            Map<String, String> varRhsOverrides) {
-        return formatAxiomaticBlockWithGhostDummyReads(
-                machineEl, ctx, rootAbstractForConcreteLink, abstractVarNamesForGhostRead,
-                varRhsOverrides, null);
-    }
-
-    /**
-     * Como {@link #formatAxiomaticBlockWithGhostDummyReads(Element, BxmlTranslateContext, String,
-     * Set, Map)}, mas com {@code bxmlDirectory} para resolver a cardinalidade de conjuntos nomeados
-     * (deferred sets como {@code GOODS}) valorados em máquinas VISTAS (SEES) — ver
-     * {@link #lookupSetCardinalityFromValues(String, Element, BxmlTranslateContext, Path)}.
-     */
-    public static String formatAxiomaticBlockWithGhostDummyReads(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractForConcreteLink,
-            Set<String> abstractVarNamesForGhostRead,
-            Map<String, String> varRhsOverrides,
-            Path bxmlDirectory) {
-        return formatAxiomaticBlockWithGhostDummyReads(
-                machineEl, ctx, rootAbstractForConcreteLink, abstractVarNamesForGhostRead,
-                varRhsOverrides, bxmlDirectory, Set.of());
-    }
-
-    /**
-     * Como acima, mas omitindo por completo (sem {@code reads dummy_ghost_v} NEM declaração bare)
-     * variáveis em {@code excludeVariableNames} — usado para as variáveis que
-     * {@link #collapsedIntoImplementationVariableNames} identifica como devendo colapsar numa única
-     * definição array-backed na camada da implementação (sem gerar uma camada ghost paralela para
-     * elas): a declaração delas fica inteiramente a cargo do bloco da máquina fundida
-     * correspondente, com o nome ORIGINAL (sem colisão a resolver, já que esta camada não as declara).
-     */
-    public static String formatAxiomaticBlockWithGhostDummyReads(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractForConcreteLink,
-            Set<String> abstractVarNamesForGhostRead,
-            Map<String, String> varRhsOverrides,
-            Path bxmlDirectory,
-            Set<String> excludeVariableNames) {
-        return formatAxiomaticBlock(
-                machineEl,
-                ctx,
-                rootAbstractForConcreteLink,
-                null,
-                Map.of(),
-                abstractVarNamesForGhostRead,
-                varRhsOverrides == null ? Map.of() : varRhsOverrides,
-                bxmlDirectory,
-                excludeVariableNames);
-    }
-
-    /**
-     * Como {@link #formatAxiomaticBlock(Element, BxmlTranslateContext)}, mas para máquinas fundidas com
-     * {@code type="implementation"}: cada variável concreta fica {@code logic T v = Raiz__v;} alinhada ao
-     * contrato C ({@link #listImplementationAssignTargets}).
-     *
-     * @param rootAbstractMachineName nome da máquina abstrata raiz do ficheiro {@code .acsl} (ex. {@code SetTest});
-     *        ignorado se a máquina não for implementação
-     */
-    public static String formatAxiomaticBlock(
-            Element machineEl, BxmlTranslateContext ctx, String rootAbstractMachineName) {
-        return formatAxiomaticBlock(
-                machineEl, ctx, rootAbstractMachineName, null, Map.of(), (Set<String>) null);
-    }
-
-    /**
-     * Variáveis fundidas: implementação com {@code Raiz__v}, ou refinamento com {@code = return_valid_v(abs)}
-     * quando {@code refinementParent} não é nulo ({@link BxmlConnectionAcsl}).
-     */
-    public static String formatAxiomaticBlock(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractMachineName,
-            Element refinementParent,
-            Map<String, String> gluing) {
-        return formatAxiomaticBlock(
-                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing, null, null);
-    }
-
-    /**
-     * Como {@link #formatAxiomaticBlock(Element, BxmlTranslateContext, String, Element, Map)}, mas
-     * com {@code bxmlDirectory} para resolver a cardinalidade de conjuntos nomeados (deferred sets
-     * como {@code GOODS}) valorados em máquinas VISTAS (SEES) — ver
-     * {@link #lookupSetCardinalityFromValues(String, Element, BxmlTranslateContext, Path)}.
-     */
-    public static String formatAxiomaticBlock(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractMachineName,
-            Element refinementParent,
-            Map<String, String> gluing,
-            Path bxmlDirectory) {
-        return formatAxiomaticBlock(
-                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing, null,
-                Map.of(), bxmlDirectory);
-    }
-
-    private static String formatAxiomaticBlock(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractMachineName,
-            Element refinementParent,
-            Map<String, String> gluing,
-            Set<String> ghostDummyReadsForAbstractVars) {
-        return formatAxiomaticBlock(
-                machineEl, ctx, rootAbstractMachineName, refinementParent,
-                gluing, ghostDummyReadsForAbstractVars, Map.of());
-    }
-
-    private static String formatAxiomaticBlock(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractMachineName,
-            Element refinementParent,
-            Map<String, String> gluing,
-            Set<String> ghostDummyReadsForAbstractVars,
-            Map<String, String> varRhsOverrides) {
-        return formatAxiomaticBlock(
-                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing,
-                ghostDummyReadsForAbstractVars, varRhsOverrides, null);
-    }
-
-    private static String formatAxiomaticBlock(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractMachineName,
-            Element refinementParent,
-            Map<String, String> gluing,
-            Set<String> ghostDummyReadsForAbstractVars,
-            Map<String, String> varRhsOverrides,
-            Path bxmlDirectory) {
-        return formatAxiomaticBlock(
-                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing,
-                ghostDummyReadsForAbstractVars, varRhsOverrides, bxmlDirectory, Set.of());
-    }
-
-    private static String formatAxiomaticBlock(
-            Element machineEl,
-            BxmlTranslateContext ctx,
-            String rootAbstractMachineName,
-            Element refinementParent,
-            Map<String, String> gluing,
-            Set<String> ghostDummyReadsForAbstractVars,
-            Map<String, String> varRhsOverrides,
-            Path bxmlDirectory,
-            Set<String> excludeVariableNames) {
-        String machineName = machineEl.getAttribute("name");
-        if (machineName == null || machineName.isBlank()) return "";
-        boolean linkConcrete =
-                rootAbstractMachineName != null
-                        && !rootAbstractMachineName.isBlank()
-                        && (isImplementationMachine(machineEl) || isAbstractionMachine(machineEl));
-        boolean linkRefinement =
-                refinementParent != null && isRefinementMachine(machineEl);
-        Map<String, String> gl =
-                gluing == null ? Map.of() : gluing;
-        Map<String, String> types = inferVariableLogicTypes(machineEl, ctx);
-        if (excludeVariableNames != null && !excludeVariableNames.isEmpty()) {
-            types = new LinkedHashMap<>(types);
-            types.keySet().removeAll(excludeVariableNames);
-        }
-        return formatVariablesBlock(
-                machineName,
-                types,
-                linkConcrete ? rootAbstractMachineName.trim() : null,
-                linkRefinement,
-                refinementParent,
-                machineEl,
-                gl,
-                ghostDummyReadsForAbstractVars,
-                ctx,
-                varRhsOverrides,
-                bxmlDirectory);
-    }
-
-    private static String formatVariablesBlock(
-            String blockName,
-            Map<String, String> types,
-            String rootAbstractForImplRhs,
-            boolean refinementWithParent,
-            Element refinementParent,
-            Element refinementChild,
-            Map<String, String> gluing,
-            Set<String> ghostDummyReadsForAbstractVars,
-            BxmlTranslateContext ctx) {
-        return formatVariablesBlock(
-                blockName, types, rootAbstractForImplRhs, refinementWithParent,
-                refinementParent, refinementChild, gluing, ghostDummyReadsForAbstractVars,
-                ctx, Map.of(), null);
-    }
-
-    private static String formatVariablesBlock(
-            String blockName,
-            Map<String, String> types,
-            String rootAbstractForImplRhs,
-            boolean refinementWithParent,
-            Element refinementParent,
-            Element refinementChild,
-            Map<String, String> gluing,
-            Set<String> ghostDummyReadsForAbstractVars,
-            BxmlTranslateContext ctx,
-            Map<String, String> varRhsOverrides) {
-        return formatVariablesBlock(
-                blockName, types, rootAbstractForImplRhs, refinementWithParent,
-                refinementParent, refinementChild, gluing, ghostDummyReadsForAbstractVars,
-                ctx, varRhsOverrides, null);
-    }
-
-    private static String formatVariablesBlock(
-            String blockName,
-            Map<String, String> types,
-            String rootAbstractForImplRhs,
-            boolean refinementWithParent,
-            Element refinementParent,
-            Element refinementChild,
-            Map<String, String> gluing,
-            Set<String> ghostDummyReadsForAbstractVars,
-            BxmlTranslateContext ctx,
-            Map<String, String> varRhsOverrides,
-            Path bxmlDirectory) {
-        if (types.isEmpty()) return "";
-        StringBuilder sb = new StringBuilder();
-        sb.append("axiomatic ").append(blockName).append("_variables {\n");
-        for (Map.Entry<String, String> e : types.entrySet()) {
-            String var = e.getKey();
-            String logicType = e.getValue();
-            String implRhs = null;
-            if (rootAbstractForImplRhs != null
-                    && refinementChild != null
-                    && ctx != null
-                    && concreteVariableInvIsTotalArrowFunction(refinementChild, var)) {
-                logicType = relationLogicTypeToFunctionLogicType(logicType);
-                implRhs =
-                        implementationRhsTotalFunctionFromArray(
-                                rootAbstractForImplRhs.trim(), var, refinementChild, ctx, bxmlDirectory);
-            }
-            sb.append("    logic ").append(logicType).append(" ").append(var);
-            // reads dummy_ghost_v só quando a variável não tem definição concreta (= rhs):
-            // as duas cláusulas são mutuamente exclusivas em ACSL.
-            boolean hasConcreteRhs = rootAbstractForImplRhs != null;
-            if (!hasConcreteRhs
-                    && ghostDummyReadsForAbstractVars != null
-                    && ghostDummyReadsForAbstractVars.contains(var)) {
-                sb.append(" reads dummy_ghost_").append(var);
-            }
-            if (rootAbstractForImplRhs != null) {
-                String rhs;
-                String override = varRhsOverrides == null ? null : varRhsOverrides.get(var);
-                if (override != null) {
-                    rhs = override;
-                } else if (implRhs != null) {
-                    rhs = implRhs;
-                } else {
-                    rhs = rootAbstractForImplRhs + "__" + var;
-                    // "logic boolean v = <scalar _Bool C global>;" faz o Frama-C/WP falhar em
-                    // TODOS os provers (CVC5/Alt-Ergo/Z3) com "[Why3 Error] Type mismatch between
-                    // bool and int" — reproduzido isoladamente sem qualquer código B2ACSL: o
-                    // modelo de memória do WP não converte corretamente o valor lido do chunk C
-                    // para o tipo lógico "boolean" nessa forma de definição direta. Envolver a
-                    // mesma leitura num ternário ACSL (\true/\false) contorna o problema (a
-                    // conversão passa a ocorrer via if-then-else, que o WP já trata bem).
-                    if ("boolean".equals(logicType)) {
-                        rhs = "(" + rhs + " ? \\true : \\false)";
-                    }
-                }
-                sb.append(" = ").append(rhs);
-            } else if (refinementWithParent) {
-                Optional<String> abs =
-                        BxmlConnectionAcsl.linkingAbstractVariableName(
-                                refinementParent, refinementChild, var, gluing);
-                abs.ifPresent(
-                        a -> sb.append(" = return_valid_").append(var).append("(").append(a).append(")"));
-            }
-            sb.append(";\n");
-        }
-        sb.append("}\n");
-        return sb.toString();
-    }
-
-    /**
      * Ordem: declaração em {@code Abstract_Variables} / {@code Concrete_Variables}; tipos do
      * invariante sobrepõem-se ao {@code typref} quando há informação compatível.
      */
@@ -390,7 +63,7 @@ public final class BxmlMachineVariables {
     public static Map<String, String> inferConcreteConstantsLogicTypes(
             Element machineEl, BxmlTypeRegistry types) {
         LinkedHashMap<String, String> out = new LinkedHashMap<>();
-        Element block = firstChildElement(machineEl, "Concrete_Constants");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");
         if (block == null) return out;
         NodeList ch = block.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -627,7 +300,7 @@ public final class BxmlMachineVariables {
         List<Element> out = new ArrayList<>();
         String[] sections = {"Abstract_Variables", "Concrete_Variables"};
         for (String sec : sections) {
-            Element block = firstChildElement(machineEl, sec);
+            Element block = BxmlDomUtils.firstChildElement(machineEl, sec);
             if (block == null) continue;
             NodeList ch = block.getChildNodes();
             for (int i = 0; i < ch.getLength(); i++) {
@@ -646,592 +319,17 @@ public final class BxmlMachineVariables {
      * ({@code Concrete_Variables}) de cada máquina fundida com {@code type="implementation"},
      * no formato {@code NomeMaquinaAbstrata__nomeVar} (contrato C alinhado à raiz abstrata).
      */
-    /**
-     * Alvos {@code Raiz__c} para {@code assigns} quando uma operação na abstrata altera variáveis em
-     * {@code assignedAbstractNames}: propaga-se a ligação ao longo da cadeia fundida (refinamento →
-     * implementação) e escolhem-se variáveis concretas cujo invariante referencia nomes já ligados.
-     */
-    public static List<String> listConcreteAssignTargetsForAbstractMutation(
-            String rootAbstractMachineName,
-            Element rootMachine,
-            List<Element> mergedOrdered,
-            Set<String> assignedAbstractNames,
-            Map<String, String> gluing,
-            BxmlTranslateContext ctx) {
-        return listConcreteAssignTargetsForAbstractMutation(
-                rootAbstractMachineName, rootMachine, mergedOrdered, assignedAbstractNames, gluing,
-                ctx, null);
-    }
-
-    public static List<String> listConcreteAssignTargetsForAbstractMutation(
-            String rootAbstractMachineName,
-            Element rootMachine,
-            List<Element> mergedOrdered,
-            Set<String> assignedAbstractNames,
-            Map<String, String> gluing,
-            BxmlTranslateContext ctx,
-            Path bxmlDirectory) {
-        if (rootAbstractMachineName == null
-                || rootAbstractMachineName.isBlank()
-                || rootMachine == null
-                || mergedOrdered == null
-                || mergedOrdered.isEmpty()
-                || assignedAbstractNames == null
-                || assignedAbstractNames.isEmpty()) {
-            return List.of();
-        }
-        Map<String, String> g = gluing == null ? Map.of() : gluing;
-        Set<String> linked = new LinkedHashSet<>(assignedAbstractNames);
-        Element prev = rootMachine;
-        LinkedHashSet<String> targets = new LinkedHashSet<>();
-        for (Element mel : mergedOrdered) {
-            if (isRefinementMachine(mel)) {
-                for (String refined : BxmlConnectionAcsl.introducedStateVariableIds(mel)) {
-                    Optional<String> abs =
-                            BxmlConnectionAcsl.linkingAbstractVariableName(prev, mel, refined, g);
-                    if (abs.isPresent() && linked.contains(abs.get())) {
-                        linked.add(refined);
-                    }
-                }
-                prev = mel;
-            } else if (isImplementationMachine(mel)) {
-                Set<String> invIds = BxmlConnectionAcsl.invariantReferencedIdentifiers(mel);
-                if (!Collections.disjoint(invIds, linked)) {
-                    for (String c : BxmlConnectionAcsl.introducedStateVariableIds(mel)) {
-                        if (invIds.contains(c)) {
-                            String base = rootAbstractMachineName.trim() + "__" + c;
-                            String ranged =
-                                    implementationAssignTargetWithRange(
-                                            base, c, mel, ctx, bxmlDirectory);
-                            targets.add(ranged == null ? base : ranged);
-                        }
-                    }
-                }
-                prev = mel;
-            } else {
-                prev = mel;
-            }
-        }
-        return new ArrayList<>(targets);
-    }
-
-    /**
-     * Alvos {@code Raiz__v} da implementação para variáveis abstratas atribuídas na operação (modo
-     * directo, sem invariante na implementação).
-     */
-    public static List<String> listImplementationAssignTargetsForAbstractVariables(
-            String abstractMachineName,
-            List<Element> mergedMachineElements,
-            Set<String> abstractVariableNames,
-            BxmlTranslateContext ctx) {
-        if (abstractMachineName == null
-                || abstractMachineName.isBlank()
-                || abstractVariableNames == null
-                || abstractVariableNames.isEmpty()) {
-            return List.of();
-        }
-        String prefix = abstractMachineName.trim() + "__";
-        List<String> out = new ArrayList<>();
-        for (String target :
-                listImplementationAssignTargets(abstractMachineName, mergedMachineElements, ctx)) {
-            if (target == null || !target.startsWith(prefix)) {
-                continue;
-            }
-            String var = target.substring(prefix.length());
-            int bracket = var.indexOf('[');
-            if (bracket >= 0) {
-                var = var.substring(0, bracket);
-            }
-            if (abstractVariableNames.contains(var)) {
-                out.add(target);
-            }
-        }
-        return out;
-    }
-
-    /**
-     * Alvos {@code Raiz__v} para {@code assigns} na inicialização quando a implementação fundida não
-     * declara variáveis e reutiliza o estado da abstração ligado ao C ({@code logic v = Raiz__v;}).
-     */
-    public static List<String> listLinkedConcreteAssignTargetsForInitialisation(
-            String abstractMachineName,
-            Element abstractMachineEl,
-            List<Element> mergedMachineElements) {
-        return listLinkedConcreteAssignTargetsForInitialisation(
-                abstractMachineName, abstractMachineEl, mergedMachineElements, null);
-    }
-
-    public static List<String> listLinkedConcreteAssignTargetsForInitialisation(
-            String abstractMachineName,
-            Element abstractMachineEl,
-            List<Element> mergedMachineElements,
-            BxmlTranslateContext ctx) {
-        return listLinkedConcreteAssignTargetsForInitialisation(
-                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx, Map.of());
-    }
-
-    public static List<String> listLinkedConcreteAssignTargetsForInitialisation(
-            String abstractMachineName,
-            Element abstractMachineEl,
-            List<Element> mergedMachineElements,
-            BxmlTranslateContext ctx,
-            Map<String, String> varRhsOverrides) {
-        if (abstractMachineName == null
-                || abstractMachineName.isBlank()
-                || abstractMachineEl == null
-                || !anyImplementationUsesAbstractVariablesOnly(
-                        abstractMachineEl, mergedMachineElements)) {
-            return List.of();
-        }
-        Set<String> declared = declaredVariableNames(abstractMachineEl);
-        Set<String> assigned =
-                GhostOperationsCiGenerator.variablesAssignedInInitialisation(
-                        abstractMachineEl, declared);
-        if (assigned.isEmpty()) {
-            return List.of();
-        }
-        // Skip vars whose C name comes from an imported machine (covered by importedAssigns)
-        if (varRhsOverrides != null && !varRhsOverrides.isEmpty()) {
-            Set<String> filtered = new LinkedHashSet<>();
-            for (String v : assigned) {
-                if (v != null && !varRhsOverrides.containsKey(v.trim())) filtered.add(v);
-            }
-            assigned = filtered;
-        }
-        if (assigned.isEmpty()) return List.of();
-        if (ctx == null) {
-            return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, assigned);
-        }
-        String prefix = abstractMachineName.trim() + "__";
-        List<String> out = new ArrayList<>();
-        for (String v : assigned) {
-            if (v == null || v.isBlank()) continue;
-            String base = prefix + v.trim();
-            String ranged = implementationAssignTargetWithRange(base, v.trim(), abstractMachineEl, ctx);
-            out.add(ranged == null ? base : ranged);
-        }
-        return out;
-    }
-
-    /**
-     * Alvos {@code Raiz__v} para {@code assigns} numa operação quando a implementação fundida não
-     * declara variáveis e a operação altera variáveis da abstração ligadas ao C.
-     */
-    public static List<String> listLinkedConcreteAssignTargetsForOperation(
-            String abstractMachineName,
-            Element abstractMachineEl,
-            List<Element> mergedMachineElements,
-            Set<String> assignedVariableNames) {
-        return listLinkedConcreteAssignTargetsForOperation(
-                abstractMachineName, abstractMachineEl, mergedMachineElements, assignedVariableNames, null);
-    }
-
-    public static List<String> listLinkedConcreteAssignTargetsForOperation(
-            String abstractMachineName,
-            Element abstractMachineEl,
-            List<Element> mergedMachineElements,
-            Set<String> assignedVariableNames,
-            BxmlTranslateContext ctx) {
-        if (abstractMachineName == null
-                || abstractMachineName.isBlank()
-                || abstractMachineEl == null
-                || assignedVariableNames == null
-                || assignedVariableNames.isEmpty()
-                || !anyImplementationUsesAbstractVariablesOnly(
-                        abstractMachineEl, mergedMachineElements)) {
-            return List.of();
-        }
-        Set<String> declared = declaredVariableNames(abstractMachineEl);
-        Set<String> filtered = new LinkedHashSet<>();
-        for (String v : assignedVariableNames) {
-            if (v != null && declared.contains(v.trim())) {
-                filtered.add(v.trim());
-            }
-        }
-        if (ctx == null) {
-            return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, filtered);
-        }
-        String prefix = abstractMachineName.trim() + "__";
-        List<String> out = new ArrayList<>();
-        for (String v : filtered) {
-            String base = prefix + v;
-            String ranged = implementationAssignTargetWithRange(base, v, abstractMachineEl, ctx);
-            out.add(ranged == null ? base : ranged);
-        }
-        return out;
-    }
-
-    /**
-     * Como {@link #listLinkedConcreteAssignTargetsForOperation(String, Element, List, Set, BxmlTranslateContext)},
-     * mas omite variáveis cujo estado C real provém de máquina importada (já cobertas por
-     * {@code importedOpAssigns}), conforme indicado pelo mapa {@code varRhsOverrides}.
-     */
-    public static List<String> listLinkedConcreteAssignTargetsForOperation(
-            String abstractMachineName,
-            Element abstractMachineEl,
-            List<Element> mergedMachineElements,
-            Set<String> assignedVariableNames,
-            BxmlTranslateContext ctx,
-            Map<String, String> varRhsOverrides) {
-        if (varRhsOverrides == null || varRhsOverrides.isEmpty()) {
-            return listLinkedConcreteAssignTargetsForOperation(
-                    abstractMachineName, abstractMachineEl, mergedMachineElements,
-                    assignedVariableNames, ctx);
-        }
-        if (abstractMachineName == null
-                || abstractMachineName.isBlank()
-                || abstractMachineEl == null
-                || assignedVariableNames == null
-                || assignedVariableNames.isEmpty()
-                || !anyImplementationUsesAbstractVariablesOnly(
-                        abstractMachineEl, mergedMachineElements)) {
-            return List.of();
-        }
-        Set<String> declared = declaredVariableNames(abstractMachineEl);
-        Set<String> filtered = new LinkedHashSet<>();
-        for (String v : assignedVariableNames) {
-            if (v != null && declared.contains(v.trim()) && !varRhsOverrides.containsKey(v.trim())) {
-                filtered.add(v.trim());
-            }
-        }
-        if (filtered.isEmpty()) return List.of();
-        if (ctx == null) {
-            return linkedConcreteAssignTargetsForVariableNames(abstractMachineName, filtered);
-        }
-        String prefix = abstractMachineName.trim() + "__";
-        List<String> out = new ArrayList<>();
-        for (String v : filtered) {
-            String base = prefix + v;
-            String ranged = implementationAssignTargetWithRange(base, v, abstractMachineEl, ctx);
-            out.add(ranged == null ? base : ranged);
-        }
-        return out;
-    }
-
-    private static List<String> linkedConcreteAssignTargetsForVariableNames(
-            String abstractMachineName, Set<String> variableNames) {
-        if (abstractMachineName == null
-                || abstractMachineName.isBlank()
-                || variableNames == null
-                || variableNames.isEmpty()) {
-            return List.of();
-        }
-        String prefix = abstractMachineName.trim() + "__";
-        List<String> out = new ArrayList<>();
-        for (String v : variableNames) {
-            if (v != null && !v.isBlank()) {
-                out.add(prefix + v.trim());
-            }
-        }
-        return out;
-    }
-
-    /**
-     * Alvos {@code assigns} da inicialização: variáveis concretas da implementação fundida, ou
-     * {@code Raiz__v} para variáveis da abstração atribuídas na init quando a implementação não
-     * declara estado próprio.
-     */
-    public static List<String> listInitialisationAssignTargets(
-            String abstractMachineName,
-            Element abstractMachineEl,
-            List<Element> mergedMachineElements,
-            BxmlTranslateContext ctx) {
-        return listInitialisationAssignTargets(
-                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx, Map.of());
-    }
-
-    public static List<String> listInitialisationAssignTargets(
-            String abstractMachineName,
-            Element abstractMachineEl,
-            List<Element> mergedMachineElements,
-            BxmlTranslateContext ctx,
-            Map<String, String> varRhsOverrides) {
-        return listInitialisationAssignTargets(
-                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx, varRhsOverrides,
-                null);
-    }
-
-    public static List<String> listInitialisationAssignTargets(
-            String abstractMachineName,
-            Element abstractMachineEl,
-            List<Element> mergedMachineElements,
-            BxmlTranslateContext ctx,
-            Map<String, String> varRhsOverrides,
-            Path bxmlDirectory) {
-        List<String> fromImpl =
-                listImplementationAssignTargets(
-                        abstractMachineName, mergedMachineElements, ctx, bxmlDirectory);
-        if (!fromImpl.isEmpty()) {
-            return fromImpl;
-        }
-        return listLinkedConcreteAssignTargetsForInitialisation(
-                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx,
-                varRhsOverrides == null ? Map.of() : varRhsOverrides);
-    }
-
-    public static List<String> listImplementationAssignTargets(
-            String abstractMachineName, List<Element> mergedMachineElements) {
-        return listImplementationAssignTargets(abstractMachineName, mergedMachineElements, null);
-    }
-
-    /**
-     * Como {@link #listImplementationAssignTargets(String, List)}, mas quando a variável concreta
-     * é array (domínio de função total com intervalo), gera alvo com fatia ACSL:
-     * {@code Raiz__v[low .. high]}.
-     */
-    public static List<String> listImplementationAssignTargets(
-            String abstractMachineName,
-            List<Element> mergedMachineElements,
-            BxmlTranslateContext ctx) {
-        return listImplementationAssignTargets(abstractMachineName, mergedMachineElements, ctx, null);
-    }
-
-    public static List<String> listImplementationAssignTargets(
-            String abstractMachineName,
-            List<Element> mergedMachineElements,
-            BxmlTranslateContext ctx,
-            Path bxmlDirectory) {
-        if (abstractMachineName == null || abstractMachineName.isBlank()) return List.of();
-        List<String> out = new ArrayList<>();
-        for (Element mel : mergedMachineElements) {
-            if (!isImplementationMachine(mel)) continue;
-            Element concrete = firstChildElement(mel, "Concrete_Variables");
-            if (concrete == null) continue;
-            NodeList ch = concrete.getChildNodes();
-            for (int i = 0; i < ch.getLength(); i++) {
-                Node n = ch.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element e = (Element) n;
-                if ("Attr".equals(e.getLocalName())) continue;
-                if (!"Id".equals(e.getLocalName())) continue;
-                String v = e.getAttribute("value");
-                if (v != null && !v.isBlank()) {
-                    String base = abstractMachineName + "__" + v;
-                    String ranged =
-                            implementationAssignTargetWithRange(base, v, mel, ctx, bxmlDirectory);
-                    out.add(ranged == null ? base : ranged);
-                }
-            }
-        }
-        return out;
-    }
-
-    /**
-     * Qualifica um nome de variável para uso em {@code loop assigns}: se for uma variável declarada
-     * na máquina abstrata, retorna {@code machineName__varName} (com {@code [range]} para arrays);
-     * caso contrário (variável local {@code VAR_IN} ou parâmetro de saída), retorna o nome como-está.
-     */
-    public static String qualifyLoopAssignTarget(
-            String varName, String machineName, Element abstractMachineEl, BxmlTranslateContext ctx) {
-        return qualifyLoopAssignTarget(varName, machineName, abstractMachineEl, ctx, null);
-    }
-
-    /**
-     * Como acima, mas com {@code bxmlDirectory}: quando o domínio do array é um conjunto nomeado
-     * valorado só numa máquina VISTA (SEES) — ex. {@code PERSON} valorado em {@code ContextI}, visto
-     * por {@code RegisterI} — resolve o intervalo exato ({@code low .. high}) em vez de cair para
-     * {@code [..]} (correto para WP, mas menos legível que a faixa explícita já usada no {@code
-     * assigns} da função).
-     */
-    public static String qualifyLoopAssignTarget(
-            String varName, String machineName, Element abstractMachineEl, BxmlTranslateContext ctx,
-            Path bxmlDirectory) {
-        return qualifyLoopAssignTarget(varName, machineName, abstractMachineEl, null, ctx, bxmlDirectory);
-    }
-
-    /**
-     * Como acima, mas também recebe a máquina de IMPLEMENTAÇÃO real ({@link
-     * #enclosingMachineElement}) — necessária para variáveis concretas {@code _i} (ex. {@code
-     * player_islands_i}), declaradas SÓ na implementação (a sua {@code Concrete_Variables} própria),
-     * nunca em {@code abstractMachineEl}. Sem isto, {@code declaredVariableNames(abstractMachineEl)}
-     * nunca as contém e o nome sai NÃO-qualificado (sem prefixo {@code machineName__}, sem faixa) —
-     * o Frama-C tolera isso (impreciso) para arrays 1D, mas rejeita de vez para 2D genuíno ("not an
-     * assignable left value"). {@code implementationMachineEl} também substitui
-     * {@code abstractMachineEl} como fonte da faixa ({@link #implementationAssignTargetWithRange}
-     * procura o tipo {@code -->} no {@code Invariant} PRÓPRIO do elemento recebido — só a
-     * implementação declara o tipo das suas próprias variáveis concretas).
-     */
-    public static String qualifyLoopAssignTarget(
-            String varName, String machineName, Element abstractMachineEl, Element implementationMachineEl,
-            BxmlTranslateContext ctx, Path bxmlDirectory) {
-        if (varName == null || varName.isBlank() || machineName == null || abstractMachineEl == null) {
-            return varName;
-        }
-        boolean declaredAbstract = declaredVariableNames(abstractMachineEl).contains(varName);
-        boolean declaredConcrete =
-                implementationMachineEl != null
-                        && declaredVariableNames(implementationMachineEl).contains(varName);
-        if (!declaredAbstract && !declaredConcrete) {
-            return varName;
-        }
-        String base = machineName.trim() + "__" + varName;
-        // Tenta a implementação PRIMEIRO (variáveis concretas só-_i, ex. player_islands_i, cujo
-        // tipo -->  só existe no Invariant da implementação), mas cai para a abstrata se não achar
-        // — variáveis COLAPSADAS (mesmo nome abstrata/concreta, sem Concrete_Variables própria, ex.
-        // filling_array's "Array") têm o seu tipo --> SÓ no Invariant abstrato; preferir SEMPRE a
-        // implementação (uma versão anterior deste fix fazia isso) as deixava sem faixa nenhuma
-        // (implementationAssignTargetWithRange retornava null por não achar Array no Invariant da
-        // implementação) — "loop assigns array__Array" sem "[0..NN]", que o Frama-C rejeita para
-        // arrays reais ("not an assignable left value"). Descoberto ao rodar filling_array pela
-        // primeira vez nesta sessão (regressão real do fix de player_islands_i/RulerOfTheSeas).
-        String ranged = implementationMachineEl != null
-                ? implementationAssignTargetWithRange(base, varName, implementationMachineEl, ctx, bxmlDirectory)
-                : null;
-        if (ranged == null) {
-            ranged = implementationAssignTargetWithRange(base, varName, abstractMachineEl, ctx, bxmlDirectory);
-        }
-        return ranged != null ? ranged : base;
-    }
-
-    private static String implementationAssignTargetWithRange(
-            String baseTarget, String varName, Element implMachineEl, BxmlTranslateContext ctx) {
-        return implementationAssignTargetWithRange(baseTarget, varName, implMachineEl, ctx, null);
-    }
-
-    private static String implementationAssignTargetWithRange(
-            String baseTarget,
-            String varName,
-            Element implMachineEl,
-            BxmlTranslateContext ctx,
-            Path bxmlDirectory) {
-        if (baseTarget == null || varName == null || implMachineEl == null || ctx == null) {
-            return null;
-        }
-        Element arrow = concreteVariableFunctionArrowElement(implMachineEl, varName);
-        if (arrow == null) {
-            return null;
-        }
-        Element domain = BxmlExpressionToAcsl.twoDirectExpChildren(arrow)[0];
-        if (isCompoundProductExp(domain)) {
-            // Domínio composto (matriz característica 2D, ex. player_islands_i : PLAYER*ISLAND -->
-            // BOOL, ver implementationRhsTotalFunctionFromArray) — "assigns X[..];" é sintaxe de UMA
-            // dimensão só; para um array C genuinamente 2D o kernel rejeita com "not an assignable
-            // left value" (não infere a segunda dimensão implicitamente). "[..][..]" (ambas as
-            // dimensões por extenso) é o análogo direto do "[..]" de 1D já usado abaixo — mesma
-            // equivalência WP já confirmada para arrays de tamanho fixo (ver
-            // project_assigns_range_seen_machine), só precisa de UM "[..]" por dimensão.
-            return baseTarget + "[..][..]";
-        }
-        String range = arrayDomainRangeAcsl(arrow, ctx);
-        if (range == null || range.isBlank()) {
-            // Domínio é um conjunto nomeado (Id) — tenta resolver via <Values> da implementação
-            // (ou, se ausente, das máquinas VISTAS — ver resolveNamedSetDomainRange).
-            range = resolveNamedSetDomainRange(arrow, implMachineEl, ctx, bxmlDirectory);
-        }
-        if (range == null || range.isBlank()) {
-            return baseTarget + "[..]";
-        }
-        return baseTarget + "[" + range + "]";
-    }
-
-    /** Intervalo do domínio de {@code -->} (ex. {@code 0..maximum} -> {@code 0 .. maximum}). */
-    private static String arrayDomainRangeAcsl(Element arrowEl, BxmlTranslateContext ctx) {
-        if (arrowEl == null || ctx == null) {
-            return null;
-        }
-        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
-        if (domRng[0] == null) {
-            return null;
-        }
-        Element domain = domRng[0];
-        if (!BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
-            return null;
-        }
-        Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
-        if (lr[0] == null || lr[1] == null) {
-            return null;
-        }
-        String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
-        String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
-        if (low.isBlank() || high.isBlank()) {
-            return null;
-        }
-        return low + " .. " + high;
-    }
-
-    /**
-     * Quando o domínio da seta {@code -->} é um conjunto nomeado (elemento {@code Id}),
-     * procura a sua valoração na secção {@code <Values>} da máquina de implementação e,
-     * se for um intervalo literal ({@code Binary_Exp op='..'}), retorna {@code "low .. high"}.
-     */
-    private static String resolveNamedSetDomainRange(
-            Element arrowEl, Element implMachineEl, BxmlTranslateContext ctx) {
-        return resolveNamedSetDomainRange(arrowEl, implMachineEl, ctx, null);
-    }
-
-    /**
-     * Como acima, mas quando o conjunto nomeado não está valorado na própria {@code implMachineEl}
-     * (ex. {@code GOODS} visto por {@code Price}/{@code Price_i} mas valorado em {@code Goods_i}),
-     * procura também nas máquinas VISTAS (SEES) — mesmo problema e mesma solução de
-     * {@link #lookupSetCardinalityFromValues(String, Element, BxmlTranslateContext, Path)}, mas
-     * devolvendo o intervalo {@code "low .. high"} em vez da cardinalidade.
-     */
-    private static String resolveNamedSetDomainRange(
-            Element arrowEl, Element implMachineEl, BxmlTranslateContext ctx, Path bxmlDirectory) {
-        if (arrowEl == null || implMachineEl == null || ctx == null) return null;
-        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
-        if (domRng[0] == null) return null;
-        Element domain = domRng[0];
-        if (!"Id".equals(domain.getLocalName())) return null;
-        String setName = domain.getAttribute("value");
-        if (setName == null || setName.isBlank()) return null;
-
-        String local = rangeFromOwnValues(setName, implMachineEl, ctx);
-        if (local != null || bxmlDirectory == null) {
-            return local;
-        }
-        for (String seenName : BxmlSetsTranslator.listReferencedMachineNames(implMachineEl)) {
-            Element seenEl = BxmlSetsTranslator.findImplementationMachineElement(seenName, bxmlDirectory);
-            if (seenEl == null) continue;
-            String found = rangeFromOwnValues(setName, seenEl, ctx);
-            if (found != null) return found;
-        }
-        return null;
-    }
-
-    private static String rangeFromOwnValues(String setName, Element machineEl, BxmlTranslateContext ctx) {
-        Element valuesEl = firstChildElement(machineEl, "Values");
-        if (valuesEl == null) return null;
-
-        // Procura <Valuation ident='setName'>
-        NodeList nl = valuesEl.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            org.w3c.dom.Node n = nl.item(i);
-            if (n.getNodeType() != org.w3c.dom.Node.ELEMENT_NODE) continue;
-            Element valEl = (Element) n;
-            if (!"Valuation".equals(valEl.getLocalName())) continue;
-            if (!setName.equals(valEl.getAttribute("ident"))) continue;
-
-            // Pega o primeiro filho não-Attr (a expressão de valor)
-            NodeList children = valEl.getChildNodes();
-            for (int j = 0; j < children.getLength(); j++) {
-                org.w3c.dom.Node cn = children.item(j);
-                if (cn.getNodeType() != org.w3c.dom.Node.ELEMENT_NODE) continue;
-                Element valExpr = (Element) cn;
-                if ("Attr".equals(valExpr.getLocalName())) continue;
-                if (!BxmlExpressionToAcsl.isIntervalBinaryExp(valExpr)) return null;
-                Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(valExpr);
-                if (lr[0] == null || lr[1] == null) return null;
-                String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
-                String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
-                if (low.isBlank() || high.isBlank()) return null;
-                return low + " .. " + high;
-            }
-        }
-        return null;
-    }
-
-    private static boolean isImplementationMachine(Element machineEl) {
+    static boolean isImplementationMachine(Element machineEl) {
         String t = machineEl.getAttribute("type");
         return t != null && "implementation".equalsIgnoreCase(t.trim());
     }
 
-    private static boolean isAbstractionMachine(Element machineEl) {
+    static boolean isAbstractionMachine(Element machineEl) {
         String t = machineEl.getAttribute("type");
         return t != null && "abstraction".equalsIgnoreCase(t.trim());
     }
 
-    private static boolean isRefinementMachine(Element machineEl) {
+    static boolean isRefinementMachine(Element machineEl) {
         String t = machineEl.getAttribute("type");
         return t != null && "refinement".equalsIgnoreCase(t.trim());
     }
@@ -1274,7 +372,7 @@ public final class BxmlMachineVariables {
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Element e = (Element) n;
             if (!"Invariant".equals(e.getLocalName())) continue;
-            Element pred = firstPredChild(e);
+            Element pred = BxmlDomUtils.firstPredChild(e);
             if (pred != null) walkPredForVariableTypes(pred, types, acc);
         }
         return acc;
@@ -1339,7 +437,7 @@ public final class BxmlMachineVariables {
 
     /** Argumento de {@code iseq(T)} no B → {@code \list<…>} com o tipo elemento de {@code T}. */
     private static String acslListTypeForIseqUnary(Element unaryIseq, BxmlTypeRegistry types) {
-        Element arg = firstNonAttrElementChild(unaryIseq);
+        Element arg = BxmlDomUtils.firstNonAttrElementChild(unaryIseq);
         if (arg != null && "Id".equals(arg.getLocalName())) {
             String rhs = arg.getAttribute("value");
             if (isNamedBaseType(rhs)) {
@@ -1347,18 +445,6 @@ public final class BxmlMachineVariables {
             }
         }
         return "\\list<integer>";
-    }
-
-    private static Element firstNonAttrElementChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element el = (Element) n;
-            if ("Attr".equals(el.getLocalName())) continue;
-            return el;
-        }
-        return null;
     }
 
     private static String normalizeComparisonOp(String op) {
@@ -1374,29 +460,6 @@ public final class BxmlMachineVariables {
             case "NAT", "INTEGER", "INT", "BOOL" -> true;
             default -> false;
         };
-    }
-
-    private static Element firstPredChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            return e;
-        }
-        return null;
-    }
-
-    private static Element firstChildElement(Element parent, String localName) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) return e;
-        }
-        return null;
     }
 
     /**
@@ -1433,7 +496,7 @@ public final class BxmlMachineVariables {
         if (precondition == null || declaredSetNames == null || declaredSetNames.isEmpty()) {
             return out;
         }
-        collectDeferredSetTypedParamNames(firstPredChild(precondition), declaredSetNames, out);
+        collectDeferredSetTypedParamNames(BxmlDomUtils.firstPredChild(precondition), declaredSetNames, out);
         return out;
     }
 
@@ -1442,7 +505,7 @@ public final class BxmlMachineVariables {
         if (pred == null) return;
         String ln = pred.getLocalName();
         if ("Exp_Comparison".equals(ln)) {
-            String op = normalizeColonLikeOp(pred.getAttribute("op"));
+            String op = BxmlDomUtils.normalizeColonLikeOp(pred.getAttribute("op"));
             if (":".equals(op)) {
                 Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
                 if (pair[0] != null
@@ -1467,11 +530,11 @@ public final class BxmlMachineVariables {
             return;
         }
         if ("Unary_Pred".equals(ln)) {
-            collectDeferredSetTypedParamNames(firstPredChild(pred), enumeratedSetNames, out);
+            collectDeferredSetTypedParamNames(BxmlDomUtils.firstPredChild(pred), enumeratedSetNames, out);
             return;
         }
         if ("Binary_Pred".equals(ln)) {
-            Element[] pair = twoDirectPredChildren(pred);
+            Element[] pair = BxmlDomUtils.twoDirectPredChildren(pred);
             collectDeferredSetTypedParamNames(pair[0], enumeratedSetNames, out);
             collectDeferredSetTypedParamNames(pair[1], enumeratedSetNames, out);
         }
@@ -1481,7 +544,7 @@ public final class BxmlMachineVariables {
      * B: {@code v : Dom --> Cod} num invariante → tipo {@code logic} como função total ({@code
      * Function_*_*}) em vez de {@code Relation_*_*}.
      */
-    private static String relationLogicTypeToFunctionLogicType(String relationLogicType) {
+    static String relationLogicTypeToFunctionLogicType(String relationLogicType) {
         if (relationLogicType == null || relationLogicType.isBlank()) {
             return "Function_int_int";
         }
@@ -1493,20 +556,20 @@ public final class BxmlMachineVariables {
         };
     }
 
-    private static boolean concreteVariableInvIsTotalArrowFunction(Element implMachineEl, String varName) {
+    static boolean concreteVariableInvIsTotalArrowFunction(Element implMachineEl, String varName) {
         return concreteVariableFunctionArrowElement(implMachineEl, varName) != null;
     }
 
     /** {@code Binary_Exp} {@code -->} que tipa {@code varName}, ou null. */
-    private static Element concreteVariableFunctionArrowElement(Element implMachineEl, String varName) {
+    static Element concreteVariableFunctionArrowElement(Element implMachineEl, String varName) {
         if (implMachineEl == null || varName == null || varName.isBlank()) {
             return null;
         }
-        Element inv = firstChildElement(implMachineEl, "Invariant");
+        Element inv = BxmlDomUtils.firstChildElement(implMachineEl, "Invariant");
         if (inv == null) {
             return null;
         }
-        Element pred = firstPredChild(inv);
+        Element pred = BxmlDomUtils.firstPredChild(inv);
         return findFunctionArrowExpForVariableMembership(pred, varName);
     }
 
@@ -1516,7 +579,7 @@ public final class BxmlMachineVariables {
         }
         String ln = pred.getLocalName();
         if ("Exp_Comparison".equals(ln)) {
-            String op = normalizeColonLikeOp(pred.getAttribute("op"));
+            String op = BxmlDomUtils.normalizeColonLikeOp(pred.getAttribute("op"));
             if (":".equals(op)) {
                 Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(pred);
                 if (pair[0] != null
@@ -1544,10 +607,10 @@ public final class BxmlMachineVariables {
             return null;
         }
         if ("Unary_Pred".equals(ln)) {
-            return findFunctionArrowExpForVariableMembership(firstPredChild(pred), varName);
+            return findFunctionArrowExpForVariableMembership(BxmlDomUtils.firstPredChild(pred), varName);
         }
         if ("Binary_Pred".equals(ln)) {
-            Element[] pair = twoDirectPredChildren(pred);
+            Element[] pair = BxmlDomUtils.twoDirectPredChildren(pred);
             if (pair[0] != null) {
                 Element f = findFunctionArrowExpForVariableMembership(pair[0], varName);
                 if (f != null) {
@@ -1561,40 +624,12 @@ public final class BxmlMachineVariables {
         return null;
     }
 
-    private static String normalizeColonLikeOp(String raw) {
-        if (raw == null) {
-            return "";
-        }
-        String o = raw.trim();
-        if (":".equals(o)) {
-            return ":";
-        }
-        return o;
-    }
-
-    private static Element[] twoDirectPredChildren(Element parent) {
-        Element[] out = new Element[2];
-        int k = 0;
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            out[k++] = e;
-            if (k == 2) {
-                break;
-            }
-        }
-        return out;
-    }
-
     /**
      * Lado direito da ligação à implementação C: array {@code Raiz__v} como função (índices 0..n-1).
      * Usa {@code array_to_function_bool} para domínios booleanos e {@code array_to_function_int}
      * para inteiros. O tamanho é derivado do domínio da seta {@code -->} ou da secção VALUES.
      */
-    private static String implementationRhsTotalFunctionFromArray(
+    static String implementationRhsTotalFunctionFromArray(
             String rootAbstractName,
             String varName,
             Element implMachineEl,
@@ -1636,7 +671,7 @@ public final class BxmlMachineVariables {
      * {@code *} nu (que aqui significaria multiplicação aritmética) — ver
      * {@link BxmlExpressionToAcsl#isCartesianProduct}.
      */
-    private static boolean isCompoundProductExp(Element e) {
+    static boolean isCompoundProductExp(Element e) {
         return e != null
                 && "Binary_Exp".equals(e.getLocalName())
                 && BxmlExpressionToAcsl.isCartesianProduct(e.getAttribute("op"));
@@ -1687,11 +722,6 @@ public final class BxmlMachineVariables {
         return null;
     }
 
-    /** Cardinalidade do intervalo/domínio de {@code -->} (ex. {@code 0..maximum} → {@code (maximum + 1)}). */
-    private static String arrayDomainCardinalityAcsl(Element arrowEl, BxmlTranslateContext ctx) {
-        return arrayDomainCardinalityAcsl(arrowEl, ctx, null, null);
-    }
-
     /** Verdadeiro se o codomínio da seta {@code -->} for {@code BOOL}. */
     private static boolean arrowCodomainIsBool(Element arrowEl) {
         if (arrowEl == null) return false;
@@ -1718,7 +748,7 @@ public final class BxmlMachineVariables {
                 Element val = (Element) vn;
                 if (!"Valuation".equals(val.getLocalName())) continue;
                 if (!setName.equals(val.getAttribute("ident"))) continue;
-                Element exp = firstNonAttrElementChild(val);
+                Element exp = BxmlDomUtils.firstNonAttrElementChild(val);
                 if (exp != null && BxmlExpressionToAcsl.isIntervalBinaryExp(exp)) {
                     Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(exp);
                     if (lr[0] != null && lr[1] != null) {
@@ -1742,7 +772,7 @@ public final class BxmlMachineVariables {
      * por resolver e o chamador cai no fallback errado de tamanho {@code 1} — ver
      * {@link #implementationRhsTotalFunctionFromArray}.
      */
-    private static String lookupSetCardinalityFromValues(String setName, Element machineEl,
+    static String lookupSetCardinalityFromValues(String setName, Element machineEl,
             BxmlTranslateContext ctx, Path bxmlDirectory) {
         String local = lookupSetCardinalityFromOwnValues(setName, machineEl, ctx);
         if (local != null || bxmlDirectory == null || machineEl == null) {
@@ -1800,7 +830,7 @@ public final class BxmlMachineVariables {
         }
         if (importedVarToMachine.isEmpty()) return Map.of();
 
-        Element invEl = firstChildElement(implEl, "Invariant");
+        Element invEl = BxmlDomUtils.firstChildElement(implEl, "Invariant");
         if (invEl == null) return Map.of();
 
         Map<String, String> result = new LinkedHashMap<>();
@@ -1867,7 +897,7 @@ public final class BxmlMachineVariables {
         // chama) não deve gerar "assigns X;" duplicado.
         LinkedHashSet<String> result = new LinkedHashSet<>();
         for (String name : importedMachineNames) {
-            result.addAll(loadConcreteAssignsForImportedMachine(name, bxmlDirectory));
+            result.addAll(CrossMachineBxmlLoader.loadConcreteAssignsForImportedMachine(name, bxmlDirectory));
         }
         return List.copyOf(result);
     }
@@ -1936,7 +966,7 @@ public final class BxmlMachineVariables {
         LinkedHashSet<String> out = new LinkedHashSet<>();
         out.addAll(
                 toSeparatedPointerRanges(
-                        listImplementationAssignTargets(
+                        ConcreteAssignTargetResolver.listImplementationAssignTargets(
                                 machineName, mergedMachineElements, ctx, bxmlDirectory)));
         if (relatedMachineNames != null && !relatedMachineNames.isEmpty() && bxmlDirectory != null) {
             out.addAll(
@@ -1969,11 +999,11 @@ public final class BxmlMachineVariables {
 
         if (importedMachineNames != null) {
             for (String machineName : importedMachineNames) {
-                List<String> machineAssigns = loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory);
-                Set<String> opsWithDirectRand = loadOperationNamesWithBecomesIn(machineName, bxmlDirectory);
-                Set<String> opsWithTransitiveRand = loadOperationNamesCallingRandOps(machineName, bxmlDirectory);
+                List<String> machineAssigns = CrossMachineBxmlLoader.loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory);
+                Set<String> opsWithDirectRand = CrossMachineBxmlLoader.loadOperationNamesWithBecomesIn(machineName, bxmlDirectory);
+                Set<String> opsWithTransitiveRand = CrossMachineBxmlLoader.loadOperationNamesCallingRandOps(machineName, bxmlDirectory);
                 if (machineAssigns.isEmpty() && opsWithDirectRand.isEmpty() && opsWithTransitiveRand.isEmpty()) continue;
-                for (String opName : loadOperationNamesForMachine(machineName, bxmlDirectory)) {
+                for (String opName : CrossMachineBxmlLoader.loadOperationNamesForMachine(machineName, bxmlDirectory)) {
                     List<String> opAssigns = new ArrayList<>(machineAssigns);
                     if (opsWithDirectRand.contains(opName) || opsWithTransitiveRand.contains(opName)) {
                         opAssigns.add("__fc_random_counter");
@@ -1988,10 +1018,10 @@ public final class BxmlMachineVariables {
         // Máquinas vistas: só __fc_random_counter (sem assigns concretos)
         if (seenMachineNames != null) {
             for (String machineName : seenMachineNames) {
-                Set<String> opsWithDirectRand = loadOperationNamesWithBecomesIn(machineName, bxmlDirectory);
-                Set<String> opsWithTransitiveRand = loadOperationNamesCallingRandOps(machineName, bxmlDirectory);
+                Set<String> opsWithDirectRand = CrossMachineBxmlLoader.loadOperationNamesWithBecomesIn(machineName, bxmlDirectory);
+                Set<String> opsWithTransitiveRand = CrossMachineBxmlLoader.loadOperationNamesCallingRandOps(machineName, bxmlDirectory);
                 if (opsWithDirectRand.isEmpty() && opsWithTransitiveRand.isEmpty()) continue;
-                for (String opName : loadOperationNamesForMachine(machineName, bxmlDirectory)) {
+                for (String opName : CrossMachineBxmlLoader.loadOperationNamesForMachine(machineName, bxmlDirectory)) {
                     if (opsWithDirectRand.contains(opName) || opsWithTransitiveRand.contains(opName)) {
                         result.computeIfAbsent(opName, k -> new ArrayList<>()).add("__fc_random_counter");
                     }
@@ -2002,210 +1032,4 @@ public final class BxmlMachineVariables {
         return result;
     }
 
-    /**
-     * Operações da máquina cujo corpo de implementação chama alguma operação de máquina importada
-     * que usa {@code Becomes_In} (ex.: {@code measure_level} com {@code v :: S}).
-     * Permite propagar {@code __fc_random_counter} para chamadores de uma máquina intermediária.
-     */
-    private static Set<String> loadOperationNamesCallingRandOps(
-            String machineName, Path bxmlDirectory) {
-        // Carregar implementação
-        Element implEl = BxmlSetsTranslator.findImplementationMachineElement(machineName, bxmlDirectory);
-        if (implEl == null) return Set.of();
-
-        // Operações rand das máquinas importadas pela implementação
-        Set<String> randOpNames = new LinkedHashSet<>();
-        for (String imported : BxmlSetsTranslator.listImportedMachineNames(implEl)) {
-            randOpNames.addAll(loadOperationNamesWithBecomesIn(imported, bxmlDirectory));
-        }
-        if (randOpNames.isEmpty()) return Set.of();
-
-        // Para cada operação da máquina abstrata, checar se a implementação chama alguma rand op
-        Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
-        if (!Files.exists(abstractPath)) return Set.of();
-        try {
-            Element abstractEl = BxmlSetsTranslator.parseMachineElement(abstractPath);
-            Set<String> result = new LinkedHashSet<>();
-            NodeList ops = abstractEl.getElementsByTagNameNS("*", "Operations");
-            if (ops.getLength() == 0) return Set.of();
-            Element operationsEl = (Element) ops.item(0);
-            NodeList children = operationsEl.getChildNodes();
-            for (int i = 0; i < children.getLength(); i++) {
-                Node n = children.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element op = (Element) n;
-                if (!"Operation".equals(op.getLocalName())) continue;
-                String opName = op.getAttribute("name");
-                Element implOp = BxmlLoopTranslator.findImplementationOperation(
-                        List.of(implEl), opName);
-                if (implOp == null) continue;
-                Element implBody = firstChildElement(implOp, "Body");
-                if (implBody != null && elementCallsAnyOf(implBody, randOpNames)) {
-                    result.add(opName);
-                }
-            }
-            return result;
-        } catch (Exception ignored) {
-            return Set.of();
-        }
-    }
-
-    private static boolean elementCallsAnyOf(Element el, Set<String> opNames) {
-        if (el == null) return false;
-        if ("Operation_Call".equals(el.getLocalName())) {
-            Element nameEl = firstChildElement(el, "Name");
-            if (nameEl != null) {
-                Element idEl = firstChildElement(nameEl, "Id");
-                if (idEl != null) {
-                    String v = idEl.getAttribute("value");
-                    if (v != null && opNames.contains(v.trim())) return true;
-                }
-            }
-        }
-        NodeList nl = el.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            if (elementCallsAnyOf((Element) n, opNames)) return true;
-        }
-        return false;
-    }
-
-    /** Nomes das operações da máquina abstrata cujo corpo contém {@code Becomes_In} ({@code v :: S}). */
-    private static Set<String> loadOperationNamesWithBecomesIn(String machineName, Path bxmlDirectory) {
-        Path path = bxmlDirectory.resolve(machineName + ".bxml");
-        if (!Files.exists(path)) return Set.of();
-        try {
-            Element machineEl = BxmlSetsTranslator.parseMachineElement(path);
-            Set<String> result = new LinkedHashSet<>();
-            NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
-            if (ops.getLength() == 0) return Set.of();
-            Element operationsEl = (Element) ops.item(0);
-            NodeList children = operationsEl.getChildNodes();
-            for (int i = 0; i < children.getLength(); i++) {
-                Node n = children.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element op = (Element) n;
-                if (!"Operation".equals(op.getLocalName())) continue;
-                String opName = op.getAttribute("name");
-                Element body = firstChildElement(op, "Body");
-                if (body != null && elementContainsBecomesIn(body)) {
-                    result.add(opName);
-                }
-            }
-            return result;
-        } catch (Exception ignored) {
-            return Set.of();
-        }
-    }
-
-    private static boolean elementContainsBecomesIn(Element el) {
-        if (el == null) return false;
-        if ("Becomes_In".equals(el.getLocalName())) return true;
-        NodeList nl = el.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            if (elementContainsBecomesIn((Element) n)) return true;
-        }
-        return false;
-    }
-
-    private static List<String> loadConcreteAssignsForImportedMachine(String machineName, Path bxmlDirectory) {
-        return loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory, new LinkedHashSet<>());
-    }
-
-    /**
-     * @param visited nomes de máquina já expandidos nesta chamada (evita recursão infinita se o
-     *        grafo de IMPORTS tiver um ciclo, o que B não permite mas não custa proteger contra).
-     *        IMPORTS é transitivo: os alvos de {@code machineName} incluem também os de tudo que
-     *        {@code machineName} importa (ex.: {@code array} importa {@code iter_services} — quem
-     *        chama {@code array__set_array_value} de fora precisa do assigns de ambas).
-     */
-    private static List<String> loadConcreteAssignsForImportedMachine(
-            String machineName, Path bxmlDirectory, Set<String> visited) {
-        if (machineName == null || machineName.isBlank() || !visited.add(machineName.trim())) {
-            return List.of();
-        }
-        Element abstractEl = null;
-        Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
-        if (Files.exists(abstractPath)) {
-            try { abstractEl = BxmlSetsTranslator.parseMachineElement(abstractPath); } catch (Exception ignored) {}
-        }
-
-        Element implEl = BxmlSetsTranslator.findImplementationMachineElement(machineName, bxmlDirectory);
-
-        if (implEl == null) return List.of();
-
-        // ctx da PRÓPRIA máquina importada (não null): implementationAssignTargetWithRange precisa
-        // dele para resolver o domínio da variável concreta (array/função total) e gerar
-        // "Raiz__v[..]" — com ctx null, cai sempre no alvo sem colchetes ("Raiz__v"), que o
-        // Frama-C rejeita como "not an assignable left value" quando v é, de facto, um array.
-        BxmlTranslateContext implCtx = BxmlTranslateContext.forMachine(implEl);
-        List<String> result =
-                new ArrayList<>(
-                        listImplementationAssignTargets(
-                                machineName, List.of(implEl), implCtx, bxmlDirectory));
-
-        // Implementação sem Concrete_Variables próprias (usa a variável abstrata diretamente, ex.
-        // "array"/"array_i" — mesmo caso de anyImplementationUsesAbstractVariablesOnly): os alvos
-        // vêm da declaração da ABSTRATA, e a fatia [low..high] (quando a variável é array/função
-        // total) também é resolvida pelo invariante da ABSTRATA — a implementação não tem
-        // <Invariant> ao nível da máquina (o único <Invariant> em array_i.bxml, p.ex., é o de um
-        // loop dentro de <Operations>, não filho direto de <Machine>: firstChildElement não o acha).
-        // SÓ se aplica quando a variável é mesmo array/C-backed: se a máquina precisa de ghost
-        // abstraction (ex.: "contents" de Fifo, \list-valued sem storage C nenhum), "sem
-        // Concrete_Variables" significa GHOST, não "reusa a abstrata como C global" — gerar
-        // "Fifo__contents" aqui produz um alvo de assigns inexistente ("unbound logic variable" no
-        // Frama-C); o alvo correto (bloco abaixo) já é "ghost_contents".
-        if (result.isEmpty()
-                && abstractEl != null
-                && !needsGhostAbstraction(abstractEl, List.of(implEl))) {
-            for (String v : declaredVariableNames(abstractEl)) {
-                String base = machineName + "__" + v;
-                String ranged =
-                        implementationAssignTargetWithRange(
-                                base, v, abstractEl, implCtx, bxmlDirectory);
-                result.add(ranged == null ? base : ranged);
-            }
-        }
-
-        if (abstractEl != null && needsGhostAbstraction(abstractEl, List.of(implEl))) {
-            for (String v : GhostOperationsCiGenerator.listAbstractVariableNames(abstractEl)) {
-                result.add("ghost_" + v);
-            }
-        }
-
-        for (String transitiveImport : BxmlSetsTranslator.listImportedMachineNames(implEl)) {
-            result.addAll(
-                    loadConcreteAssignsForImportedMachine(transitiveImport, bxmlDirectory, visited));
-        }
-
-        return result;
-    }
-
-    private static List<String> loadOperationNamesForMachine(String machineName, Path bxmlDirectory) {
-        Path path = bxmlDirectory.resolve(machineName + ".bxml");
-        if (!Files.exists(path)) return List.of();
-        try {
-            Element machineEl = BxmlSetsTranslator.parseMachineElement(path);
-            List<String> names = new ArrayList<>();
-            NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
-            if (ops.getLength() == 0) return List.of();
-            Element operationsEl = (Element) ops.item(0);
-            NodeList children = operationsEl.getChildNodes();
-            for (int i = 0; i < children.getLength(); i++) {
-                Node n = children.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element ch = (Element) n;
-                if ("Operation".equals(ch.getLocalName())) {
-                    String name = ch.getAttribute("name");
-                    if (name != null && !name.isBlank()) names.add(name.trim());
-                }
-            }
-            return names;
-        } catch (Exception ignored) {
-            return List.of();
-        }
-    }
 }

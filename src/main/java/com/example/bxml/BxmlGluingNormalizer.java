@@ -35,7 +35,7 @@ public final class BxmlGluingNormalizer {
         for (Path p : bxmlPaths) {
             try {
                 Element machineEl = parseMachineRoot(p);
-                Element inv = firstChildElement(machineEl, "Invariant");
+                Element inv = BxmlDomUtils.firstChildElement(machineEl, "Invariant");
                 if (inv == null) continue;
                 BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machineEl);
                 BxmlComprehensionRegistry stub = BxmlComprehensionRegistry.emptyForFingerprinting();
@@ -60,7 +60,7 @@ public final class BxmlGluingNormalizer {
     }
 
     private static void collectFromInvariantSubtree(Element invariantEl, BxmlTranslateContext ctx, Map<String, String> out) {
-        Element p = firstPredChild(invariantEl);
+        Element p = BxmlDomUtils.firstPredChild(invariantEl);
         if (p != null) walkPred(p, ctx, out);
     }
 
@@ -110,29 +110,6 @@ public final class BxmlGluingNormalizer {
 
     private static boolean isSimpleIdentifier(String s) {
         return s != null && s.matches("[a-zA-Z_][a-zA-Z0-9_]*");
-    }
-
-    private static Element firstPredChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) continue;
-            return e;
-        }
-        return null;
-    }
-
-    private static Element firstChildElement(Element parent, String localName) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) return e;
-        }
-        return null;
     }
 
     private static Element parseMachineRoot(Path path) throws Exception {

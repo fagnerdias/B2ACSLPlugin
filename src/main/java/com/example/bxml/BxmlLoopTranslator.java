@@ -87,7 +87,7 @@ public final class BxmlLoopTranslator {
         if (implementationOperation == null || ctx == null) {
             return List.of();
         }
-        Element body = firstChildElement(implementationOperation, "Body");
+        Element body = BxmlDomUtils.firstChildElement(implementationOperation, "Body");
         if (body == null) {
             return List.of();
         }
@@ -159,7 +159,7 @@ public final class BxmlLoopTranslator {
                     sub, ctx, abstractMachineEl, implementationMachineEl, out.size() + 1,
                     importedOpAssigns, bxmlDirectory));
             walkForWhileLoops(
-                    firstChildElement(sub, "Body"), ctx, abstractMachineEl, implementationMachineEl, out,
+                    BxmlDomUtils.firstChildElement(sub, "Body"), ctx, abstractMachineEl, implementationMachineEl, out,
                     importedOpAssigns, bxmlDirectory);
             return;
         }
@@ -183,13 +183,13 @@ public final class BxmlLoopTranslator {
             Element whileEl, BxmlTranslateContext ctx, Element abstractMachineEl,
             Element implementationMachineEl, int index, Map<String, List<String>> importedOpAssigns,
             Path bxmlDirectory) {
-        Element invEl = firstChildElement(whileEl, "Invariant");
+        Element invEl = BxmlDomUtils.firstChildElement(whileEl, "Invariant");
         String invariant = "";
         if (invEl != null) {
             invariant = BxmlPredicateToAcsl.translateInvariantContent(invEl, ctx).trim();
         }
 
-        Element varEl = firstChildElement(whileEl, "Variant");
+        Element varEl = BxmlDomUtils.firstChildElement(whileEl, "Variant");
         String variant = "";
         if (varEl != null) {
             Element exp = firstExpressionChild(varEl);
@@ -199,7 +199,7 @@ public final class BxmlLoopTranslator {
         }
 
         LinkedHashSet<String> assigns = new LinkedHashSet<>();
-        Element body = firstChildElement(whileEl, "Body");
+        Element body = BxmlDomUtils.firstChildElement(whileEl, "Body");
         collectLoopAssigns(
                 body, ctx, abstractMachineEl, implementationMachineEl, assigns, importedOpAssigns, Set.of(),
                 bxmlDirectory);
@@ -217,79 +217,109 @@ public final class BxmlLoopTranslator {
         if ("Assignement_Sub".equals(sub.getLocalName())
                 || "Becomes_In".equals(sub.getLocalName())
                 || "Becomes_Such_That".equals(sub.getLocalName())) {
-            Element vars = firstChildElement(sub, "Variables");
-            if (vars != null) {
-                for (Element lhs : directExpChildren(vars)) {
-                    if ("Id".equals(lhs.getLocalName())) {
-                        // atribuição simples: x := ...
-                        String name = lhs.getAttribute("value");
+            collectAssignmentLhsTargets(
+                    sub, ctx, abstractMachineEl, implementationMachineEl, out, localVars, bxmlDirectory);
+            return;
+        }
+        if ("VAR_IN".equals(sub.getLocalName())) {
+            collectVarInBlockAssigns(
+                    sub, ctx, abstractMachineEl, implementationMachineEl, out, importedOpAssigns, localVars,
+                    bxmlDirectory);
+            return;
+        }
+        if ("Operation_Call".equals(sub.getLocalName())) {
+            collectOperationCallAssigns(sub, out, importedOpAssigns, localVars);
+            return;
+        }
+        collectLoopAssignsFromChildren(
+                sub, ctx, abstractMachineEl, implementationMachineEl, out, importedOpAssigns, localVars,
+                bxmlDirectory);
+    }
+
+    private static void collectAssignmentLhsTargets(
+            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl,
+            Element implementationMachineEl, Set<String> out, Set<String> localVars, Path bxmlDirectory) {
+        Element vars = BxmlDomUtils.firstChildElement(sub, "Variables");
+        if (vars != null) {
+            for (Element lhs : BxmlDomUtils.directExpChildren(vars)) {
+                if ("Id".equals(lhs.getLocalName())) {
+                    // atribuição simples: x := ...
+                    String name = lhs.getAttribute("value");
+                    if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
+                        out.add(qualify(
+                                name.trim(), ctx, abstractMachineEl, implementationMachineEl,
+                                bxmlDirectory));
+                    }
+                } else if ("Binary_Exp".equals(lhs.getLocalName())
+                        && "(".equals(lhs.getAttribute("op"))) {
+                    // atribuição funcional: f(idx) := val → extrai o nome base f
+                    List<Element> args = BxmlDomUtils.directExpChildren(lhs);
+                    if (!args.isEmpty() && "Id".equals(args.get(0).getLocalName())) {
+                        String name = args.get(0).getAttribute("value");
                         if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
                             out.add(qualify(
                                     name.trim(), ctx, abstractMachineEl, implementationMachineEl,
                                     bxmlDirectory));
                         }
-                    } else if ("Binary_Exp".equals(lhs.getLocalName())
-                            && "(".equals(lhs.getAttribute("op"))) {
-                        // atribuição funcional: f(idx) := val → extrai o nome base f
-                        List<Element> args = directExpChildren(lhs);
-                        if (!args.isEmpty() && "Id".equals(args.get(0).getLocalName())) {
-                            String name = args.get(0).getAttribute("value");
-                            if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
-                                out.add(qualify(
-                                        name.trim(), ctx, abstractMachineEl, implementationMachineEl,
-                                        bxmlDirectory));
-                            }
-                        }
                     }
                 }
             }
-            return;
         }
-        if ("VAR_IN".equals(sub.getLocalName())) {
-            // Variáveis declaradas em VAR_IN são locais ao bloco; não devem aparecer em loop assigns.
-            Set<String> innerLocals = new java.util.LinkedHashSet<>(localVars);
-            Element declaredVars = firstChildElement(sub, "Variables");
-            if (declaredVars != null) {
-                for (Element id : directExpChildren(declaredVars)) {
-                    if ("Id".equals(id.getLocalName())) {
-                        String name = id.getAttribute("value");
-                        if (name != null && !name.isBlank()) innerLocals.add(name.trim());
-                    }
+    }
+
+    private static void collectVarInBlockAssigns(
+            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl,
+            Element implementationMachineEl, Set<String> out, Map<String, List<String>> importedOpAssigns,
+            Set<String> localVars, Path bxmlDirectory) {
+        // Variáveis declaradas em VAR_IN são locais ao bloco; não devem aparecer em loop assigns.
+        Set<String> innerLocals = new java.util.LinkedHashSet<>(localVars);
+        Element declaredVars = BxmlDomUtils.firstChildElement(sub, "Variables");
+        if (declaredVars != null) {
+            for (Element id : BxmlDomUtils.directExpChildren(declaredVars)) {
+                if ("Id".equals(id.getLocalName())) {
+                    String name = id.getAttribute("value");
+                    if (name != null && !name.isBlank()) innerLocals.add(name.trim());
                 }
             }
-            Element innerBody = firstChildElement(sub, "Body");
-            if (innerBody != null) {
-                collectLoopAssigns(
-                        innerBody, ctx, abstractMachineEl, implementationMachineEl, out, importedOpAssigns,
-                        innerLocals, bxmlDirectory);
-            }
-            return;
         }
-        if ("Operation_Call".equals(sub.getLocalName())) {
-            // Parâmetros de saída: variáveis locais C modificadas pela chamada.
-            Element outParams = firstChildElement(sub, "Output_Parameters");
-            if (outParams != null) {
-                for (Element id : directExpChildren(outParams)) {
-                    if ("Id".equals(id.getLocalName())) {
-                        String name = id.getAttribute("value");
-                        if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
-                            out.add(name.trim());
-                        }
-                    }
-                }
-            }
-            // Assigns concretos da operação importada chamada (ex.: Body__loopnn para body(rr,ii,&ii)).
-            if (importedOpAssigns != null && !importedOpAssigns.isEmpty()) {
-                String calledName = extractOperationCallName(sub);
-                if (calledName != null) {
-                    List<String> calledAssigns = importedOpAssigns.get(calledName);
-                    if (calledAssigns != null) {
-                        out.addAll(calledAssigns);
-                    }
-                }
-            }
-            return;
+        Element innerBody = BxmlDomUtils.firstChildElement(sub, "Body");
+        if (innerBody != null) {
+            collectLoopAssigns(
+                    innerBody, ctx, abstractMachineEl, implementationMachineEl, out, importedOpAssigns,
+                    innerLocals, bxmlDirectory);
         }
+    }
+
+    private static void collectOperationCallAssigns(
+            Element sub, Set<String> out, Map<String, List<String>> importedOpAssigns, Set<String> localVars) {
+        // Parâmetros de saída: variáveis locais C modificadas pela chamada.
+        Element outParams = BxmlDomUtils.firstChildElement(sub, "Output_Parameters");
+        if (outParams != null) {
+            for (Element id : BxmlDomUtils.directExpChildren(outParams)) {
+                if ("Id".equals(id.getLocalName())) {
+                    String name = id.getAttribute("value");
+                    if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
+                        out.add(name.trim());
+                    }
+                }
+            }
+        }
+        // Assigns concretos da operação importada chamada (ex.: Body__loopnn para body(rr,ii,&ii)).
+        if (importedOpAssigns != null && !importedOpAssigns.isEmpty()) {
+            String calledName = extractOperationCallName(sub);
+            if (calledName != null) {
+                List<String> calledAssigns = importedOpAssigns.get(calledName);
+                if (calledAssigns != null) {
+                    out.addAll(calledAssigns);
+                }
+            }
+        }
+    }
+
+    private static void collectLoopAssignsFromChildren(
+            Element sub, BxmlTranslateContext ctx, Element abstractMachineEl,
+            Element implementationMachineEl, Set<String> out, Map<String, List<String>> importedOpAssigns,
+            Set<String> localVars, Path bxmlDirectory) {
         NodeList nl = sub.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
             Node n = nl.item(i);
@@ -308,7 +338,7 @@ public final class BxmlLoopTranslator {
 
     /** Nome da operação em {@code <Operation_Call><Name><Id value="..."/></Name>}. */
     private static String extractOperationCallName(Element opCall) {
-        Element nameEl = firstChildElement(opCall, "Name");
+        Element nameEl = BxmlDomUtils.firstChildElement(opCall, "Name");
         if (nameEl == null) return null;
         NodeList nl = nameEl.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
@@ -333,23 +363,8 @@ public final class BxmlLoopTranslator {
         if (ctx == null || abstractMachineEl == null) {
             return varName;
         }
-        return BxmlMachineVariables.qualifyLoopAssignTarget(
+        return ConcreteAssignTargetResolver.qualifyLoopAssignTarget(
                 varName, ctx.machineName(), abstractMachineEl, implementationMachineEl, ctx, bxmlDirectory);
-    }
-
-    private static Element firstChildElement(Element parent, String localName) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) {
-                continue;
-            }
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) {
-                return e;
-            }
-        }
-        return null;
     }
 
     private static Element firstExpressionChild(Element parent) {
@@ -368,20 +383,4 @@ public final class BxmlLoopTranslator {
         return null;
     }
 
-    private static List<Element> directExpChildren(Element parent) {
-        List<Element> out = new ArrayList<>();
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) {
-                continue;
-            }
-            Element e = (Element) n;
-            if ("Attr".equals(e.getLocalName())) {
-                continue;
-            }
-            out.add(e);
-        }
-        return out;
-    }
 }
