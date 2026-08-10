@@ -21,6 +21,17 @@
     <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
     <maven.antrun.plugin.version>3.1.0</maven.antrun.plugin.version>
     <graalvm.home>${env.GRAALVM_HOME}</graalvm.home>
+
+    <!-- SonarQube: análise local via "mvn sonar:sonar" contra um servidor em
+         sonar.host.url (default: instância local na porta padrão do SonarQube).
+         Token NÃO fica aqui (segredo) — passar via -Dsonar.token=... na linha de
+         comando ou variável de ambiente SONAR_TOKEN. -->
+    <sonar.maven.plugin.version>3.11.0.3922</sonar.maven.plugin.version>
+    <sonar.projectKey>b2acsl-plugin</sonar.projectKey>
+    <sonar.projectName>B2ACSL Plugin</sonar.projectName>
+    <sonar.host.url>http://localhost:9000</sonar.host.url>
+    <sonar.sources>src/main/java</sonar.sources>
+    <sonar.java.source>${maven.compiler.release}</sonar.java.source>
   </properties>
 
   <dependencies>
@@ -64,6 +75,15 @@
         </configuration>
       </plugin>
 
+      <!-- SonarQube: opt-in, só roda com "mvn sonar:sonar" (sem <executions>, não entra
+           no build normal). Precisa de um servidor SonarQube acessível em sonar.host.url
+           e um token (-Dsonar.token=... ou variável SONAR_TOKEN). -->
+      <plugin>
+        <groupId>org.sonarsource.scanner.maven</groupId>
+        <artifactId>sonar-maven-plugin</artifactId>
+        <version>${sonar.maven.plugin.version}</version>
+      </plugin>
+
       <!-- Uber-JAR (necessário para jpackage) -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -100,6 +120,7 @@
           <mainClass>com.example.Main</mainClass>
         </configuration>
       </plugin>
+
     </plugins>
   </build>
 

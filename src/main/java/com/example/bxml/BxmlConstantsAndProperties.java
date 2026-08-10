@@ -24,7 +24,7 @@ public final class BxmlConstantsAndProperties {
      * {@code Id} com {@code typref}).
      */
     public static String formatConcreteConstantsBlock(Element machineEl, BxmlTranslateContext ctx) {
-        Element block = firstChildElement(machineEl, "Concrete_Constants");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");
         if (block == null) return "";
 
         String machineName = machineEl.getAttribute("name");
@@ -72,7 +72,7 @@ public final class BxmlConstantsAndProperties {
      */
     public static String formatAbstractConstantsBlock(
             Element machineEl, BxmlTranslateContext ctx, Set<String> excludeNames) {
-        Element block = firstChildElement(machineEl, "Abstract_Constants");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Abstract_Constants");
         if (block == null) return "";
 
         String machineName = machineEl.getAttribute("name");
@@ -114,7 +114,7 @@ public final class BxmlConstantsAndProperties {
 
     public static Map<String, List<String>> collectLambdaDefsFromProperties(Element machineEl) {
         Map<String, List<String>> result = new LinkedHashMap<>();
-        Element propsEl = firstChildElement(machineEl, "Properties");
+        Element propsEl = BxmlDomUtils.firstChildElement(machineEl, "Properties");
         if (propsEl == null) return result;
         NodeList ch = propsEl.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -139,7 +139,7 @@ public final class BxmlConstantsAndProperties {
      * preditivos de {@code <Properties>} (cada um traduzido com {@link BxmlPredicateToAcsl}).
      */
     public static String formatPropertiesBlock(Element machineEl, BxmlTranslateContext ctx) {
-        Element block = firstChildElement(machineEl, "Properties");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Properties");
         if (block == null) return "";
 
         String machineName = machineEl.getAttribute("name");
@@ -236,7 +236,7 @@ public final class BxmlConstantsAndProperties {
      */
     public static String formatValuesBlock(
             Element machineEl, BxmlTranslateContext ctx, Element deferredSetsSourceMachineEl) {
-        Element block = firstChildElement(machineEl, "Values");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Values");
         if (block == null) return "";
 
         String machineName = machineEl.getAttribute("name");
@@ -245,7 +245,7 @@ public final class BxmlConstantsAndProperties {
         // Sets valuated in Values belong to the abstract machine; their ACSL logic name
         // is abstractMachineName_SETNAME (e.g. DateFields_HOUR).
         String abstractMachineName = null;
-        Element abstractionEl = firstChildElement(machineEl, "Abstraction");
+        Element abstractionEl = BxmlDomUtils.firstChildElement(machineEl, "Abstraction");
         if (abstractionEl != null) {
             String t = abstractionEl.getTextContent();
             if (t != null && !t.isBlank()) abstractMachineName = t.trim();
@@ -290,7 +290,7 @@ public final class BxmlConstantsAndProperties {
      */
     public static Map<String, Long> extractLiteralIntegerValuations(Element machineEl) {
         Map<String, Long> result = new LinkedHashMap<>();
-        Element block = firstChildElement(machineEl, "Values");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Values");
         if (block == null) return result;
         NodeList ch = block.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -362,7 +362,7 @@ public final class BxmlConstantsAndProperties {
     private static Set<String> deferredSetNames(Element machineEl) {
         LinkedHashSet<String> out = new LinkedHashSet<>();
         if (machineEl == null) return out;
-        Element setsEl = firstChildElement(machineEl, "Sets");
+        Element setsEl = BxmlDomUtils.firstChildElement(machineEl, "Sets");
         if (setsEl == null) return out;
         NodeList ch = setsEl.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -416,14 +416,4 @@ public final class BxmlConstantsAndProperties {
         return machineName + "_properties_" + idx;
     }
 
-    private static Element firstChildElement(Element parent, String localName) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) return e;
-        }
-        return null;
-    }
 }

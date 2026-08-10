@@ -21,8 +21,9 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 import com.example.bxml.BxmlInitialisationTranslator;
-import com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl;
+import com.example.bxml.InitialisationAcsl;
 import com.example.bxml.BxmlConnectionAcsl;
+import com.example.bxml.GhostContractPredicates;
 import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.bxml.BxmlComprehensionRegistry;
 import com.example.bxml.BxmlConstantsAndProperties;
@@ -36,6 +37,8 @@ import com.example.bxml.BxmlSetsTranslator;
 import com.example.bxml.BxmlTranslateContext;
 import com.example.bxml.BxmlTypeRegistry;
 import com.example.bxml.LambdaFunctionRegistry;
+import com.example.bxml.MachineAxiomaticBlockFormatter;
+import com.example.bxml.MachineIncludeScanCollector;
 import com.example.bxml.SigmaFunctionRegistry;
 import com.example.bxml.UnionInterFunctionRegistry;
 import com.example.model.Machine;
@@ -228,10 +231,98 @@ public final class AcslGenerator {
         if (referencesAbstractMachineViaAbstractionTag(machineEl)) {
             return Optional.empty();
         }
+        AcslGenerationState state =
+                prepareGenerationState(
+                        machine,
+                        bxmlPath,
+                        outputDir,
+                        mergeBxmlPathsFromDescendants,
+                        gluingSubstitutionsFromInvariants,
+                        seenOnlyMachineNames,
+                        seesGraph,
+                        importsGraph,
+                        libIncludeCarrierMachineName,
+                        machineEl);
+        appendAcslBody(state);
+        Path acslFile =
+                finalizeAndWriteAcslFile(
+                        state, seesGraph, importsGraph, libIncludeScanRootMachineName, extraLibScanText);
+        return Optional.of(acslFile);
+    }
+
+    /** Estado mutável partilhado pelas fases de {@link #generateAcsl}, ver javadoc do método. */
+    private static final class AcslGenerationState {
+        Element machineEl;
+        Path outputDir;
+        String baseName;
+        Path acslFile;
+        boolean libCarrier;
+        boolean omitLibIncludesFromPreamble;
+        Map<String, String> gluing;
+        boolean isAbstraction;
+        List<Element> mergedMachineElements;
+        Set<String> collapsedVariableNames;
+        Set<String> abstractVariableNamesForGhost;
+        Path bxmlDirectory;
+        List<String> transitiveImportedMachineNames;
+        Set<String> invariantSourceMachineNames;
+        Map<String, String> refinementChainVariableLogicTypes;
+        BxmlTranslateContext ctx;
+        Map<String, String> varRhsOverrides;
+        boolean useGhostAbstraction;
+        InitialisationAcsl init;
+        StringBuilder libScanRemovedBodies;
+        List<OperationAcsl> operations;
+        StringBuilder sb;
+        int headerLen;
+        String propertiesBlock;
+        Map<Element, Map<String, String>> mergedVariableRenames;
+    }
+
+    /**
+     * Fase 1 de {@link #generateAcsl}: contexto de tradução, invariantes, {@code Initialisation} e
+     * {@code Operations} — tudo o que as fases seguintes ({@link #appendAcslBody} e
+     * {@link #finalizeAndWriteAcslFile}) precisam para montar e escrever o {@code .acsl}.
+     */
+    private static AcslGenerationState prepareGenerationState(
+            Machine machine,
+            Path bxmlPath,
+            Path outputDir,
+            List<Path> mergeBxmlPathsFromDescendants,
+            Map<String, String> gluingSubstitutionsFromInvariants,
+            Set<String> seenOnlyMachineNames,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            String libIncludeCarrierMachineName,
+            Element machineEl)
+            throws Exception {
+        AcslGenerationState state = new AcslGenerationState();
+        state.machineEl = machineEl;
+        state.outputDir = outputDir;
+        initializeBasicMachineState(
+                state, machine, outputDir, mergeBxmlPathsFromDescendants,
+                gluingSubstitutionsFromInvariants, seenOnlyMachineNames, libIncludeCarrierMachineName);
+        buildMachineTranslateContext(state, bxmlPath, seesGraph, importsGraph);
+        buildInitialisationAndOperationsForState(state);
+        return state;
+    }
+
+    private static void initializeBasicMachineState(
+            AcslGenerationState state,
+            Machine machine,
+            Path outputDir,
+            List<Path> mergeBxmlPathsFromDescendants,
+            Map<String, String> gluingSubstitutionsFromInvariants,
+            Set<String> seenOnlyMachineNames,
+            String libIncludeCarrierMachineName)
+            throws Exception {
+        Element machineEl = state.machineEl;
 
         Files.createDirectories(outputDir);
         String baseName = machine.getMachineName();
+        state.baseName = baseName;
         Path acslFile = outputDir.resolve(baseName + ".acsl");
+        state.acslFile = acslFile;
         // Âmbito desta chamada: tipos de codomínio-tupla (ver TupleCodomainTypeRegistry) descobertos
         // ao inferir os tipos das variáveis desta máquina (mais abaixo) são escritos num .acsl
         // próprio dela e incluídos localmente, perto do fim desta função — limpa aqui para não
@@ -241,22 +332,34 @@ public final class AcslGenerator {
                 libIncludeCarrierMachineName != null
                         && !libIncludeCarrierMachineName.isBlank()
                         && baseName.equals(libIncludeCarrierMachineName.trim());
+        state.libCarrier = libCarrier;
         boolean omitLibIncludesFromPreamble =
                 libIncludeCarrierMachineName != null && !libIncludeCarrierMachineName.isBlank()
                         ? !libCarrier
                         : seenOnlyMachineNames != null && seenOnlyMachineNames.contains(baseName);
+        state.omitLibIncludesFromPreamble = omitLibIncludesFromPreamble;
 
         List<Path> mergePaths =
                 mergeBxmlPathsFromDescendants == null ? List.of() : mergeBxmlPathsFromDescendants;
         Map<String, String> gluing =
                 gluingSubstitutionsFromInvariants == null ? Map.of() : gluingSubstitutionsFromInvariants;
+        state.gluing = gluing;
 
         boolean isAbstraction = isAbstractMachine(machineEl);
+        state.isAbstraction = isAbstraction;
 
         List<Element> mergedMachineElements = new ArrayList<>();
         for (Path p : mergePaths) {
             mergedMachineElements.add(parseMachineElement(p));
         }
+        state.mergedMachineElements = mergedMachineElements;
+    }
+
+    private static void buildMachineTranslateContext(
+            AcslGenerationState state, Path bxmlPath, BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        Element machineEl = state.machineEl;
+        List<Element> mergedMachineElements = state.mergedMachineElements;
+        Map<String, String> gluing = state.gluing;
 
         // Variáveis com Concrete_Variables de MESMO NOME na implementação, tipada array/função
         // total nessa camada (ex. "limit" em Customer E Customer_i): não criar duas variáveis ACSL
@@ -267,10 +370,12 @@ public final class AcslGenerator {
         Set<String> collapsedVariableNames =
                 BxmlMachineVariables.collapsedIntoImplementationVariableNames(
                         machineEl, mergedMachineElements);
+        state.collapsedVariableNames = collapsedVariableNames;
 
         Set<String> abstractVariableNamesForGhost =
                 new LinkedHashSet<>(GhostOperationsCiGenerator.listAbstractVariableNames(machineEl));
         abstractVariableNamesForGhost.removeAll(collapsedVariableNames);
+        state.abstractVariableNamesForGhost = abstractVariableNamesForGhost;
 
         List<Element> comprehensionChain = new ArrayList<>();
         comprehensionChain.add(machineEl);
@@ -280,6 +385,7 @@ public final class AcslGenerator {
         sharedComprehensions.assignDedupIndices();
 
         Path bxmlDirectory = bxmlPath.getParent();
+        state.bxmlDirectory = bxmlDirectory;
         // IMPORTS é transitivo em B: se esta máquina importa X e X importa Y, esta máquina também
         // depende do invariante e do assigns de Y (X's próprias operações já a chamam
         // internamente). listImportedMachineNamesFromChain só olha um nível — usado aqui só para
@@ -288,6 +394,7 @@ public final class AcslGenerator {
         List<String> transitiveImportedMachineNames =
                 com.example.bxml.BxmlSetsTranslator.listImportedMachineNamesTransitive(
                         machineEl, mergedMachineElements, importsGraph);
+        state.transitiveImportedMachineNames = transitiveImportedMachineNames;
         // SEES também precisa do invariante da máquina vista como requires: uma operação pode
         // chamar a operação de uma máquina só vista (ex. Customer__buy chama Price__pricequery,
         // que requires Price_invariant/Price_i_invariant) — sem isto a pré-condição da chamada
@@ -300,6 +407,7 @@ public final class AcslGenerator {
         LinkedHashSet<String> invariantSourceMachineNames =
                 new LinkedHashSet<>(transitiveImportedMachineNames);
         invariantSourceMachineNames.addAll(transitiveSeenMachineNames);
+        state.invariantSourceMachineNames = invariantSourceMachineNames;
         // Tipos de TODAS as camadas da cadeia de refinamento (abstrata, cada _r, a _i) — não só
         // machineEl + abstrata raiz (o que forMachineWithSharedComprehensions já cobre). Sem isto,
         // o invariante de uma camada que referencia a variável de OUTRA camada intermédia (ex.:
@@ -308,6 +416,7 @@ public final class AcslGenerator {
         // sequence_ran/relation_ran trocados.
         Map<String, String> refinementChainVariableLogicTypes =
                 refinementChainVariableLogicTypes(machineEl, mergedMachineElements);
+        state.refinementChainVariableLogicTypes = refinementChainVariableLogicTypes;
         Set<String> enumeratedSetNamesForCtx = BxmlSetsTranslator.buildEnumeratedSetNames(machineEl);
         BxmlTranslateContext ctx =
                 BxmlTranslateContext.forMachineWithSharedComprehensions(
@@ -329,10 +438,25 @@ public final class AcslGenerator {
                                 BxmlMachineVariables.transitiveCrossMachineVariableLogicTypes(
                                         invariantSourceMachineNames, bxmlDirectory))
                         .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
+        state.ctx = ctx;
         // deferredSetTypedParameterNames NÃO é preenchido aqui: é por-OPERAÇÃO (nomes de parâmetro
         // colidem entre operações diferentes da mesma máquina com papéis diferentes — ver javadoc
         // de BxmlMachineVariables.deferredSetTypedOperationParameterNames), preenchido dentro do
         // laço de BxmlOperationsTranslator#translateOperations com a Precondition de cada operação.
+    }
+
+    private static void buildInitialisationAndOperationsForState(AcslGenerationState state) {
+        Element machineEl = state.machineEl;
+        String baseName = state.baseName;
+        Path bxmlDirectory = state.bxmlDirectory;
+        List<Element> mergedMachineElements = state.mergedMachineElements;
+        Map<String, String> gluing = state.gluing;
+        BxmlTranslateContext ctx = state.ctx;
+        boolean isAbstraction = state.isAbstraction;
+        Set<String> collapsedVariableNames = state.collapsedVariableNames;
+        Set<String> abstractVariableNamesForGhost = state.abstractVariableNamesForGhost;
+        List<String> transitiveImportedMachineNames = state.transitiveImportedMachineNames;
+        Set<String> invariantSourceMachineNames = state.invariantSourceMachineNames;
 
         List<String> allInvariantPredicateNames =
                 listAllInvariantPredicateNames(machineEl, ctx, mergedMachineElements, gluing);
@@ -345,8 +469,9 @@ public final class AcslGenerator {
         Map<String, String> varRhsOverrides =
                 BxmlMachineVariables.buildAbstractVarRhsOverrides(
                         machineEl, mergedMachineElements, importedMachineNames, bxmlDirectory);
+        state.varRhsOverrides = varRhsOverrides;
         List<String> implementationAssignTargets = new java.util.ArrayList<>(
-                BxmlMachineVariables.listInitialisationAssignTargets(
+                com.example.bxml.ConcreteAssignTargetResolver.listInitialisationAssignTargets(
                         baseName, machineEl, mergedMachineElements, ctx, varRhsOverrides,
                         bxmlDirectory));
         implementationAssignTargets.addAll(
@@ -360,6 +485,7 @@ public final class AcslGenerator {
                         transitiveImportedMachineNames, seenMachineNames, bxmlDirectory);
         boolean useGhostAbstraction =
                 BxmlMachineVariables.needsGhostAbstraction(machineEl, mergedMachineElements);
+        state.useGhostAbstraction = useGhostAbstraction;
         Set<String> operationStateVariableNames =
                 new LinkedHashSet<>(GhostOperationsCiGenerator.listAbstractVariableNames(machineEl));
         if (!useGhostAbstraction) {
@@ -374,7 +500,7 @@ public final class AcslGenerator {
                         mergedMachineElements, bxmlDirectory);
         boolean initGhostAssert =
                 useGhostAbstraction
-                        && GhostOperationsCiGenerator.initialisationAssignsAbstract(
+                        && GhostContractPredicates.initialisationAssignsAbstract(
                                 machineEl, abstractVariableNamesForGhost);
         List<String> dummyGhostVarsForInit =
                 initGhostAssert
@@ -407,7 +533,9 @@ public final class AcslGenerator {
                 isAbstraction
                         ? withInvariantEnsures(initMarked, allInvariantPredicateNames)
                         : null;
+        state.init = init;
         StringBuilder libScanRemovedBodies = new StringBuilder();
+        state.libScanRemovedBodies = libScanRemovedBodies;
         if (initGhostAssert) {
             for (String e : initBare.ensures()) {
                 if (e != null && !e.isBlank()) {
@@ -433,6 +561,31 @@ public final class AcslGenerator {
                                 bxmlDirectory,
                                 new ArrayList<>(invariantSourceMachineNames))
                         : List.of();
+        state.operations = operations;
+    }
+
+    /**
+     * Fase 2 de {@link #generateAcsl}: monta o texto ACSL completo em {@code state.sb} (conjuntos,
+     * constantes, variáveis, compreensões, invariantes, lambdas/SIGMA/PI/UNION/INTER, funções).
+     */
+    private static void appendAcslBody(AcslGenerationState state) throws Exception {
+        appendPreambleAndConstantsBlocks(state);
+        appendMachineVariableBlocks(state);
+        appendMergedConstantsPropertiesAndValuesBlocks(state);
+        appendInvariantsAndQuantifierBlocks(state);
+        appendFunctionsSection(state);
+    }
+
+    private static void appendPreambleAndConstantsBlocks(AcslGenerationState state) throws Exception {
+        Element machineEl = state.machineEl;
+        Path outputDir = state.outputDir;
+        String baseName = state.baseName;
+        Path bxmlDirectory = state.bxmlDirectory;
+        List<Element> mergedMachineElements = state.mergedMachineElements;
+        Map<String, String> gluing = state.gluing;
+        BxmlTranslateContext ctx = state.ctx;
+        boolean useGhostAbstraction = state.useGhostAbstraction;
+        StringBuilder libScanRemovedBodies = state.libScanRemovedBodies;
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* ACSL gerado a partir de ").append(baseName).append(".bxml (BXML 1.0) */\n");
@@ -440,6 +593,8 @@ public final class AcslGenerator {
                 "/* Biblioteca B2ACSLLib: includes gerados automaticamente (AcslLibIncludes); "
                         + "opções: b2acsl.acslLibIncludeBase, b2acsl.acslLibIncludeMiddle. */\n\n");
         int headerLen = sb.length();
+        state.sb = sb;
+        state.headerLen = headerLen;
 
         // 0) Conjuntos deferred (Sets) — posicionados logo após os includes
         String setsBlock = BxmlSetsTranslator.formatSetsBlock(machineEl, mergedMachineElements, bxmlDirectory);
@@ -457,31 +612,17 @@ public final class AcslGenerator {
                         : Set.of();
         String abstractConstants = BxmlConstantsAndProperties.formatAbstractConstantsBlock(
                 machineEl, ctx, ciDeclaredAbstractConsts);
-        if (!abstractConstants.isBlank()) {
-            sb.append(abstractConstants);
-            if (!abstractConstants.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
-        }
+        appendBlockWithSpacing(sb, abstractConstants);
         String concreteConstants = BxmlConstantsAndProperties.formatConcreteConstantsBlock(machineEl, ctx);
-        if (!concreteConstants.isBlank()) {
-            sb.append(concreteConstants);
-            if (!concreteConstants.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
-        }
+        appendBlockWithSpacing(sb, concreteConstants);
         // Traduz properties antecipadamente para popular o lambdaRegistry (lambdas de operações
         // já registados em translateOperations acima). O bloco properties é emitido mais tarde,
         // depois das variáveis e dos lambda_functions, pois lambda_functions pode referenciar
         // variáveis de estado (ex.: copyOf) que só ficam declaradas após as variáveis.
         String propertiesBlock = BxmlConstantsAndProperties.formatPropertiesBlock(machineEl, ctx);
-        int lambdaEmittedUpTo = 0;
-        int sigmaEmittedUpTo = 0;
-        int unionInterEmittedUpTo = 0;
+        state.propertiesBlock = propertiesBlock;
         String valuesRoot = BxmlConstantsAndProperties.formatValuesBlock(machineEl, ctx);
-        if (!valuesRoot.isBlank()) {
-            sb.append(valuesRoot);
-            if (!valuesRoot.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
-        }
+        appendBlockWithSpacing(sb, valuesRoot);
 
         Optional<Path> connectionAcsl =
                 BxmlConnectionAcsl.writeConnectionAcsl(
@@ -502,14 +643,58 @@ public final class AcslGenerator {
 
         String ghostPatternsBlock =
                 useGhostAbstraction
-                        ? GhostOperationsCiGenerator.formatGhostPatternsAxiomaticBlock(
+                        ? GhostContractPredicates.formatGhostPatternsAxiomaticBlock(
                                 machineEl, baseName, ctx.variableLogicTypes())
                         : "";
-        if (!ghostPatternsBlock.isBlank()) {
-            sb.append(ghostPatternsBlock);
-            if (!ghostPatternsBlock.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
+        appendBlockWithSpacing(sb, ghostPatternsBlock);
+    }
+
+    /**
+     * Anexa {@code block} a {@code sb} seguido de linha em branco, se não for vazio/blank — idioma
+     * repetido ~10x ao longo da montagem do corpo ACSL (constantes, propriedades, variáveis, values).
+     */
+    private static void appendBlockWithSpacing(StringBuilder sb, String block) {
+        if (block == null || block.isBlank()) {
+            return;
         }
+        sb.append(block);
+        if (!block.endsWith("\n")) sb.append("\n");
+        sb.append("\n");
+    }
+
+    /**
+     * Contexto de tradução por-máquina-fundida, reconstruído a partir de {@code ctx} (comprehensions,
+     * lambda/sigma/unionInter registries partilhados) para cada elemento da cadeia de refinamento —
+     * mesmo padrão nas 3 chamadas em {@link #appendMachineVariableBlocks} e
+     * {@link #appendMergedConstantsPropertiesAndValuesBlocks}.
+     */
+    private static BxmlTranslateContext buildMergedElementContext(
+            Element mel,
+            BxmlTranslateContext ctx,
+            Map<String, String> gluing,
+            Element machineEl,
+            Map<String, String> refinementChainVariableLogicTypes) {
+        return BxmlTranslateContext.forMachineWithSharedComprehensions(
+                        mel, ctx.comprehensions(), gluing, machineEl)
+                .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
+                .withLambdaRegistry(ctx.lambdaRegistry())
+                .withSigmaRegistry(ctx.sigmaRegistry())
+                .withUnionInterRegistry(ctx.unionInterRegistry())
+                .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
+                .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
+                .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
+    }
+
+    private static void appendMachineVariableBlocks(AcslGenerationState state) {
+        Element machineEl = state.machineEl;
+        String baseName = state.baseName;
+        Path bxmlDirectory = state.bxmlDirectory;
+        List<Element> mergedMachineElements = state.mergedMachineElements;
+        BxmlTranslateContext ctx = state.ctx;
+        Set<String> collapsedVariableNames = state.collapsedVariableNames;
+        Set<String> abstractVariableNamesForGhost = state.abstractVariableNamesForGhost;
+        Map<String, String> varRhsOverrides = state.varRhsOverrides;
+        StringBuilder sb = state.sb;
 
         // 1b) Variáveis em sequência: abstrata → refinamentos → implementação.
         // Cada bloco _r_variables / _i_variables pode referenciar variáveis dos blocos anteriores
@@ -524,14 +709,10 @@ public final class AcslGenerator {
                 BxmlMachineVariables.implementationMirrorsAbstractVariables(
                                 machineEl, mergedMachineElements)
                         ? ""
-                        : BxmlMachineVariables.formatAxiomaticBlockWithGhostDummyReads(
+                        : MachineAxiomaticBlockFormatter.formatAxiomaticBlockWithGhostDummyReads(
                                 machineEl, ctx, concreteLinkRoot, abstractVariableNamesForGhost,
                                 varRhsOverrides, bxmlDirectory, collapsedVariableNames);
-        if (!varsAbstract.isBlank()) {
-            sb.append(varsAbstract);
-            if (!varsAbstract.endsWith("\n")) sb.append("\n");
-            sb.append("\n");
-        }
+        appendBlockWithSpacing(sb, varsAbstract);
         // Variáveis das máquinas fundidas (r, i) — em ordem de cadeia, antes das compreensões.
         //
         // Nomes de variáveis já declarados (começa pela abstrata): uma variável de refinamento ou
@@ -559,97 +740,106 @@ public final class AcslGenerator {
         Map<Element, Map<String, String>> mergedVariableRenames = new LinkedHashMap<>();
         Element refinementChainParent = machineEl;
         for (Element mel : mergedMachineElements) {
-            BxmlTranslateContext mctx =
-                    BxmlTranslateContext.forMachineWithSharedComprehensions(
-                            mel, ctx.comprehensions(), gluing, machineEl)
-                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
-                    .withLambdaRegistry(ctx.lambdaRegistry())
-                    .withSigmaRegistry(ctx.sigmaRegistry())
-                    .withUnionInterRegistry(ctx.unionInterRegistry())
-                    .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
-                    .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
-                    .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
-            String varsMerged =
-                    BxmlMachineVariables.formatAxiomaticBlock(
-                            mel, mctx, baseName, refinementChainParent, gluing, bxmlDirectory);
+            appendOneMergedVariableBlock(
+                    state, mel, refinementChainParent, declaredVariableNames, mergedVariableRenames);
             refinementChainParent = mel;
+        }
+        state.mergedVariableRenames = mergedVariableRenames;
+    }
 
-            Set<String> ownNames = BxmlMachineVariables.inferVariableLogicTypes(mel, mctx).keySet();
-            Map<String, String> renameMap = new LinkedHashMap<>();
-            String suffix = "implementation".equalsIgnoreCase(mel.getAttribute("type")) ? "_i" : "_r";
-            for (String name : ownNames) {
-                if (declaredVariableNames.contains(name)) {
-                    renameMap.put(name, name + suffix);
-                }
-            }
-            if (!renameMap.isEmpty()) {
-                varsMerged = renameWholeWordIdentifiers(varsMerged, renameMap);
-                mergedVariableRenames.put(mel, renameMap);
-            }
-            for (String name : ownNames) {
-                declaredVariableNames.add(renameMap.getOrDefault(name, name));
-            }
+    /**
+     * Uma iteração do laço de {@link #appendMachineVariableBlocks}: formata e anexa o bloco
+     * {@code axiomatic Nome_variables} de UM elemento fundido (refinamento/implementação),
+     * detetando e aplicando a renomeação {@code _r}/{@code _i} para colisões com nomes já
+     * declarados (ver comentário original em {@link #appendMachineVariableBlocks}).
+     */
+    private static void appendOneMergedVariableBlock(
+            AcslGenerationState state,
+            Element mel,
+            Element refinementChainParent,
+            Set<String> declaredVariableNames,
+            Map<Element, Map<String, String>> mergedVariableRenames) {
+        BxmlTranslateContext ctx = state.ctx;
+        BxmlTranslateContext mctx =
+                buildMergedElementContext(
+                        mel, ctx, state.gluing, state.machineEl, state.refinementChainVariableLogicTypes);
+        String varsMerged =
+                MachineAxiomaticBlockFormatter.formatAxiomaticBlock(
+                        mel, mctx, state.baseName, refinementChainParent, state.gluing, state.bxmlDirectory);
 
-            if (!varsMerged.isBlank()) {
-                sb.append(varsMerged);
-                if (!varsMerged.endsWith("\n")) sb.append("\n");
-                sb.append("\n");
+        Set<String> ownNames = BxmlMachineVariables.inferVariableLogicTypes(mel, mctx).keySet();
+        Map<String, String> renameMap = new LinkedHashMap<>();
+        String suffix = "implementation".equalsIgnoreCase(mel.getAttribute("type")) ? "_i" : "_r";
+        for (String name : ownNames) {
+            if (declaredVariableNames.contains(name)) {
+                renameMap.put(name, name + suffix);
             }
         }
+        if (!renameMap.isEmpty()) {
+            varsMerged = renameWholeWordIdentifiers(varsMerged, renameMap);
+            mergedVariableRenames.put(mel, renameMap);
+        }
+        for (String name : ownNames) {
+            declaredVariableNames.add(renameMap.getOrDefault(name, name));
+        }
+
+        appendBlockWithSpacing(state.sb, varsMerged);
+    }
+
+    private static void appendMergedConstantsPropertiesAndValuesBlocks(AcslGenerationState state) {
+        List<Element> mergedMachineElements = state.mergedMachineElements;
+        BxmlTranslateContext ctx = state.ctx;
+        StringBuilder sb = state.sb;
 
         // Constantes e propriedades das máquinas fundidas — depois das variáveis, antes das
         // compreensões, para que constantes como MAX_COPY estejam declaradas quando necessário.
         for (Element mel : mergedMachineElements) {
-            BxmlTranslateContext mctx =
-                    BxmlTranslateContext.forMachineWithSharedComprehensions(
-                            mel, ctx.comprehensions(), gluing, machineEl)
-                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
-                    .withLambdaRegistry(ctx.lambdaRegistry())
-                    .withSigmaRegistry(ctx.sigmaRegistry())
-                    .withUnionInterRegistry(ctx.unionInterRegistry())
-                    .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
-                    .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
-                    .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
-            String constsMerged = BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx);
-            if (!constsMerged.isBlank()) {
-                sb.append(constsMerged);
-                if (!constsMerged.endsWith("\n")) sb.append("\n");
-                sb.append("\n");
-            }
-            String propsMerged = BxmlConstantsAndProperties.formatPropertiesBlock(mel, mctx);
-            if (!propsMerged.isBlank()) {
-                sb.append(propsMerged);
-                if (!propsMerged.endsWith("\n")) sb.append("\n");
-                sb.append("\n");
-            }
+            appendMergedConstantsAndPropertiesForElement(state, mel);
         }
 
         // Compreensões: todas as variáveis e constantes já estão declaradas.
         // set_comprehension_k deve estar declarado antes de _i_values (que o referencia).
         if (!ctx.comprehensions().isEmpty()) {
-            sb.append(ctx.comprehensions().formatAxiomaticBlock(baseName, ctx));
+            sb.append(ctx.comprehensions().formatAxiomaticBlock(state.baseName, ctx));
             sb.append("\n");
         }
         // Values das máquinas fundidas (podem referenciar compreensões).
         for (Element mel : mergedMachineElements) {
-            BxmlTranslateContext mctx =
-                    BxmlTranslateContext.forMachineWithSharedComprehensions(
-                            mel, ctx.comprehensions(), gluing, machineEl)
-                    .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
-                    .withLambdaRegistry(ctx.lambdaRegistry())
-                    .withSigmaRegistry(ctx.sigmaRegistry())
-                    .withUnionInterRegistry(ctx.unionInterRegistry())
-                    .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
-                    .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
-                    .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
-            String valuesMerged =
-                    BxmlConstantsAndProperties.formatValuesBlock(mel, mctx, machineEl);
-            if (!valuesMerged.isBlank()) {
-                sb.append(valuesMerged);
-                if (!valuesMerged.endsWith("\n")) sb.append("\n");
-                sb.append("\n");
-            }
+            appendMergedValuesForElement(state, mel);
         }
+    }
+
+    private static void appendMergedConstantsAndPropertiesForElement(AcslGenerationState state, Element mel) {
+        BxmlTranslateContext mctx =
+                buildMergedElementContext(
+                        mel, state.ctx, state.gluing, state.machineEl, state.refinementChainVariableLogicTypes);
+        StringBuilder sb = state.sb;
+        String constsMerged = BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx);
+        appendBlockWithSpacing(sb, constsMerged);
+        String propsMerged = BxmlConstantsAndProperties.formatPropertiesBlock(mel, mctx);
+        appendBlockWithSpacing(sb, propsMerged);
+    }
+
+    private static void appendMergedValuesForElement(AcslGenerationState state, Element mel) {
+        BxmlTranslateContext mctx =
+                buildMergedElementContext(
+                        mel, state.ctx, state.gluing, state.machineEl, state.refinementChainVariableLogicTypes);
+        String valuesMerged =
+                BxmlConstantsAndProperties.formatValuesBlock(mel, mctx, state.machineEl);
+        appendBlockWithSpacing(state.sb, valuesMerged);
+    }
+
+    private static void appendInvariantsAndQuantifierBlocks(AcslGenerationState state) throws IOException {
+        Element machineEl = state.machineEl;
+        Path outputDir = state.outputDir;
+        String baseName = state.baseName;
+        List<Element> mergedMachineElements = state.mergedMachineElements;
+        Map<String, String> gluing = state.gluing;
+        BxmlTranslateContext ctx = state.ctx;
+        Map<String, String> refinementChainVariableLogicTypes = state.refinementChainVariableLogicTypes;
+        Map<Element, Map<String, String>> mergedVariableRenames = state.mergedVariableRenames;
+        StringBuilder libScanRemovedBodies = state.libScanRemovedBodies;
+        StringBuilder sb = state.sb;
 
         // 2) Todos os predicate (invariantes) — traduzidos já aqui (podem registar lambdas, ex. um
         // invariante de colagem que chama directamente uma "sequence builder"), mas o texto fica em
@@ -668,6 +858,7 @@ public final class AcslGenerator {
         // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima. Emitido
         // antes dos invariantes/properties bufferizados acima/abaixo, que podem referenciar
         // predicados/funções lambda.
+        int lambdaEmittedUpTo = 0;
         LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
         if (lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo) {
             sb.append("\n");
@@ -683,6 +874,7 @@ public final class AcslGenerator {
         // deixado inline aqui — mesma restrição que TupleCodomainTypeRegistry já contorna para
         // "type X = Y;"). Escreve num .acsl próprio da máquina e inclui NESTA MESMA posição (não no
         // preâmbulo: o bloco referencia variáveis de estado só declaradas ANTES deste ponto).
+        int sigmaEmittedUpTo = 0;
         SigmaFunctionRegistry sigmaRegistry = ctx.sigmaRegistry();
         if (sigmaRegistry != null && sigmaRegistry.size() > sigmaEmittedUpTo) {
             String sigmaBlock = sigmaRegistry.formatAxiomaticBlockFrom(sigmaEmittedUpTo);
@@ -697,6 +889,7 @@ public final class AcslGenerator {
             sb.append("\n");
         }
         // 2d) UNION/INTER (mesmo motivo e mesma técnica de include separado que 2c — Set<T> genérico).
+        int unionInterEmittedUpTo = 0;
         UnionInterFunctionRegistry unionInterRegistry = ctx.unionInterRegistry();
         if (unionInterRegistry != null && unionInterRegistry.size() > unionInterEmittedUpTo) {
             String unionInterBlock = unionInterRegistry.formatAxiomaticBlockFrom(unionInterEmittedUpTo);
@@ -714,119 +907,50 @@ public final class AcslGenerator {
             sb.append("\n");
         }
         sb.append(mergedInvariantsSb);
+        String propertiesBlock = state.propertiesBlock;
         if (!propertiesBlock.isBlank()) {
             sb.append(propertiesBlock);
             if (!propertiesBlock.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
+    }
 
+    private static void appendFunctionsSection(AcslGenerationState state) {
+        StringBuilder sb = state.sb;
         // 3) Funções: inicialização e operações
-        if (isAbstraction && init != null) {
+        if (state.isAbstraction && state.init != null) {
             sb.append("\n");
-            sb.append(init.toContractText());
-            if (!operations.isEmpty()) {
+            sb.append(state.init.toContractText());
+            if (!state.operations.isEmpty()) {
                 sb.append("\n");
-                for (OperationAcsl op : operations) {
+                for (OperationAcsl op : state.operations) {
                     sb.append("\n").append(op.toContractSketch());
                 }
             }
         }
+    }
 
-        String extraLibSymbolScan =
-                libScanRemovedBodies.length() == 0 ? null : libScanRemovedBodies.toString();
-        String bodyForLibScan = sb.substring(headerLen);
-        String dependencyMachinesScan;
-        List<String> dependencyLibIncludePaths;
-        String libScanRoot =
-                libCarrier
-                                && libIncludeScanRootMachineName != null
-                                && !libIncludeScanRootMachineName.isBlank()
-                        ? libIncludeScanRootMachineName.trim()
-                        : baseName;
-        if (seesGraph != null || importsGraph != null) {
-            dependencyMachinesScan =
-                    BxmlSetsTranslator.collectTransitiveDependencyMachinesTextForIncludeScan(
-                            libScanRoot, seesGraph, importsGraph, bxmlDirectory, outputDir);
-            if (libCarrier && !libScanRoot.equals(baseName)) {
-                dependencyMachinesScan =
-                        joinNonBlank(
-                                dependencyMachinesScan,
-                                BxmlSetsTranslator.collectMachineTextForIncludeScan(
-                                        libScanRoot, bxmlDirectory, outputDir));
-            }
-            dependencyLibIncludePaths =
-                    new ArrayList<>(
-                            BxmlSetsTranslator.collectLibIncludePathsFromTransitiveDependencies(
-                                    libScanRoot, seesGraph, importsGraph, outputDir));
-        } else {
-            String seesMachinesScan =
-                    BxmlSetsTranslator.collectSeesMachinesTextForIncludeScan(
-                            machineEl, bxmlDirectory, outputDir);
-            String importsMachinesScan =
-                    BxmlSetsTranslator.collectImportedMachinesTextForIncludeScan(
-                            machineEl, mergedMachineElements, bxmlDirectory, outputDir);
-            dependencyMachinesScan = joinNonBlank(seesMachinesScan, importsMachinesScan);
-            dependencyLibIncludePaths = new ArrayList<>();
-            dependencyLibIncludePaths.addAll(
-                    BxmlSetsTranslator.collectLibIncludePathsFromSeenMachines(
-                            machineEl, bxmlDirectory, outputDir));
-            dependencyLibIncludePaths.addAll(
-                    BxmlSetsTranslator.collectLibIncludePathsFromImportedMachines(
-                            machineEl, mergedMachineElements, bxmlDirectory, outputDir));
-        }
-        String combinedExtraScan =
-                joinNonBlank(
-                        joinNonBlank(extraLibScanText, extraLibSymbolScan),
-                        dependencyMachinesScan);
-        String libIncludes =
-                AcslLibIncludes.formatIncludeBlock(
-                        bodyForLibScan, combinedExtraScan, dependencyLibIncludePaths);
-        String machineDependencyIncludes;
-        if (seesGraph != null || importsGraph != null) {
-            // Includes de outras máquinas ficam a cargo do -acsl-import multi-ficheiro (B2ACSLPipeline).
-            machineDependencyIncludes = "";
-        } else {
-            String seesIncludes =
-                    BxmlSetsTranslator.formatSeesIncludeBlock(machineEl, bxmlDirectory);
-            String importsIncludes =
-                    BxmlSetsTranslator.formatImportsIncludeBlock(
-                            machineEl, mergedMachineElements, bxmlDirectory);
-            StringBuilder legacy = new StringBuilder();
-            appendAcslMachineIncludes(legacy, seesIncludes);
-            appendAcslMachineIncludes(legacy, importsIncludes);
-            machineDependencyIncludes = legacy.toString();
-        }
-        // Tipos de codomínio-tupla (ver TupleCodomainTypeRegistry/BxmlTypeRegistry#powCartesianProductToAcslRelationType)
-        // descobertos ao inferir os tipos das variáveis desta máquina — sem alias estático possível
-        // (explosão combinatória de tipo x aridade), escritos num .acsl próprio desta máquina e
-        // incluídos localmente (confirmado que -acsl-import aceita "type X = Y;" alcançado via
-        // include). Agrupados dentro de UM axiomatic block (em vez de declarações soltas): a
-        // impressão do Frama-C ("-acsl-import ... -print") reordena declarações "type X = Y;"
-        // soltas de forma NÃO DETERMINÍSTICA entre execuções (confirmado empiricamente: mesmo jar,
-        // mesmo input, Function_X às vezes impresso antes de Relation_X apesar do ficheiro-fonte
-        // sempre os ter na mesma ordem) — quando isso acontece, o Frama-C falha a unificar o
-        // sinónimo Function_X=Relation_X na resolução de sobrecarga de function_apply. Um
-        // axiomatic block imprime o seu conteúdo em ordem estável (como o "axiomatic new_types" da
-        // própria lib, nunca visto reordenado nas várias execuções desta sessão).
-        Map<String, String> extraTupleTypes =
-                com.example.bxml.TupleCodomainTypeRegistry.snapshotAndClear();
-        String tupleTypesInclude = "";
-        if (!extraTupleTypes.isEmpty()) {
-            Path tupleTypesFile = outputDir.resolve(baseName + "_tuple_types.acsl");
-            StringBuilder tupleTypesContent = new StringBuilder();
-            tupleTypesContent.append("axiomatic ").append(baseName).append("_tuple_types {\n");
-            for (Map.Entry<String, String> e : extraTupleTypes.entrySet()) {
-                tupleTypesContent
-                        .append("  type ")
-                        .append(e.getKey())
-                        .append(" = ")
-                        .append(e.getValue())
-                        .append(";\n");
-            }
-            tupleTypesContent.append("}\n");
-            Files.writeString(tupleTypesFile, tupleTypesContent.toString());
-            tupleTypesInclude = "include \"" + baseName + "_tuple_types.acsl\";\n";
-        }
+    /**
+     * Fase 3 de {@link #generateAcsl}: varredura de símbolos da lib, resolução de includes, ficheiro
+     * de tipos-tupla e escrita final do {@code .acsl} em disco.
+     */
+    private static Path finalizeAndWriteAcslFile(
+            AcslGenerationState state,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            String libIncludeScanRootMachineName,
+            String extraLibScanText)
+            throws Exception {
+        LibIncludeResolution libResolution =
+                resolveLibIncludesAndDependencyScan(
+                        state, seesGraph, importsGraph, libIncludeScanRootMachineName, extraLibScanText);
+        String machineDependencyIncludes = resolveMachineDependencyIncludes(state, seesGraph, importsGraph);
+        String tupleTypesInclude = writeTupleTypesFileIfNeeded(state);
+
+        StringBuilder sb = state.sb;
+        int headerLen = state.headerLen;
+        boolean omitLibIncludesFromPreamble = state.omitLibIncludesFromPreamble;
+
         StringBuilder preambleIncludes = new StringBuilder();
         // import/types.acsl PRIMEIRO: declara os tipos genéricos Set<A>/Tuple<A,B> em si (ver
         // "axiomatic new_types" nesse ficheiro — "type Set<A>;"/"type Tuple<A,B>;", sem corpo). O
@@ -836,8 +960,8 @@ public final class AcslGenerator {
         // "[Syntax error] <" logo no primeiro uso, por não saber ainda que "Set"/"Tuple" são
         // genéricos (confirmado: isolar SÓ o alias mais antigo, já usado noutros exemplos, sem
         // nenhum tipo introduzido por esta sessão, reproduz o mesmo erro na mesma posição).
-        if (!omitLibIncludesFromPreamble && !libIncludes.isEmpty()) {
-            preambleIncludes.append(libIncludes);
+        if (!omitLibIncludesFromPreamble && !libResolution.libIncludes().isEmpty()) {
+            preambleIncludes.append(libResolution.libIncludes());
         }
         if (!tupleTypesInclude.isEmpty()) {
             preambleIncludes.append(tupleTypesInclude);
@@ -850,12 +974,136 @@ public final class AcslGenerator {
         if (omitLibIncludesFromPreamble) {
             fullAcsl = AcslLibIncludes.removeLibIncludesFromPreamble(fullAcsl);
         }
+        Path acslFile = state.acslFile;
         Files.writeString(acslFile, fullAcsl);
         if (!omitLibIncludesFromPreamble) {
             AcslLibIncludes.copyReferencedLibraryFiles(
-                    fullAcsl, acslFile, combinedExtraScan, dependencyLibIncludePaths);
+                    fullAcsl, acslFile, libResolution.combinedExtraScan(), libResolution.dependencyLibIncludePaths());
         }
-        return Optional.of(acslFile);
+        return acslFile;
+    }
+
+    private record LibIncludeResolution(
+            String combinedExtraScan, String libIncludes, List<String> dependencyLibIncludePaths) {}
+
+    private static LibIncludeResolution resolveLibIncludesAndDependencyScan(
+            AcslGenerationState state,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            String libIncludeScanRootMachineName,
+            String extraLibScanText) {
+        Element machineEl = state.machineEl;
+        Path outputDir = state.outputDir;
+        String baseName = state.baseName;
+        Path bxmlDirectory = state.bxmlDirectory;
+        List<Element> mergedMachineElements = state.mergedMachineElements;
+        boolean libCarrier = state.libCarrier;
+        StringBuilder libScanRemovedBodies = state.libScanRemovedBodies;
+
+        String extraLibSymbolScan =
+                libScanRemovedBodies.length() == 0 ? null : libScanRemovedBodies.toString();
+        String bodyForLibScan = state.sb.substring(state.headerLen);
+        String dependencyMachinesScan;
+        List<String> dependencyLibIncludePaths;
+        String libScanRoot =
+                libCarrier
+                                && libIncludeScanRootMachineName != null
+                                && !libIncludeScanRootMachineName.isBlank()
+                        ? libIncludeScanRootMachineName.trim()
+                        : baseName;
+        if (seesGraph != null || importsGraph != null) {
+            dependencyMachinesScan =
+                    MachineIncludeScanCollector.collectTransitiveDependencyMachinesTextForIncludeScan(
+                            libScanRoot, seesGraph, importsGraph, bxmlDirectory, outputDir);
+            if (libCarrier && !libScanRoot.equals(baseName)) {
+                dependencyMachinesScan =
+                        joinNonBlank(
+                                dependencyMachinesScan,
+                                MachineIncludeScanCollector.collectMachineTextForIncludeScan(
+                                        libScanRoot, bxmlDirectory, outputDir));
+            }
+            dependencyLibIncludePaths =
+                    new ArrayList<>(
+                            MachineIncludeScanCollector.collectLibIncludePathsFromTransitiveDependencies(
+                                    libScanRoot, seesGraph, importsGraph, outputDir));
+        } else {
+            String seesMachinesScan =
+                    MachineIncludeScanCollector.collectSeesMachinesTextForIncludeScan(
+                            machineEl, bxmlDirectory, outputDir);
+            String importsMachinesScan =
+                    MachineIncludeScanCollector.collectImportedMachinesTextForIncludeScan(
+                            machineEl, mergedMachineElements, bxmlDirectory, outputDir);
+            dependencyMachinesScan = joinNonBlank(seesMachinesScan, importsMachinesScan);
+            dependencyLibIncludePaths = new ArrayList<>();
+            dependencyLibIncludePaths.addAll(
+                    MachineIncludeScanCollector.collectLibIncludePathsFromSeenMachines(
+                            machineEl, bxmlDirectory, outputDir));
+            dependencyLibIncludePaths.addAll(
+                    MachineIncludeScanCollector.collectLibIncludePathsFromImportedMachines(
+                            machineEl, mergedMachineElements, bxmlDirectory, outputDir));
+        }
+        String combinedExtraScan =
+                joinNonBlank(
+                        joinNonBlank(extraLibScanText, extraLibSymbolScan),
+                        dependencyMachinesScan);
+        String libIncludes =
+                AcslLibIncludes.formatIncludeBlock(
+                        bodyForLibScan, combinedExtraScan, dependencyLibIncludePaths);
+        return new LibIncludeResolution(combinedExtraScan, libIncludes, dependencyLibIncludePaths);
+    }
+
+    private static String resolveMachineDependencyIncludes(
+            AcslGenerationState state, BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        if (seesGraph != null || importsGraph != null) {
+            // Includes de outras máquinas ficam a cargo do -acsl-import multi-ficheiro (B2ACSLPipeline).
+            return "";
+        }
+        Element machineEl = state.machineEl;
+        Path bxmlDirectory = state.bxmlDirectory;
+        List<Element> mergedMachineElements = state.mergedMachineElements;
+        String seesIncludes = BxmlSetsTranslator.formatSeesIncludeBlock(machineEl, bxmlDirectory);
+        String importsIncludes =
+                BxmlSetsTranslator.formatImportsIncludeBlock(machineEl, mergedMachineElements, bxmlDirectory);
+        StringBuilder legacy = new StringBuilder();
+        appendAcslMachineIncludes(legacy, seesIncludes);
+        appendAcslMachineIncludes(legacy, importsIncludes);
+        return legacy.toString();
+    }
+
+    /**
+     * Tipos de codomínio-tupla (ver TupleCodomainTypeRegistry/BxmlTypeRegistry#powCartesianProductToAcslRelationType)
+     * descobertos ao inferir os tipos das variáveis desta máquina — sem alias estático possível
+     * (explosão combinatória de tipo x aridade), escritos num .acsl próprio desta máquina e
+     * incluídos localmente (confirmado que -acsl-import aceita "type X = Y;" alcançado via
+     * include). Agrupados dentro de UM axiomatic block (em vez de declarações soltas): a
+     * impressão do Frama-C ("-acsl-import ... -print") reordena declarações "type X = Y;"
+     * soltas de forma NÃO DETERMINÍSTICA entre execuções (confirmado empiricamente: mesmo jar,
+     * mesmo input, Function_X às vezes impresso antes de Relation_X apesar do ficheiro-fonte
+     * sempre os ter na mesma ordem) — quando isso acontece, o Frama-C falha a unificar o
+     * sinónimo Function_X=Relation_X na resolução de sobrecarga de function_apply. Um
+     * axiomatic block imprime o seu conteúdo em ordem estável (como o "axiomatic new_types" da
+     * própria lib, nunca visto reordenado nas várias execuções desta sessão).
+     */
+    private static String writeTupleTypesFileIfNeeded(AcslGenerationState state) throws IOException {
+        Map<String, String> extraTupleTypes = com.example.bxml.TupleCodomainTypeRegistry.snapshotAndClear();
+        if (extraTupleTypes.isEmpty()) {
+            return "";
+        }
+        String baseName = state.baseName;
+        Path tupleTypesFile = state.outputDir.resolve(baseName + "_tuple_types.acsl");
+        StringBuilder tupleTypesContent = new StringBuilder();
+        tupleTypesContent.append("axiomatic ").append(baseName).append("_tuple_types {\n");
+        for (Map.Entry<String, String> e : extraTupleTypes.entrySet()) {
+            tupleTypesContent
+                    .append("  type ")
+                    .append(e.getKey())
+                    .append(" = ")
+                    .append(e.getValue())
+                    .append(";\n");
+        }
+        tupleTypesContent.append("}\n");
+        Files.writeString(tupleTypesFile, tupleTypesContent.toString());
+        return "include \"" + baseName + "_tuple_types.acsl\";\n";
     }
 
     /**

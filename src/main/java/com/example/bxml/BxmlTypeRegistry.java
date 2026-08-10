@@ -16,6 +16,13 @@ import org.w3c.dom.NodeList;
 public final class BxmlTypeRegistry {
 
     /**
+     * Instanciação genérica default de {@code Relation<A,B>} ({@code integer,integer}) — resolvida
+     * diretamente via {@code type Relation<A,B> = Set<Tuple<A,B> >;} em {@code types.acsl}, sem
+     * depender de um alias achatado {@code Relation_int_int} estático (que não existe nessa forma).
+     */
+    private static final String RELATION_INT_INT = "Relation<integer,integer>";
+
+    /**
      * Nome achatado (ver {@link #flattenGenericTypeExprToIdentifier}) para uma relação de domínio
      * escalar e codomínio tupla de N&gt;=2 elementos, qualquer mistura de inteiro/booleano,
      * aninhada à esquerda: grupo 1 = domínio, grupo 2 = os {@code "_Tuple"} (contagem = N-1), grupo
@@ -128,8 +135,11 @@ public final class BxmlTypeRegistry {
      * com "incompatible types").
      *
      * <p>Para os 3 pares escalar-escalar mais comuns ({@code int_int}/{@code int_bool}/{@code
-     * bool_int}) usa os aliases estáticos pré-declarados em {@code types.acsl} (evita gerar um
-     * ficheiro extra por máquina para o caso mais frequente). Para QUALQUER outra combinação —
+     * bool_int}) usa a instanciação genérica {@code Relation<A,B>} já declarada em {@code
+     * types.acsl} ({@code type Relation<A,B> = Set<Tuple<A,B> >;}) — não um alias achatado
+     * {@code Relation_X_Y} estático, que não existe em {@code types.acsl} e falharia no
+     * {@code -acsl-import} com "no such type" (evita gerar um ficheiro extra por máquina para o caso
+     * mais frequente). Para QUALQUER outra combinação —
      * {@code bool_bool}, ou um codomínio tupla de N&gt;=2 elementos com qualquer mistura de
      * inteiro/booleano — não há como pré-declarar todas as combinações possíveis (explosão
      * combinatória: 2^N tipos de codomínio × 2 tipos de domínio × N aridades), então regista o tipo
@@ -158,7 +168,7 @@ public final class BxmlTypeRegistry {
 
     public static String powCartesianProductToAcslRelationType(String innerProduct) {
         if (innerProduct == null || !innerProduct.contains("*")) {
-            return "Relation_int_int";
+            return RELATION_INT_INT;
         }
         String trimmed = innerProduct.trim();
         if (trimmed.startsWith("(")) {
@@ -170,7 +180,7 @@ public final class BxmlTypeRegistry {
             if (!t.isEmpty()) parts.add(t);
         }
         if (parts.size() < 2) {
-            return "Relation_int_int";
+            return RELATION_INT_INT;
         }
         java.util.List<String> acslTypes = new java.util.ArrayList<>();
         for (String part : parts) {
@@ -181,13 +191,13 @@ public final class BxmlTypeRegistry {
             String le = acslTypes.get(0);
             String re = acslTypes.get(1);
             if ("integer".equals(le) && "integer".equals(re)) {
-                return "Relation_int_int";
+                return RELATION_INT_INT;
             }
             if ("integer".equals(le) && "boolean".equals(re)) {
-                return "Relation_int_bool";
+                return "Relation<integer,boolean>";
             }
             if ("boolean".equals(le) && "integer".equals(re)) {
-                return "Relation_bool_int";
+                return "Relation<boolean,integer>";
             }
             // boolean_boolean: não pré-declarado — cai no caminho genérico abaixo em vez do
             // default errado antigo.
@@ -230,14 +240,14 @@ public final class BxmlTypeRegistry {
         if (closeIdx < 0
                 || closeIdx + 2 > innerProduct.length()
                 || innerProduct.charAt(closeIdx + 1) != '*') {
-            return "Relation_int_int";
+            return RELATION_INT_INT;
         }
         String domainInner = innerProduct.substring(1, closeIdx).trim();
         String codomainInner = innerProduct.substring(closeIdx + 2).trim();
         String domainType = leftNestedTupleType(domainInner);
         String codomainType = leftNestedTupleType(codomainInner);
         if (domainType == null || codomainType == null) {
-            return "Relation_int_int";
+            return RELATION_INT_INT;
         }
         return registerCartesianRelationType(domainType, codomainType);
     }
@@ -406,7 +416,7 @@ public final class BxmlTypeRegistry {
             return e.getAttribute("value");
         }
         if ("Unary_Exp".equals(ln) && "POW".equals(e.getAttribute("op"))) {
-            Element inner = firstNonAttrElementChild(e);
+            Element inner = BxmlDomUtils.firstNonAttrElementChild(e);
             return "POW(" + bxmlTypeExprToString(inner, topLevelProduct) + ")";
         }
         if ("Binary_Exp".equals(ln) && "*".equals(e.getAttribute("op"))) {
@@ -424,18 +434,6 @@ public final class BxmlTypeRegistry {
             }
         }
         return "UNKNOWN";
-    }
-
-    private static Element firstNonAttrElementChild(Element parent) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element el = (Element) n;
-            if ("Attr".equals(el.getLocalName())) continue;
-            return el;
-        }
-        return null;
     }
 
     private static Element[] twoNonAttrElementChildren(Element parent) {

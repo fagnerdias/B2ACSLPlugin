@@ -5,7 +5,6 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -308,7 +307,7 @@ final class DummyGhostAxiomaticBuilder {
             out.addAll(abstractVarNames);
         }
         if (machineEl != null) {
-            Element block = firstChildElement(machineEl, "Concrete_Constants");
+            Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");
             if (block != null) {
                 NodeList ch = block.getChildNodes();
                 for (int i = 0; i < ch.getLength(); i++) {
@@ -515,6 +514,14 @@ final class DummyGhostAxiomaticBuilder {
             String elem = t.substring(4, t.length() - 1).trim();
             return "DSet<" + elem + ">";
         }
+        // Instanciação genérica Relation<A,B>/Function<A,B> (ver
+        // BxmlTypeRegistry#powCartesianProductToAcslRelationType, par escalar-escalar) — o universo
+        // ghost isolado não vê "type Relation<A,B> = Set<Tuple<A,B> >;" de types.acsl (front-end
+        // isolado, sem símbolos de -acsl-import), por isso precisa do equivalente local DRelation<A,B>.
+        if ((t.startsWith("Relation<") || t.startsWith("Function<")) && t.endsWith(">")) {
+            String inner = t.substring(t.indexOf('<') + 1, t.length() - 1).trim();
+            return "DRelation<" + inner + ">";
+        }
         // Nome achatado (ver BxmlTypeRegistry#powCartesianProductToAcslRelationType /
         // #flattenGenericTypeExprToIdentifier) para um codomínio tupla de N>=2 elementos, qualquer
         // mistura de inteiro/booleano — tem múltiplos segmentos com "Tuple" maiúsculo, não pode
@@ -664,7 +671,7 @@ final class DummyGhostAxiomaticBuilder {
         if (machineEl == null || ctx == null) {
             return;
         }
-        Element block = firstChildElement(machineEl, "Concrete_Constants");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");
         if (block == null) {
             return;
         }
@@ -773,15 +780,4 @@ final class DummyGhostAxiomaticBuilder {
         return sb.toString();
     }
 
-    private static Element firstChildElement(Element parent, String localName) {
-        if (parent == null) return null;
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) return e;
-        }
-        return null;
-    }
 }

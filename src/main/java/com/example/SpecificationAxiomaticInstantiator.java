@@ -104,167 +104,259 @@ public final class SpecificationAxiomaticInstantiator {
             List<String> listElemTypes,
             List<List<String>> pairTypes) {
 
+        /**
+         * Orquestrador: classifica cada entrada crua ({@link #classifyType}) e depois aplica os
+         * passos de pós-processamento em sequência. Extraído de um único método de 212 linhas
+         * (PMD: cyclomatic complexity 65, cognitive complexity 153, NPath 492240 — de longe o
+         * pior método do projeto) em extract-method puro — nenhuma linha de LÓGICA mudou, só a
+         * organização; cada passo abaixo é byte-a-byte o que estava inline antes, agora com nome
+         * próprio.
+         */
         static MonoContext from(List<String> specTypes) {
             Set<String> setElem = new LinkedHashSet<>();
             Set<String> listElem = new LinkedHashSet<>();
             Set<List<String>> pairs = new LinkedHashSet<>();
 
             for (String raw : specTypes) {
-                if (raw == null) continue;
-                String t = normalizeTypeWhitespace(raw.trim());
-                if (t.isBlank() || t.contains("→") || t.startsWith("#")) continue;
+                classifyType(raw, setElem, listElem, pairs);
+            }
 
-                if (t.startsWith("Set<") && t.endsWith(">")) {
-                    String inner = t.substring(4, t.length() - 1).trim();
-                    // Ignora variáveis de tipo (letras maiúsculas isoladas, ex.: "A") e tipos legados D*
-                    if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) {
-                        setElem.add(inner);
-                        // Set<Tuple<A,B>> também expressa uma relação (A,B): sem registar o par
-                        // aqui, blocos de aridade 2 (dom, ran, cartesian_product, is_total_function,
-                        // …) nunca são instanciados para pares só vistos nesta forma "expandida" —
-                        // como os aliases sempre presentes de types.acsl (ex.: Relation_int_bool =
-                        // Set<Tuple<integer,boolean> >), que hoje só alimentam setElemTypes (via
-                        // este mesmo ramo) e nunca pairTypes, deixando dom/ran inconsistentes com
-                        // os tipos listados em axiomatic new_types.
-                        if (inner.startsWith("Tuple<") && inner.endsWith(">")) {
-                            List<String> tupleParts =
-                                    splitTopComma(inner.substring(6, inner.length() - 1));
-                            if (tupleParts.size() == 2) {
-                                List<String> p = tupleParts.stream().map(String::trim).toList();
-                                if (p.stream().noneMatch(SpecificationAxiomaticInstantiator::isTypeVariable)
-                                        && p.stream()
-                                                .noneMatch(
-                                                        SpecificationAxiomaticInstantiator
-                                                                ::containsStatementChars)
-                                        && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
-                                    pairs.add(p);
-                                }
-                            }
-                        }
-                    }
-                } else if (t.startsWith("\\list<") && t.endsWith(">")) {
-                    String inner = t.substring(6, t.length() - 1).trim();
-                    if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) listElem.add(inner);
-                } else if ((t.startsWith("Tuple<") || t.startsWith("Relation<")
-                        || t.startsWith("Function<")) && t.endsWith(">")) {
-                    int open = t.indexOf('<');
-                    List<String> parts = splitTopComma(t.substring(open + 1, t.length() - 1));
-                    if (parts.size() == 2) {
-                        List<String> p = parts.stream().map(String::trim).toList();
-                        if (p.stream().noneMatch(SpecificationAxiomaticInstantiator::isTypeVariable)
-                                && p.stream().noneMatch(SpecificationAxiomaticInstantiator::containsStatementChars)
-                                && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
-                            pairs.add(p);
-                        }
-                    }
-                } else if (!t.contains("<") && TUPLE_CODOMAIN_RELATION_NAME.matcher(t).matches()) {
-                    // Nome achatado gerado dinamicamente por BxmlTypeRegistry#powCartesianProductToAcslRelationType
-                    // para um codomínio tupla de N>=2 elementos (qualquer mistura de inteiro/booleano,
-                    // ex.: "Relation_integer_Tuple_Tuple_integer_integer_integer" para N=3 all-integer,
-                    // ou "Relation_integer_Tuple_boolean_integer" para N=2 misto) — não bate com
-                    // LEGACY_PAIR_TYPE (que só aceita segmentos minúsculos; "Tuple" é maiúsculo de
-                    // propósito para nunca ser confundido com esse caminho). Desfaz o achatamento:
-                    // conta quantos "_Tuple" existem (= aridade do codomínio - 1) e os tipos-folha
-                    // seguintes (integer/boolean, na ordem), reconstruindo o tipo aninhado à
-                    // esquerda que os blocos axiomatic<A,B> da lib esperam.
-                    Matcher tcm = TUPLE_CODOMAIN_RELATION_NAME.matcher(t);
-                    tcm.matches();
-                    String domain = tcm.group(1);
-                    int nestingCount = countOccurrences(tcm.group(2), "_Tuple");
-                    List<String> leaves = new ArrayList<>();
-                    for (String leaf : tcm.group(3).split("_")) {
-                        if (!leaf.isBlank()) leaves.add(leaf);
-                    }
-                    if (nestingCount == leaves.size() - 1) {
-                        String codomain = leaves.get(0);
-                        for (int i = 1; i < leaves.size(); i++) {
-                            codomain = "Tuple<" + codomain + "," + leaves.get(i) + ">";
-                        }
-                        pairs.add(List.of(domain, codomain));
-                        setElem.add(domain);
-                        setElem.addAll(leaves);
-                    }
-                } else if (!t.contains("<") && TUPLE_DOMAIN_RELATION_NAME.matcher(t).matches()) {
-                    // Espelho do ramo acima para o caso oposto: domínio composto (matriz
-                    // característica, ex. "Relation_Tuple_integer_integer_boolean" para
-                    // player_islands_i : PLAYER*ISLAND --> BOOL) + codomínio escalar — ver
-                    // BxmlTypeRegistry#TUPLE_DOMAIN_RELATION_NAME.
-                    Matcher tdm = TUPLE_DOMAIN_RELATION_NAME.matcher(t);
-                    tdm.matches();
-                    int nestingCount = countOccurrences(tdm.group(1), "Tuple_");
-                    List<String> domainLeaves = new ArrayList<>();
-                    for (String leaf : tdm.group(2).split("_")) {
-                        if (!leaf.isBlank()) domainLeaves.add(leaf);
-                    }
-                    String codomain = tdm.group(3);
-                    if (nestingCount == domainLeaves.size() - 1) {
-                        String domain = domainLeaves.get(0);
-                        for (int i = 1; i < domainLeaves.size(); i++) {
-                            domain = "Tuple<" + domain + "," + domainLeaves.get(i) + ">";
-                        }
-                        pairs.add(List.of(domain, codomain));
-                        setElem.add(codomain);
-                        setElem.addAll(domainLeaves);
-                    }
-                } else if (!t.contains("<") && (t.startsWith("Relation_") || t.startsWith("Function_"))) {
-                    // Tipos legados no formato underscore: Relation_int_int, Function_integer_boolean, etc.
-                    Matcher legacyM = LEGACY_PAIR_TYPE.matcher(t);
-                    if (legacyM.matches()) {
-                        String a = normalizeLegacySegment(legacyM.group(1));
-                        String b = normalizeLegacySegment(legacyM.group(2));
-                        if (!isTypeVariable(a) && !isTypeVariable(b)
-                                && !containsStatementChars(a) && !containsStatementChars(b)
-                                && !isLegacyDType(a) && !isLegacyDType(b)) {
-                            pairs.add(List.of(a, b));
-                            // Adiciona tipos individuais a setElem para que axiomas de aridade 1
-                            // (belongs, singleton, etc.) também sejam instanciados para esses tipos.
-                            if (!a.contains("<")) setElem.add(a);
-                            if (!b.contains("<")) setElem.add(b);
-                        }
+            derivePairsFromSetElemIfEmpty(setElem, pairs);
+            pairs = symmetrizePairs(pairs);
+            pairs = renormalizePairWhitespace(pairs);
+            addPairComponentsToSetElem(pairs, setElem);
+            closeSetElemUnderPowSet(setElem);
+
+            return new MonoContext(List.copyOf(setElem), List.copyOf(listElem), List.copyOf(pairs));
+        }
+
+        /**
+         * Classifica UMA entrada crua de {@code specTypes} (ex. {@code "Set<integer>"}, {@code
+         * "Relation_int_int"}, …) e acumula o resultado nas coleções mutáveis passadas — o corpo
+         * do laço de {@link #from}, uma cadeia de até 6 formas de tipo reconhecidas.
+         */
+        private static void classifyType(
+                String raw, Set<String> setElem, Set<String> listElem, Set<List<String>> pairs) {
+            if (raw == null) return;
+            String t = normalizeTypeWhitespace(raw.trim());
+            if (t.isBlank() || t.contains("→") || t.startsWith("#")) return;
+
+            if (isSetType(t)) {
+                classifySetType(t, setElem, pairs);
+            } else if (isListType(t)) {
+                classifyListType(t, listElem);
+            } else if (isGenericPairType(t)) {
+                classifyGenericPairType(t, pairs);
+            } else if (isFlattenedTupleCodomainType(t)) {
+                classifyFlattenedTupleCodomainType(t, setElem, pairs);
+            } else if (isFlattenedTupleDomainType(t)) {
+                classifyFlattenedTupleDomainType(t, setElem, pairs);
+            } else if (isLegacyPairType(t)) {
+                classifyLegacyPairType(t, setElem, pairs);
+            }
+        }
+
+        private static boolean isSetType(String t) {
+            return t.startsWith("Set<") && t.endsWith(">");
+        }
+
+        private static boolean isListType(String t) {
+            return t.startsWith("\\list<") && t.endsWith(">");
+        }
+
+        private static boolean isGenericPairType(String t) {
+            return (t.startsWith("Tuple<") || t.startsWith("Relation<") || t.startsWith("Function<"))
+                    && t.endsWith(">");
+        }
+
+        private static boolean isFlattenedTupleCodomainType(String t) {
+            return !t.contains("<") && TUPLE_CODOMAIN_RELATION_NAME.matcher(t).matches();
+        }
+
+        private static boolean isFlattenedTupleDomainType(String t) {
+            return !t.contains("<") && TUPLE_DOMAIN_RELATION_NAME.matcher(t).matches();
+        }
+
+        private static boolean isLegacyPairType(String t) {
+            return !t.contains("<") && (t.startsWith("Relation_") || t.startsWith("Function_"));
+        }
+
+        /**
+         * {@code Set<X>}: X vira elemento de setElem. Se X for {@code Tuple<A,B>}, também expressa
+         * uma relação (A,B): sem registar o par aqui, blocos de aridade 2 (dom, ran,
+         * cartesian_product, is_total_function, …) nunca são instanciados para pares só vistos
+         * nesta forma "expandida" — como os aliases sempre presentes de types.acsl (ex.:
+         * Relation_int_bool = Set<Tuple<integer,boolean> >), que hoje só alimentam setElemTypes
+         * (via este mesmo ramo) e nunca pairTypes, deixando dom/ran inconsistentes com os tipos
+         * listados em axiomatic new_types.
+         */
+        private static void classifySetType(String t, Set<String> setElem, Set<List<String>> pairs) {
+            String inner = t.substring(4, t.length() - 1).trim();
+            // Ignora variáveis de tipo (letras maiúsculas isoladas, ex.: "A") e tipos legados D*
+            if (isTypeVariable(inner) || containsStatementChars(inner) || isLegacyDType(inner)) {
+                return;
+            }
+            setElem.add(inner);
+            if (inner.startsWith("Tuple<") && inner.endsWith(">")) {
+                List<String> tupleParts = splitTopComma(inner.substring(6, inner.length() - 1));
+                if (tupleParts.size() == 2) {
+                    List<String> p = tupleParts.stream().map(String::trim).toList();
+                    if (p.stream().noneMatch(SpecificationAxiomaticInstantiator::isTypeVariable)
+                            && p.stream().noneMatch(SpecificationAxiomaticInstantiator::containsStatementChars)
+                            && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
+                        pairs.add(p);
                     }
                 }
             }
+        }
 
-            // Se não existem pares explícitos, deriva de setElemTypes × setElemTypes.
-            // Usa apenas tipos "folha" (sem parâmetros de tipo, i.e. sem '<') para evitar
-            // pares como ["Tuple<integer,integer>","Tuple<integer,integer>"] que emergem quando
-            // o Frama-C já expõe Set<Tuple<A,B>> no output e que não correspondem a nenhuma
-            // relação concreta da especificação.
-            if (pairs.isEmpty()) {
-                for (String e : setElem) {
-                    if (!e.contains("<")) {
-                        pairs.add(List.of(e, e));
-                    }
+        /** {@code \list<X>}: X vira elemento de listElem. */
+        private static void classifyListType(String t, Set<String> listElem) {
+            String inner = t.substring(6, t.length() - 1).trim();
+            if (!isTypeVariable(inner) && !containsStatementChars(inner) && !isLegacyDType(inner)) {
+                listElem.add(inner);
+            }
+        }
+
+        /** {@code Tuple<A,B>}/{@code Relation<A,B>}/{@code Function<A,B>} escritos por extenso: (A,B) vira par. */
+        private static void classifyGenericPairType(String t, Set<List<String>> pairs) {
+            int open = t.indexOf('<');
+            List<String> parts = splitTopComma(t.substring(open + 1, t.length() - 1));
+            if (parts.size() != 2) return;
+            List<String> p = parts.stream().map(String::trim).toList();
+            if (p.stream().noneMatch(SpecificationAxiomaticInstantiator::isTypeVariable)
+                    && p.stream().noneMatch(SpecificationAxiomaticInstantiator::containsStatementChars)
+                    && p.stream().noneMatch(SpecificationAxiomaticInstantiator::isLegacyDType)) {
+                pairs.add(p);
+            }
+        }
+
+        /**
+         * Nome achatado gerado dinamicamente por BxmlTypeRegistry#powCartesianProductToAcslRelationType
+         * para um codomínio tupla de N>=2 elementos (qualquer mistura de inteiro/booleano,
+         * ex.: "Relation_integer_Tuple_Tuple_integer_integer_integer" para N=3 all-integer,
+         * ou "Relation_integer_Tuple_boolean_integer" para N=2 misto) — não bate com
+         * LEGACY_PAIR_TYPE (que só aceita segmentos minúsculos; "Tuple" é maiúsculo de
+         * propósito para nunca ser confundido com esse caminho). Desfaz o achatamento:
+         * conta quantos "_Tuple" existem (= aridade do codomínio - 1) e os tipos-folha
+         * seguintes (integer/boolean, na ordem), reconstruindo o tipo aninhado à
+         * esquerda que os blocos axiomatic<A,B> da lib esperam.
+         */
+        private static void classifyFlattenedTupleCodomainType(
+                String t, Set<String> setElem, Set<List<String>> pairs) {
+            Matcher tcm = TUPLE_CODOMAIN_RELATION_NAME.matcher(t);
+            tcm.matches();
+            String domain = tcm.group(1);
+            int nestingCount = countOccurrences(tcm.group(2), "_Tuple");
+            List<String> leaves = new ArrayList<>();
+            for (String leaf : tcm.group(3).split("_")) {
+                if (!leaf.isBlank()) leaves.add(leaf);
+            }
+            if (nestingCount != leaves.size() - 1) return;
+            String codomain = leaves.get(0);
+            for (int i = 1; i < leaves.size(); i++) {
+                codomain = "Tuple<" + codomain + "," + leaves.get(i) + ">";
+            }
+            pairs.add(List.of(domain, codomain));
+            setElem.add(domain);
+            setElem.addAll(leaves);
+        }
+
+        /**
+         * Espelho do ramo acima para o caso oposto: domínio composto (matriz
+         * característica, ex. "Relation_Tuple_integer_integer_boolean" para
+         * player_islands_i : PLAYER*ISLAND --> BOOL) + codomínio escalar — ver
+         * BxmlTypeRegistry#TUPLE_DOMAIN_RELATION_NAME.
+         */
+        private static void classifyFlattenedTupleDomainType(
+                String t, Set<String> setElem, Set<List<String>> pairs) {
+            Matcher tdm = TUPLE_DOMAIN_RELATION_NAME.matcher(t);
+            tdm.matches();
+            int nestingCount = countOccurrences(tdm.group(1), "Tuple_");
+            List<String> domainLeaves = new ArrayList<>();
+            for (String leaf : tdm.group(2).split("_")) {
+                if (!leaf.isBlank()) domainLeaves.add(leaf);
+            }
+            String codomain = tdm.group(3);
+            if (nestingCount != domainLeaves.size() - 1) return;
+            String domain = domainLeaves.get(0);
+            for (int i = 1; i < domainLeaves.size(); i++) {
+                domain = "Tuple<" + domain + "," + domainLeaves.get(i) + ">";
+            }
+            pairs.add(List.of(domain, codomain));
+            setElem.add(codomain);
+            setElem.addAll(domainLeaves);
+        }
+
+        /** Tipos legados no formato underscore: Relation_int_int, Function_integer_boolean, etc. */
+        private static void classifyLegacyPairType(
+                String t, Set<String> setElem, Set<List<String>> pairs) {
+            Matcher legacyM = LEGACY_PAIR_TYPE.matcher(t);
+            if (!legacyM.matches()) return;
+            String a = normalizeLegacySegment(legacyM.group(1));
+            String b = normalizeLegacySegment(legacyM.group(2));
+            if (isTypeVariable(a) || isTypeVariable(b)
+                    || containsStatementChars(a) || containsStatementChars(b)
+                    || isLegacyDType(a) || isLegacyDType(b)) {
+                return;
+            }
+            pairs.add(List.of(a, b));
+            // Adiciona tipos individuais a setElem para que axiomas de aridade 1
+            // (belongs, singleton, etc.) também sejam instanciados para esses tipos.
+            if (!a.contains("<")) setElem.add(a);
+            if (!b.contains("<")) setElem.add(b);
+        }
+
+        /**
+         * Se não existem pares explícitos, deriva de setElemTypes × setElemTypes.
+         * Usa apenas tipos "folha" (sem parâmetros de tipo, i.e. sem '<') para evitar
+         * pares como ["Tuple<integer,integer>","Tuple<integer,integer>"] que emergem quando
+         * o Frama-C já expõe Set<Tuple<A,B>> no output e que não correspondem a nenhuma
+         * relação concreta da especificação.
+         */
+        private static void derivePairsFromSetElemIfEmpty(Set<String> setElem, Set<List<String>> pairs) {
+            if (!pairs.isEmpty()) return;
+            for (String e : setElem) {
+                if (!e.contains("<")) {
+                    pairs.add(List.of(e, e));
                 }
             }
+        }
 
-            // Simetriza: para cada par (A, B) garante também (B, A). O bloco genérico
-            // Relation_inverse<A,B> (relation_functions/inverse.acsl) devolve Relation<B,A> e
-            // quantifica sobre Tuple<B,A> no seu axioma — como esse bloco é instanciado para
-            // todo par em pairTypes (independentemente de relation_inverse ser chamado com esse
-            // par na especificação), sem o par invertido as declarações first/second/couple/equals
-            // de Tuple<B,A> nunca são geradas, e o Frama-C rejeita o merge com
-            // "no such predicate or logic function second(Tuple<B,A>)".
+        /**
+         * Simetriza: para cada par (A, B) garante também (B, A). O bloco genérico
+         * Relation_inverse<A,B> (relation_functions/inverse.acsl) devolve Relation<B,A> e
+         * quantifica sobre Tuple<B,A> no seu axioma — como esse bloco é instanciado para
+         * todo par em pairTypes (independentemente de relation_inverse ser chamado com esse
+         * par na especificação), sem o par invertido as declarações first/second/couple/equals
+         * de Tuple<B,A> nunca são geradas, e o Frama-C rejeita o merge com
+         * "no such predicate or logic function second(Tuple<B,A>)".
+         */
+        private static Set<List<String>> symmetrizePairs(Set<List<String>> pairs) {
             Set<List<String>> withSwapped = new LinkedHashSet<>(pairs);
             for (List<String> pair : pairs) {
                 withSwapped.add(List.of(pair.get(1), pair.get(0)));
             }
-            pairs = withSwapped;
+            return withSwapped;
+        }
 
-            // Renormaliza espaçamento de vírgula em cada elemento do par: normalizeTypeWhitespace
-            // (linha ~114) só é aplicada aos textos CRUS lidos de specTypes — pares construídos por
-            // OUTROS caminhos (ex. registos de tipo dinâmicos por-máquina de BxmlTypeRegistry, como
-            // Relation<boolean, Tuple<integer,integer>>) chegam aqui com o espaçamento que a chamada
-            // de origem usou, potencialmente inconsistente com uma entrada semanticamente igual mas
-            // textualmente diferente já presente (ex. "Tuple<integer,integer>" vs "Tuple<integer,
-            // integer>"). Como pairs é um Set<List<String>>, dois elementos que só diferem neste
-            // espaçamento cosmético NÃO deduplicam (List.equals é elemento-a-elemento por String) —
-            // cada um gera a sua PRÓPRIA declaração "logic Tuple<...> couple(...)" em
-            // merged_code.c, e o Frama-C rejeita a segunda ("already declared with the same
-            // profile"). Só descoberto ao correr RulerOfTheSeas (primeiro exemplo com dois sítios de
-            // registo colidindo neste tipo específico) — mesma causa raiz do fix em
-            // buildConcreteNewTypesBlock/normalizeTypeSpacing, aplicada aqui na fonte para não
-            // precisar repetir o mesmo patch em cada consumidor downstream de pairTypes.
+        /**
+         * Renormaliza espaçamento de vírgula em cada elemento do par: normalizeTypeWhitespace
+         * só é aplicada aos textos CRUS lidos de specTypes — pares construídos por
+         * OUTROS caminhos (ex. registos de tipo dinâmicos por-máquina de BxmlTypeRegistry, como
+         * Relation<boolean, Tuple<integer,integer>>) chegam aqui com o espaçamento que a chamada
+         * de origem usou, potencialmente inconsistente com uma entrada semanticamente igual mas
+         * textualmente diferente já presente (ex. "Tuple<integer,integer>" vs "Tuple<integer,
+         * integer>"). Como pairs é um Set<List<String>>, dois elementos que só diferem neste
+         * espaçamento cosmético NÃO deduplicam (List.equals é elemento-a-elemento por String) —
+         * cada um gera a sua PRÓPRIA declaração "logic Tuple<...> couple(...)" em
+         * merged_code.c, e o Frama-C rejeita a segunda ("already declared with the same
+         * profile"). Só descoberto ao correr RulerOfTheSeas (primeiro exemplo com dois sítios de
+         * registo colidindo neste tipo específico) — mesma causa raiz do fix em
+         * buildConcreteNewTypesBlock/normalizeTypeSpacing, aplicada aqui na fonte para não
+         * precisar repetir o mesmo patch em cada consumidor downstream de pairTypes.
+         */
+        private static Set<List<String>> renormalizePairWhitespace(Set<List<String>> pairs) {
             Set<List<String>> normalizedPairs = new LinkedHashSet<>();
             for (List<String> pair : pairs) {
                 normalizedPairs.add(
@@ -272,20 +364,24 @@ public final class SpecificationAxiomaticInstantiator {
                                 .map(SpecificationAxiomaticInstantiator::normalizeTypeWhitespace)
                                 .toList());
             }
-            pairs = normalizedPairs;
+            return normalizedPairs;
+        }
 
-            // Para cada par (A, B), adiciona Tuple<A, B> como tipo elemento de Set.
-            // Necessário para instanciar axiomas de conjunto puro (belongs, dom, ran, etc.)
-            // com Tuple<A,B> como tipo concreto de A (e.g. belongs_Tuple_integer_integer).
-            // NÃO é usado em axiomas com \list<A> (ver buildSubstitutions).
-            //
-            // Também adiciona A e B individualmente: cartesian_product_def_A_B (instanciado para
-            // TODO par em pairTypes, ver a simetrização acima) usa "belongs(y, tt)" com
-            // tt : Set<B> — se B for ele próprio um tipo composto (ex.: Set<integer>, típico de uma
-            // relação PLAYER +-> POW(ISLAND), codomínio Set<integer>) e nunca aparecer como entrada
-            // CRUA de specTypes, belongs nunca ganha o overload (Set<integer>, Set<Set<integer>>) —
-            // "no such predicate or logic function belongs(Set<ℤ>, Set<Set<ℤ>>)". Só descoberto ao
-            // correr RulerOfTheSeas (primeiro exemplo com uma relação de codomínio Set<...>).
+        /**
+         * Para cada par (A, B), adiciona Tuple<A, B> como tipo elemento de Set.
+         * Necessário para instanciar axiomas de conjunto puro (belongs, dom, ran, etc.)
+         * com Tuple<A,B> como tipo concreto de A (e.g. belongs_Tuple_integer_integer).
+         * NÃO é usado em axiomas com \list<A> (ver buildSubstitutions).
+         *
+         * Também adiciona A e B individualmente: cartesian_product_def_A_B (instanciado para
+         * TODO par em pairTypes, ver a simetrização acima) usa "belongs(y, tt)" com
+         * tt : Set<B> — se B for ele próprio um tipo composto (ex.: Set<integer>, típico de uma
+         * relação PLAYER +-> POW(ISLAND), codomínio Set<integer>) e nunca aparecer como entrada
+         * CRUA de specTypes, belongs nunca ganha o overload (Set<integer>, Set<Set<integer>>) —
+         * "no such predicate or logic function belongs(Set<ℤ>, Set<Set<ℤ>>)". Só descoberto ao
+         * correr RulerOfTheSeas (primeiro exemplo com uma relação de codomínio Set<...>).
+         */
+        private static void addPairComponentsToSetElem(Set<List<String>> pairs, Set<String> setElem) {
             Set<String> tupleElems = new LinkedHashSet<>();
             for (List<String> pair : pairs) {
                 if (pair.size() == 2
@@ -297,16 +393,20 @@ public final class SpecificationAxiomaticInstantiator {
                 }
             }
             setElem.addAll(tupleElems);
+        }
 
-            // pow_set (POW(X) em posição de valor) é um bloco genérico de UM parâmetro de tipo,
-            // instanciado automaticamente para TODO tipo em setElem — incluindo tipos-base sempre
-            // presentes como boolean, mesmo quando o único POW(...) da especificação é sobre outro
-            // tipo (ex.: PLAYER/integer). pow_set_def_T usa "belongs(s, pow_set(universe))" com
-            // s, universe : Set<T> — exige belongs(Set<T>, Set<Set<T>>), ou seja, Set<T> precisa
-            // ele próprio estar em setElem. Sem este fecho, só o T literal do POW(...) da
-            // especificação ganhava Set<T> (via o ramo de pairs acima) e as instanciações pow_set
-            // para os DEMAIS tipos-base (ex. boolean) ficavam com belongs em falta. Fecho de UM
-            // nível só (não recursivo): basta para o uso atual de pow_set, que não aninha POW(POW(X)).
+        /**
+         * pow_set (POW(X) em posição de valor) é um bloco genérico de UM parâmetro de tipo,
+         * instanciado automaticamente para TODO tipo em setElem — incluindo tipos-base sempre
+         * presentes como boolean, mesmo quando o único POW(...) da especificação é sobre outro
+         * tipo (ex.: PLAYER/integer). pow_set_def_T usa "belongs(s, pow_set(universe))" com
+         * s, universe : Set<T> — exige belongs(Set<T>, Set<Set<T>>), ou seja, Set<T> precisa
+         * ele próprio estar em setElem. Sem este fecho, só o T literal do POW(...) da
+         * especificação ganhava Set<T> (via o ramo de pairs acima) e as instanciações pow_set
+         * para os DEMAIS tipos-base (ex. boolean) ficavam com belongs em falta. Fecho de UM
+         * nível só (não recursivo): basta para o uso atual de pow_set, que não aninha POW(POW(X)).
+         */
+        private static void closeSetElemUnderPowSet(Set<String> setElem) {
             Set<String> setClosure = new LinkedHashSet<>();
             for (String e : setElem) {
                 if (!isTypeVariable(e)) {
@@ -314,8 +414,6 @@ public final class SpecificationAxiomaticInstantiator {
                 }
             }
             setElem.addAll(setClosure);
-
-            return new MonoContext(List.copyOf(setElem), List.copyOf(listElem), List.copyOf(pairs));
         }
 
         /** União de todos os tipos elemento (Set + list). */

@@ -276,14 +276,7 @@ public final class BxmlOperationsTranslator {
             if (promotedOpNames.contains(opName)) continue;
             String funcName = machineName + "__" + sanitize(opName);
 
-            List<String> requires = new ArrayList<>();
-            for (String inv : invariantPredicateNames) {
-                requires.add(inv);
-            }
-            if (requiresOnlyPredicateNames != null) {
-                requires.addAll(requiresOnlyPredicateNames);
-            }
-            Element pre = firstChildElement(child, "Precondition");
+            Element pre = BxmlDomUtils.firstChildElement(child, "Precondition");
             // Por-operação, não por máquina inteira: nomes de parâmetro colidem entre operações
             // diferentes com papéis diferentes (ex.: Biblioteca's "cc" é escalar COPY em addBook
             // mas array de saída em copiesQuery) — ver javadoc de
@@ -294,113 +287,28 @@ public final class BxmlOperationsTranslator {
                                     pre, declaredSetNamesForParams));
             List<String> outputParams = parseOutputParameterNames(child);
             Map<String, ArrayFunctionParamInfo> arrayParamLens = inferArrayFunctionParamLengths(child, opCtx);
-            if (pre != null) {
-                requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, opCtx));
-                rewriteAcslListForArrayBackedParams(requires, arrayParamLens);
-                rewriteRequiresForOutputParameters(requires, outputParams, boolOutputParameterNames(child, opCtx));
-            }
 
-            Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, opCtx);
-            for (String p : outputParams) {
-                // Saídas array-backed (função/relação B) têm o \valid deferido: precisa do
-                // intervalo do domínio (ex.: "0 .. MAX_COPY"), só conhecido após o laço da
-                // implementação ser traduzido (ver functionTypedOutputBounds mais abaixo).
-                // \valid(p) sozinho só cobre *p; sem o intervalo, o Frama-C aceita o assigns
-                // p[..] mas o WP não tem base para validar p[1..N-1].
-                if (!funcTypedOutputs.contains(p)) {
-                    requires.add("\\valid(" + p + ")");
-                }
-            }
-            // Parâmetros de saída são ponteiros C — em memória, podem em princípio apontar para
-            // qualquer região global do programa. \separated torna explícita a não-aliasing que o
-            // modelo de memória "typed" do WP já assume implicitamente (ver aviso "Memory model
-            // hypotheses" do Frama-C), tanto contra cada variável array-backed alcançável (própria
-            // máquina + IMPORTS/SEES/USES transitivos, já resolvidos pelo chamador em
-            // separationArrayTargets) quanto, com múltiplas saídas, entre si.
-            List<String> scalarOutputParams = new ArrayList<>();
-            for (String p : outputParams) {
-                if (!funcTypedOutputs.contains(p)) {
-                    scalarOutputParams.add(p);
-                }
-            }
-            if (!separationArrayTargets.isEmpty()) {
-                for (String p : scalarOutputParams) {
-                    for (String arrayTarget : separationArrayTargets) {
-                        requires.add("\\separated(" + p + ", " + arrayTarget + ")");
-                    }
-                }
-            }
-            for (int a = 0; a < scalarOutputParams.size(); a++) {
-                for (int b = a + 1; b < scalarOutputParams.size(); b++) {
-                    requires.add(
-                            "\\separated(" + scalarOutputParams.get(a) + ", " + scalarOutputParams.get(b) + ")");
-                }
-            }
+            OperationRequiresResult requiresResult =
+                    buildRequiresForOperation(
+                            child, pre, opCtx, invariantPredicateNames, requiresOnlyPredicateNames,
+                            outputParams, arrayParamLens, separationArrayTargets);
+            List<String> requires = requiresResult.requires();
+            Set<String> funcTypedOutputs = requiresResult.funcTypedOutputs();
 
-            List<String> ensures = new ArrayList<>();
-            Element body = firstChildElement(child, "Body");
-            if (body != null) {
-                BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, opCtx);
-            }
-            applyStarPrefixToEnsures(ensures, outputParams);
-            // Antes de rewriteEnsuresBoolOutputEquality (que só troca o LHS "*p" por "(integer)(*p !=
-            // 0)"): "*p == (pred ? \true : \false)" pode ter um predicado da lib (ex.: equals(...))
-            // na condição do ternário, que o Frama-C rejeita ("symbol X is a predicate, not a
-            // function") — precisa virar bicondicional ANTES, enquanto o LHS ainda é "*p" (o regex
-            // desta função exige esse formato). Mesma correção já usada no lado ghost; só nunca
-            // apareceu aqui porque este ensures era descartado do contrato real (ver abaixo).
-            // rewriteIntegerTernaryPredicateConditionForGhost cobre a forma irmã (ternário INTEIRO,
-            // não booleano — ex. "v := v <+ %z.(...)" via formatOverwriteWithLambdaAssignment,
-            // mesmo erro do kernel "symbol X is a predicate, not a function" quando a guarda B
-            // testa pertença a uma variável de máquina em vez de um conjunto literal).
-            for (int ei = 0; ei < ensures.size(); ei++) {
-                String e = GhostOperationsCiGenerator.rewriteBoolOutputPredicateTernary(ensures.get(ei));
-                e = GhostOperationsCiGenerator.rewriteIntegerTernaryPredicateConditionForGhost(e);
-                ensures.set(ei, e);
-            }
-            rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, opCtx);
-            // Parâmetros de entrada escalares (C "int") ficam sem cast no ensures cru — comparados
-            // com um Set<integer> (ex. "singleton(bb)" dentro de "equals(books, ...)") o Frama-C
-            // infere o tipo lógico do parâmetro a partir do seu uso e rejeita ("invalid cast from
-            // Set<Biblioteca__BOOK> to Set<integer>"). O lado ghost já resolve isto com o mesmo
-            // "(integer)bb"; reaproveitado aqui pelo mesmo motivo do bloco acima.
-            List<GhostOperationsCiGenerator.Param> scalarCastParams =
-                    GhostOperationsCiGenerator.appendOutputParametersAsPointers(
-                            GhostOperationsCiGenerator.listInputParameters(child), child);
-            for (int ei = 0; ei < ensures.size(); ei++) {
-                ensures.set(
-                        ei,
-                        GhostOperationsCiGenerator.castScalarIntGhostParamsInEnsure(
-                                ensures.get(ei), scalarCastParams));
-            }
-            removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
-            List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
-            for (String inv : invariantPredicateNames) {
-                ensures.add(inv);
-            }
+            Element body = BxmlDomUtils.firstChildElement(child, "Body");
+            OperationEnsuresResult ensuresResult =
+                    buildEnsuresForOperation(
+                            child, opCtx, body, outputParams, funcTypedOutputs, invariantPredicateNames);
+            List<String> ensures = ensuresResult.ensures();
+            List<String> bodyEnsuresOnly = ensuresResult.bodyEnsuresOnly();
 
-            List<String> inputParamNames = parseInputParameterNames(child);
-            String ghostSlug = "";
-            boolean assignsAbstract =
-                    abstractVariableNames != null
-                            && !abstractVariableNames.isEmpty()
-                            && GhostOperationsCiGenerator.operationAssignsAbstract(
-                                    child, abstractVariableNames);
-            boolean bodyHasAnySub = GhostOperationsCiGenerator.operationBodyHasAnySub(child);
-            if (useGhostAbstraction && (assignsAbstract || bodyHasAnySub)) {
-                ghostSlug = GhostOperationsCiGenerator.ghostOperationSlug(opName);
-            }
-            List<String> ghostBehaviorArgs = new ArrayList<>(inputParamNames);
-            if (bodyHasAnySub || assignsAbstract) {
-                ghostBehaviorArgs.addAll(GhostOperationsCiGenerator.listOutputParameterNames(child));
-            }
-            if (libScanGhostOperationBodies != null && !ghostSlug.isBlank()) {
-                for (String line : bodyEnsuresOnly) {
-                    if (line != null && !line.isBlank()) {
-                        libScanGhostOperationBodies.append(line).append('\n');
-                    }
-                }
-            }
+            GhostSlugInfo ghostInfo =
+                    computeGhostSlugInfo(child, opName, useGhostAbstraction, abstractVariableNames);
+            String ghostSlug = ghostInfo.ghostSlug();
+            boolean assignsAbstract = ghostInfo.assignsAbstract();
+            List<String> ghostBehaviorArgs = ghostInfo.ghostBehaviorArgs();
+
+            appendLibScanGhostOperationBodies(libScanGhostOperationBodies, ghostSlug, bodyEnsuresOnly);
             // ensures mantém o conteúdo funcional do corpo (bodyEnsuresOnly, já acrescentado acima)
             // MESMO quando a operação também ganha um predicado ghost — quem chama esta função só
             // vê o contrato real (o "at return: assert ghost__…" é interno ao corpo), então sem
@@ -415,115 +323,36 @@ public final class BxmlOperationsTranslator {
                             ? new ArrayList<>(abstractVariableNames)
                             : List.of();
 
-            List<String> connectionConcreteAssigns = List.of();
-            if (assignsAbstract
-                    && rootAbstractMachineName != null
-                    && !rootAbstractMachineName.isBlank()
-                    && mergedRefinementChain != null
-                    && !mergedRefinementChain.isEmpty()) {
-                Set<String> assignedAbs =
-                        GhostOperationsCiGenerator.assignedAbstractVariablesInOperation(
-                                child, abstractVariableNames);
-                if (!assignedAbs.isEmpty()) {
-                    connectionConcreteAssigns =
-                            BxmlMachineVariables.listConcreteAssignTargetsForAbstractMutation(
-                                    rootAbstractMachineName,
-                                    machineEl,
-                                    mergedRefinementChain,
-                                    assignedAbs,
-                                    gluing,
-                                    opCtx,
-                                    bxmlDirectory);
-                    if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
-                        connectionConcreteAssigns =
-                                BxmlMachineVariables.listImplementationAssignTargetsForAbstractVariables(
-                                        rootAbstractMachineName,
-                                        mergedRefinementChain,
-                                        assignedAbs,
-                                        opCtx);
-                    }
-                    if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
-                        connectionConcreteAssigns =
-                                BxmlMachineVariables.listLinkedConcreteAssignTargetsForOperation(
-                                        rootAbstractMachineName,
-                                        machineEl,
-                                        mergedRefinementChain,
-                                        assignedAbs,
-                                        opCtx,
-                                        varRhsOverrides);
-                    }
-                }
-            }
+            List<String> connectionConcreteAssigns =
+                    resolveConnectionConcreteAssigns(
+                            child, opCtx, assignsAbstract, abstractVariableNames, rootAbstractMachineName,
+                            machineEl, mergedRefinementChain, gluing, useGhostAbstraction, varRhsOverrides,
+                            bxmlDirectory);
 
-            List<BxmlLoopTranslator.LoopContract> loops = List.of();
-            Element implOp = null;
-            if (mergedRefinementChain != null && !mergedRefinementChain.isEmpty()) {
-                implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
-                if (implOp != null) {
-                    loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(
-                            implOp, opCtx, machineEl, importedOpAssigns, bxmlDirectory);
-                }
-            }
-            if (importedOpAssigns != null && !importedOpAssigns.isEmpty() && implOp != null) {
-                List<String> calledAssigns = collectAssignsFromOperationCalls(implOp, importedOpAssigns);
-                if (!calledAssigns.isEmpty()) {
-                    LinkedHashSet<String> merged = new LinkedHashSet<>(connectionConcreteAssigns);
-                    merged.addAll(calledAssigns);
-                    connectionConcreteAssigns = new ArrayList<>(merged);
-                }
-            }
+            ImplementationLoopsResult implResult =
+                    resolveImplementationLoops(
+                            opName, opCtx, machineEl, mergedRefinementChain, importedOpAssigns, bxmlDirectory);
+            Element implOp = implResult.implOp();
+            List<BxmlLoopTranslator.LoopContract> loops = implResult.loops();
+
+            connectionConcreteAssigns =
+                    mergeCalledOperationAssigns(connectionConcreteAssigns, importedOpAssigns, implOp);
 
             // Becomes_In (v :: S) compila para rand() → Frama-C exige __fc_random_counter no assigns.
             // Apenas o corpo da implementação é compilado para C; a abstrata pode ter Becomes_In
             // como especificação não-determinística sem que rand() apareça no código gerado.
-            boolean hasBecomesIn = implOp != null
-                    ? bodyHasBecomesIn(firstChildElement(implOp, "Body"))
-                    : bodyHasBecomesIn(body);
-            if (hasBecomesIn) {
-                LinkedHashSet<String> withRandom = new LinkedHashSet<>(connectionConcreteAssigns);
-                withRandom.add("__fc_random_counter");
-                connectionConcreteAssigns = new ArrayList<>(withRandom);
-            }
+            connectionConcreteAssigns = addRandomCounterAssignIfNeeded(connectionConcreteAssigns, implOp, body);
 
-            rewriteAcslListForArrayBackedParams(ensures, arrayParamLens);
-            if (!arrayParamLens.isEmpty() && !loops.isEmpty()) {
-                List<BxmlLoopTranslator.LoopContract> rewrittenLoops = new ArrayList<>();
-                for (BxmlLoopTranslator.LoopContract lc : loops) {
-                    String inv = rewriteAcslStringForArrayBackedParams(lc.invariant(), arrayParamLens);
-                    rewrittenLoops.add(new BxmlLoopTranslator.LoopContract(
-                            lc.index(), inv, lc.variant(), lc.assigns()));
-                }
-                loops = rewrittenLoops;
-            }
+            loops = rewriteEnsuresAndLoopsForArrayBackedParams(ensures, arrayParamLens, loops);
             // Intervalo do domínio de cada saída array-backed (ex.: cc -> "MAX_COPY", de
             // "loop variant (MAX_COPY - ii) + 1"), derivado ANTES da reescrita do assigns do
             // laço para funcTypedOutputs (que já consome este mesmo padrão por laço).
-            Map<String, String> functionTypedOutputBounds =
-                    extractFunctionTypedOutputBounds(loops, funcTypedOutputs);
-            for (String p : outputParams) {
-                if (!funcTypedOutputs.contains(p)) {
-                    continue;
-                }
-                String bound = functionTypedOutputBounds.get(p);
-                requires.add(
-                        bound != null
-                                ? "\\valid(" + p + " + (0 .. " + bound + "))"
-                                : "\\valid(" + p + ")");
-            }
+            FunctionTypedOutputHandling functionTypedHandling =
+                    finalizeFunctionTypedOutputHandling(requires, loops, funcTypedOutputs, outputParams);
+            Map<String, String> functionTypedOutputBounds = functionTypedHandling.functionTypedOutputBounds();
+            loops = functionTypedHandling.loops();
 
-            if (!funcTypedOutputs.isEmpty() && !loops.isEmpty()) {
-                loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
-            }
-
-            boolean skipBody = isBodyPureSkip(body);
-            // Se a abstrata tem Skip mas a implementação tem corpo real (ex.: Operation_Call),
-            // gerar contrato completo em vez do esqueleto requires \true / ensures \true.
-            if (skipBody && implOp != null) {
-                Element implBody = firstChildElement(implOp, "Body");
-                if (implBody != null && !isBodyPureSkip(implBody)) {
-                    skipBody = false;
-                }
-            }
+            boolean skipBody = resolveSkipBody(body, implOp);
 
             out.add(
                     new OperationAcsl(
@@ -541,6 +370,319 @@ public final class BxmlOperationsTranslator {
                             skipBody));
         }
         return out;
+    }
+
+    private record OperationRequiresResult(List<String> requires, Set<String> funcTypedOutputs) {}
+
+    private record OperationEnsuresResult(List<String> ensures, List<String> bodyEnsuresOnly) {}
+
+    private record GhostSlugInfo(
+            String ghostSlug, boolean assignsAbstract, List<String> ghostBehaviorArgs) {}
+
+    private record ImplementationLoopsResult(
+            Element implOp, List<BxmlLoopTranslator.LoopContract> loops) {}
+
+    private record FunctionTypedOutputHandling(
+            Map<String, String> functionTypedOutputBounds,
+            List<BxmlLoopTranslator.LoopContract> loops) {}
+
+    private static OperationRequiresResult buildRequiresForOperation(
+            Element child,
+            Element pre,
+            BxmlTranslateContext opCtx,
+            List<String> invariantPredicateNames,
+            List<String> requiresOnlyPredicateNames,
+            List<String> outputParams,
+            Map<String, ArrayFunctionParamInfo> arrayParamLens,
+            List<String> separationArrayTargets) {
+        List<String> requires = new ArrayList<>();
+        for (String inv : invariantPredicateNames) {
+            requires.add(inv);
+        }
+        if (requiresOnlyPredicateNames != null) {
+            requires.addAll(requiresOnlyPredicateNames);
+        }
+        if (pre != null) {
+            requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, opCtx));
+            rewriteAcslListForArrayBackedParams(requires, arrayParamLens);
+            rewriteRequiresForOutputParameters(requires, outputParams, boolOutputParameterNames(child, opCtx));
+        }
+
+        Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, opCtx);
+        for (String p : outputParams) {
+            // Saídas array-backed (função/relação B) têm o \valid deferido: precisa do
+            // intervalo do domínio (ex.: "0 .. MAX_COPY"), só conhecido após o laço da
+            // implementação ser traduzido (ver functionTypedOutputBounds mais abaixo).
+            // \valid(p) sozinho só cobre *p; sem o intervalo, o Frama-C aceita o assigns
+            // p[..] mas o WP não tem base para validar p[1..N-1].
+            if (!funcTypedOutputs.contains(p)) {
+                requires.add("\\valid(" + p + ")");
+            }
+        }
+        // Parâmetros de saída são ponteiros C — em memória, podem em princípio apontar para
+        // qualquer região global do programa. \separated torna explícita a não-aliasing que o
+        // modelo de memória "typed" do WP já assume implicitamente (ver aviso "Memory model
+        // hypotheses" do Frama-C), tanto contra cada variável array-backed alcançável (própria
+        // máquina + IMPORTS/SEES/USES transitivos, já resolvidos pelo chamador em
+        // separationArrayTargets) quanto, com múltiplas saídas, entre si.
+        List<String> scalarOutputParams = new ArrayList<>();
+        for (String p : outputParams) {
+            if (!funcTypedOutputs.contains(p)) {
+                scalarOutputParams.add(p);
+            }
+        }
+        if (!separationArrayTargets.isEmpty()) {
+            for (String p : scalarOutputParams) {
+                for (String arrayTarget : separationArrayTargets) {
+                    requires.add("\\separated(" + p + ", " + arrayTarget + ")");
+                }
+            }
+        }
+        for (int a = 0; a < scalarOutputParams.size(); a++) {
+            for (int b = a + 1; b < scalarOutputParams.size(); b++) {
+                requires.add(
+                        "\\separated(" + scalarOutputParams.get(a) + ", " + scalarOutputParams.get(b) + ")");
+            }
+        }
+        return new OperationRequiresResult(requires, funcTypedOutputs);
+    }
+
+    private static OperationEnsuresResult buildEnsuresForOperation(
+            Element child,
+            BxmlTranslateContext opCtx,
+            Element body,
+            List<String> outputParams,
+            Set<String> funcTypedOutputs,
+            List<String> invariantPredicateNames) {
+        List<String> ensures = new ArrayList<>();
+        if (body != null) {
+            BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, opCtx);
+        }
+        applyStarPrefixToEnsures(ensures, outputParams);
+        // Antes de rewriteEnsuresBoolOutputEquality (que só troca o LHS "*p" por "(integer)(*p !=
+        // 0)"): "*p == (pred ? \true : \false)" pode ter um predicado da lib (ex.: equals(...))
+        // na condição do ternário, que o Frama-C rejeita ("symbol X is a predicate, not a
+        // function") — precisa virar bicondicional ANTES, enquanto o LHS ainda é "*p" (o regex
+        // desta função exige esse formato). Mesma correção já usada no lado ghost; só nunca
+        // apareceu aqui porque este ensures era descartado do contrato real (ver abaixo).
+        // rewriteIntegerTernaryPredicateConditionForGhost cobre a forma irmã (ternário INTEIRO,
+        // não booleano — ex. "v := v <+ %z.(...)" via formatOverwriteWithLambdaAssignment,
+        // mesmo erro do kernel "symbol X is a predicate, not a function" quando a guarda B
+        // testa pertença a uma variável de máquina em vez de um conjunto literal).
+        for (int ei = 0; ei < ensures.size(); ei++) {
+            String e = GhostOperationsCiGenerator.rewriteBoolOutputPredicateTernary(ensures.get(ei));
+            e = GhostOperationsCiGenerator.rewriteIntegerTernaryPredicateConditionForGhost(e);
+            ensures.set(ei, e);
+        }
+        rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, opCtx);
+        // Parâmetros de entrada escalares (C "int") ficam sem cast no ensures cru — comparados
+        // com um Set<integer> (ex. "singleton(bb)" dentro de "equals(books, ...)") o Frama-C
+        // infere o tipo lógico do parâmetro a partir do seu uso e rejeita ("invalid cast from
+        // Set<Biblioteca__BOOK> to Set<integer>"). O lado ghost já resolve isto com o mesmo
+        // "(integer)bb"; reaproveitado aqui pelo mesmo motivo do bloco acima.
+        List<GhostOperationsCiGenerator.Param> scalarCastParams =
+                GhostParamTypeResolver.appendOutputParametersAsPointers(
+                        GhostParamTypeResolver.listInputParameters(child), child);
+        for (int ei = 0; ei < ensures.size(); ei++) {
+            ensures.set(
+                    ei,
+                    GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(
+                            ensures.get(ei), scalarCastParams));
+        }
+        removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
+        List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
+        for (String inv : invariantPredicateNames) {
+            ensures.add(inv);
+        }
+        return new OperationEnsuresResult(ensures, bodyEnsuresOnly);
+    }
+
+    private static GhostSlugInfo computeGhostSlugInfo(
+            Element child,
+            String opName,
+            boolean useGhostAbstraction,
+            Set<String> abstractVariableNames) {
+        List<String> inputParamNames = parseInputParameterNames(child);
+        String ghostSlug = "";
+        boolean assignsAbstract =
+                abstractVariableNames != null
+                        && !abstractVariableNames.isEmpty()
+                        && GhostContractPredicates.operationAssignsAbstract(
+                                child, abstractVariableNames);
+        boolean bodyHasAnySub = GhostContractPredicates.operationBodyHasAnySub(child);
+        if (useGhostAbstraction && (assignsAbstract || bodyHasAnySub)) {
+            ghostSlug = GhostContractPredicates.ghostOperationSlug(opName);
+        }
+        List<String> ghostBehaviorArgs = new ArrayList<>(inputParamNames);
+        if (bodyHasAnySub || assignsAbstract) {
+            ghostBehaviorArgs.addAll(GhostContractPredicates.listOutputParameterNames(child));
+        }
+        return new GhostSlugInfo(ghostSlug, assignsAbstract, ghostBehaviorArgs);
+    }
+
+    private static void appendLibScanGhostOperationBodies(
+            StringBuilder libScanGhostOperationBodies, String ghostSlug, List<String> bodyEnsuresOnly) {
+        if (libScanGhostOperationBodies != null && !ghostSlug.isBlank()) {
+            for (String line : bodyEnsuresOnly) {
+                if (line != null && !line.isBlank()) {
+                    libScanGhostOperationBodies.append(line).append('\n');
+                }
+            }
+        }
+    }
+
+    private static List<String> resolveConnectionConcreteAssigns(
+            Element child,
+            BxmlTranslateContext opCtx,
+            boolean assignsAbstract,
+            Set<String> abstractVariableNames,
+            String rootAbstractMachineName,
+            Element machineEl,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory) {
+        List<String> connectionConcreteAssigns = List.of();
+        if (assignsAbstract
+                && rootAbstractMachineName != null
+                && !rootAbstractMachineName.isBlank()
+                && mergedRefinementChain != null
+                && !mergedRefinementChain.isEmpty()) {
+            Set<String> assignedAbs =
+                    GhostContractPredicates.assignedAbstractVariablesInOperation(
+                            child, abstractVariableNames);
+            if (!assignedAbs.isEmpty()) {
+                connectionConcreteAssigns =
+                        ConcreteAssignTargetResolver.listConcreteAssignTargetsForAbstractMutation(
+                                rootAbstractMachineName,
+                                machineEl,
+                                mergedRefinementChain,
+                                assignedAbs,
+                                gluing,
+                                opCtx,
+                                bxmlDirectory);
+                if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
+                    connectionConcreteAssigns =
+                            ConcreteAssignTargetResolver.listImplementationAssignTargetsForAbstractVariables(
+                                    rootAbstractMachineName,
+                                    mergedRefinementChain,
+                                    assignedAbs,
+                                    opCtx);
+                }
+                if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
+                    connectionConcreteAssigns =
+                            ConcreteAssignTargetResolver.listLinkedConcreteAssignTargetsForOperation(
+                                    rootAbstractMachineName,
+                                    machineEl,
+                                    mergedRefinementChain,
+                                    assignedAbs,
+                                    opCtx,
+                                    varRhsOverrides);
+                }
+            }
+        }
+        return connectionConcreteAssigns;
+    }
+
+    private static ImplementationLoopsResult resolveImplementationLoops(
+            String opName,
+            BxmlTranslateContext opCtx,
+            Element machineEl,
+            List<Element> mergedRefinementChain,
+            Map<String, List<String>> importedOpAssigns,
+            Path bxmlDirectory) {
+        List<BxmlLoopTranslator.LoopContract> loops = List.of();
+        Element implOp = null;
+        if (mergedRefinementChain != null && !mergedRefinementChain.isEmpty()) {
+            implOp = BxmlLoopTranslator.findImplementationOperation(mergedRefinementChain, opName);
+            if (implOp != null) {
+                loops = BxmlLoopTranslator.translateLoopsFromImplementationOperation(
+                        implOp, opCtx, machineEl, importedOpAssigns, bxmlDirectory);
+            }
+        }
+        return new ImplementationLoopsResult(implOp, loops);
+    }
+
+    private static List<String> mergeCalledOperationAssigns(
+            List<String> connectionConcreteAssigns,
+            Map<String, List<String>> importedOpAssigns,
+            Element implOp) {
+        if (importedOpAssigns != null && !importedOpAssigns.isEmpty() && implOp != null) {
+            List<String> calledAssigns = collectAssignsFromOperationCalls(implOp, importedOpAssigns);
+            if (!calledAssigns.isEmpty()) {
+                LinkedHashSet<String> merged = new LinkedHashSet<>(connectionConcreteAssigns);
+                merged.addAll(calledAssigns);
+                return new ArrayList<>(merged);
+            }
+        }
+        return connectionConcreteAssigns;
+    }
+
+    private static List<String> addRandomCounterAssignIfNeeded(
+            List<String> connectionConcreteAssigns, Element implOp, Element body) {
+        boolean hasBecomesIn = implOp != null
+                ? bodyHasBecomesIn(BxmlDomUtils.firstChildElement(implOp, "Body"))
+                : bodyHasBecomesIn(body);
+        if (hasBecomesIn) {
+            LinkedHashSet<String> withRandom = new LinkedHashSet<>(connectionConcreteAssigns);
+            withRandom.add("__fc_random_counter");
+            return new ArrayList<>(withRandom);
+        }
+        return connectionConcreteAssigns;
+    }
+
+    private static List<BxmlLoopTranslator.LoopContract> rewriteEnsuresAndLoopsForArrayBackedParams(
+            List<String> ensures,
+            Map<String, ArrayFunctionParamInfo> arrayParamLens,
+            List<BxmlLoopTranslator.LoopContract> loops) {
+        rewriteAcslListForArrayBackedParams(ensures, arrayParamLens);
+        if (!arrayParamLens.isEmpty() && !loops.isEmpty()) {
+            List<BxmlLoopTranslator.LoopContract> rewrittenLoops = new ArrayList<>();
+            for (BxmlLoopTranslator.LoopContract lc : loops) {
+                String inv = rewriteAcslStringForArrayBackedParams(lc.invariant(), arrayParamLens);
+                rewrittenLoops.add(new BxmlLoopTranslator.LoopContract(
+                        lc.index(), inv, lc.variant(), lc.assigns()));
+            }
+            return rewrittenLoops;
+        }
+        return loops;
+    }
+
+    private static FunctionTypedOutputHandling finalizeFunctionTypedOutputHandling(
+            List<String> requires,
+            List<BxmlLoopTranslator.LoopContract> loops,
+            Set<String> funcTypedOutputs,
+            List<String> outputParams) {
+        Map<String, String> functionTypedOutputBounds =
+                extractFunctionTypedOutputBounds(loops, funcTypedOutputs);
+        for (String p : outputParams) {
+            if (!funcTypedOutputs.contains(p)) {
+                continue;
+            }
+            String bound = functionTypedOutputBounds.get(p);
+            requires.add(
+                    bound != null
+                            ? "\\valid(" + p + " + (0 .. " + bound + "))"
+                            : "\\valid(" + p + ")");
+        }
+        if (!funcTypedOutputs.isEmpty() && !loops.isEmpty()) {
+            loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
+        }
+        return new FunctionTypedOutputHandling(functionTypedOutputBounds, loops);
+    }
+
+    private static boolean resolveSkipBody(Element body, Element implOp) {
+        boolean skipBody = isBodyPureSkip(body);
+        // Se a abstrata tem Skip mas a implementação tem corpo real (ex.: Operation_Call),
+        // gerar contrato completo em vez do esqueleto requires \true / ensures \true.
+        if (skipBody && implOp != null) {
+            Element implBody = BxmlDomUtils.firstChildElement(implOp, "Body");
+            if (implBody != null && !isBodyPureSkip(implBody)) {
+                skipBody = false;
+            }
+        }
+        return skipBody;
     }
 
     /** Nomes de operações promovidas via {@code <Promotes>} em qualquer elemento da cadeia de refinamento. */
@@ -563,7 +705,7 @@ public final class BxmlOperationsTranslator {
 
     /** Nomes dos {@code Id} em {@code Input_Parameters} (ordem do BXML), identificadores C-sanitizados. */
     private static List<String> parseInputParameterNames(Element operation) {
-        Element inEl = firstChildElement(operation, "Input_Parameters");
+        Element inEl = BxmlDomUtils.firstChildElement(operation, "Input_Parameters");
         if (inEl == null) return List.of();
         List<String> names = new ArrayList<>();
         NodeList ch = inEl.getChildNodes();
@@ -582,7 +724,7 @@ public final class BxmlOperationsTranslator {
 
     /** Nomes dos {@code Id} em {@code Output_Parameters} (ordem do BXML). */
     private static List<String> parseOutputParameterNames(Element operation) {
-        Element outEl = firstChildElement(operation, "Output_Parameters");
+        Element outEl = BxmlDomUtils.firstChildElement(operation, "Output_Parameters");
         if (outEl == null) return List.of();
         List<String> names = new ArrayList<>();
         NodeList ch = outEl.getChildNodes();
@@ -662,7 +804,7 @@ public final class BxmlOperationsTranslator {
 
     private static Set<String> functionTypedOutputParamNames(Element operation, BxmlTranslateContext ctx) {
         Set<String> out = new HashSet<>();
-        Element outEl = firstChildElement(operation, "Output_Parameters");
+        Element outEl = BxmlDomUtils.firstChildElement(operation, "Output_Parameters");
         if (outEl == null || ctx == null) return out;
         NodeList ch = outEl.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
@@ -794,7 +936,7 @@ public final class BxmlOperationsTranslator {
 
     private static Set<String> boolOutputParameterNames(Element operation, BxmlTranslateContext ctx) {
         Set<String> out = new HashSet<>();
-        Element outEl = firstChildElement(operation, "Output_Parameters");
+        Element outEl = BxmlDomUtils.firstChildElement(operation, "Output_Parameters");
         if (outEl == null || ctx == null) {
             return out;
         }
@@ -832,17 +974,6 @@ public final class BxmlOperationsTranslator {
         return name.replace('-', '_');
     }
 
-    private static Element firstChildElement(Element parent, String localName) {
-        NodeList nl = parent.getChildNodes();
-        for (int i = 0; i < nl.getLength(); i++) {
-            Node n = nl.item(i);
-            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            Element e = (Element) n;
-            if (localName.equals(e.getLocalName())) return e;
-        }
-        return null;
-    }
-
     private static boolean isBodyPureSkip(Element body) {
         if (body == null) return false;
         Element sub = firstNonAttrChild(body);
@@ -866,7 +997,7 @@ public final class BxmlOperationsTranslator {
 
     private static List<String> collectAssignsFromOperationCalls(
             Element implOp, Map<String, List<String>> importedOpAssigns) {
-        Element body = firstChildElement(implOp, "Body");
+        Element body = BxmlDomUtils.firstChildElement(implOp, "Body");
         if (body == null) return List.of();
         Set<String> calledOps = new LinkedHashSet<>();
         collectOperationCallNames(body, calledOps);
@@ -881,9 +1012,9 @@ public final class BxmlOperationsTranslator {
     private static void collectOperationCallNames(Element sub, Set<String> out) {
         if (sub == null) return;
         if ("Operation_Call".equals(sub.getLocalName())) {
-            Element nameEl = firstChildElement(sub, "Name");
+            Element nameEl = BxmlDomUtils.firstChildElement(sub, "Name");
             if (nameEl != null) {
-                Element idEl = firstChildElement(nameEl, "Id");
+                Element idEl = BxmlDomUtils.firstChildElement(nameEl, "Id");
                 if (idEl != null) {
                     String v = idEl.getAttribute("value");
                     if (v != null && !v.isBlank()) out.add(v.trim());
@@ -1007,7 +1138,7 @@ public final class BxmlOperationsTranslator {
     static Map<String, ArrayFunctionParamInfo> inferArrayFunctionParamLengths(
             Element operation, BxmlTranslateContext ctx) {
         Map<String, ArrayFunctionParamInfo> out = new LinkedHashMap<>();
-        Element pre = firstChildElement(operation, "Precondition");
+        Element pre = BxmlDomUtils.firstChildElement(operation, "Precondition");
         if (pre == null) {
             return out;
         }
@@ -1145,7 +1276,7 @@ public final class BxmlOperationsTranslator {
                     false);
         }
 
-        /** Mesmo esquema que {@link com.example.bxml.BxmlInitialisationTranslator.InitialisationAcsl#toContractText()}. */
+        /** Mesmo esquema que {@link com.example.bxml.InitialisationAcsl#toContractText()}. */
         public String toContractSketch() {
             if (skipBody) {
                 return "function " + functionName + ":\ncontract:    \n"
