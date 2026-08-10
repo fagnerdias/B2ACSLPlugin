@@ -260,7 +260,8 @@ public final class BxmlExpressionToAcsl {
     private static boolean isSetLikeVariableType(String t) {
         if (t == null || t.isBlank()) return false;
         if (t.startsWith("Set<")) return true;
-        return t.startsWith("Relation_");
+        return t.startsWith("Relation_") || t.startsWith("Relation<")
+                || t.startsWith("Function_") || t.startsWith("Function<");
     }
 
     /**
