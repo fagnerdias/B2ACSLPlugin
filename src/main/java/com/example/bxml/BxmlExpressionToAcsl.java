@@ -544,6 +544,14 @@ public final class BxmlExpressionToAcsl {
         return "->".equals(o) || "-&gt;".equals(o);
     }
 
+    /** B concatenação de sequências {@code s1 ^ s2} → {@code \\concat(s1, s2)} (E-ACSL / listas). */
+    private static boolean isSequenceConcatOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        return "^".equals(op.trim());
+    }
+
     /** B restrição de frente {@code s /|\ n} (mantém os primeiros n) → {@code restrict_front(s, n)}. */
     private static boolean isSequenceRestrictFrontOp(String op) {
         if (op == null) {
@@ -862,6 +870,9 @@ public final class BxmlExpressionToAcsl {
         }
         if (isSequencePrependOp(op)) {
             return "\\concat([|" + left + "|], " + right + ")";
+        }
+        if (isSequenceConcatOp(op)) {
+            return "\\concat(" + left + ", " + right + ")";
         }
         if (isSequenceRestrictFrontOp(op)) {
             // B: s /|\ n (mantém os primeiros n elementos) → restrict_front (ACSL_Lib/sequence_functions/restrict_front.acsl)

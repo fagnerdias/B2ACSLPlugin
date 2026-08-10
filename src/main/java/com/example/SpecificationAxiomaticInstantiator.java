@@ -113,6 +113,19 @@ public final class SpecificationAxiomaticInstantiator {
          * próprio.
          */
         static MonoContext from(List<String> specTypes) {
+            return from(specTypes, true);
+        }
+
+        /**
+         * @param needsPowSetClosure {@code false} quando {@code pow_set} não é sequer usado nesta
+         *        especificação (nenhum {@code POW(...)} B traduzido, logo {@code pow_set.acsl}
+         *        nunca incluído — ver {@link com.example.AcslLibIncludes}): salta {@link
+         *        #closeSetElemUnderPowSet}, evitando sintetizar {@code Set<T>} (e, em cascata,
+         *        overloads {@code Set<Set<T>>} de {@code belongs}/{@code empty}/{@code singleton}/
+         *        {@code set_union}/{@code set_intersection}/{@code card}) que {@code pow_set} nunca
+         *        vai precisar — só existiam "por prevenção" mesmo quando nada os referencia.
+         */
+        static MonoContext from(List<String> specTypes, boolean needsPowSetClosure) {
             Set<String> setElem = new LinkedHashSet<>();
             Set<String> listElem = new LinkedHashSet<>();
             Set<List<String>> pairs = new LinkedHashSet<>();
@@ -125,7 +138,9 @@ public final class SpecificationAxiomaticInstantiator {
             pairs = symmetrizePairs(pairs);
             pairs = renormalizePairWhitespace(pairs);
             addPairComponentsToSetElem(pairs, setElem);
-            closeSetElemUnderPowSet(setElem);
+            if (needsPowSetClosure) {
+                closeSetElemUnderPowSet(setElem);
+            }
 
             return new MonoContext(List.copyOf(setElem), List.copyOf(listElem), List.copyOf(pairs));
         }
@@ -441,7 +456,7 @@ public final class SpecificationAxiomaticInstantiator {
         // Enriquece specTypes com tipos concretos já presentes no merge
         List<String> augmented = augmentWithConcreteTypesFromText(specTypes, content);
 
-        MonoContext ctx = MonoContext.from(augmented);
+        MonoContext ctx = MonoContext.from(augmented, content.contains("pow_set("));
         if (ctx.singleTypes().isEmpty() && ctx.pairTypes().isEmpty()) return;
 
         content = processAllBlocks(content, ctx);
@@ -856,7 +871,7 @@ public final class SpecificationAxiomaticInstantiator {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
 
         List<String> augmented = augmentWithConcreteTypesFromText(specTypes, content);
-        MonoContext ctx = MonoContext.from(augmented);
+        MonoContext ctx = MonoContext.from(augmented, content.contains("pow_set("));
 
         Map<String, String> renames = buildTypeRenameMap(ctx);
         if (renames.isEmpty()) return;
