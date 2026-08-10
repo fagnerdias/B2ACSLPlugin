@@ -249,6 +249,37 @@ public final class BxmlOperationsTranslator {
             Map<String, String> varRhsOverrides,
             Path bxmlDirectory,
             List<String> arraySeparationMachineNames) {
+        return translateOperations(machineEl, ctx, invariantPredicateNames, abstractVariableNames,
+                libScanGhostOperationBodies, rootAbstractMachineName, mergedRefinementChain,
+                gluing, useGhostAbstraction, importedOpAssigns, requiresOnlyPredicateNames,
+                varRhsOverrides, bxmlDirectory, arraySeparationMachineNames, Set.of());
+    }
+
+    /**
+     * @param collapsedVariableNames variáveis abstratas com o mesmo nome na implementação
+     *        (array-backed, sem camada ghost — ver {@code BxmlMachineVariables#collapsedIntoImplementationVariableNames});
+     *        já excluídas de {@code abstractVariableNames} pelo chamador (não devem disparar
+     *        {@code ghostSlug}/{@code dummyGhostEnsureVarNames}), mas uma operação que as atribui
+     *        (ex.: açúcar de sobrescrita {@code array(ii) := vv}) ainda precisa de um {@code assigns}
+     *        concreto — resolvido aqui pela mesma ligação de refinamento usada para
+     *        {@code abstractVariableNames}.
+     */
+    public static List<OperationAcsl> translateOperations(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            Set<String> abstractVariableNames,
+            StringBuilder libScanGhostOperationBodies,
+            String rootAbstractMachineName,
+            List<Element> mergedRefinementChain,
+            Map<String, String> gluing,
+            boolean useGhostAbstraction,
+            Map<String, List<String>> importedOpAssigns,
+            List<String> requiresOnlyPredicateNames,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory,
+            List<String> arraySeparationMachineNames,
+            Set<String> collapsedVariableNames) {
         String machineName = machineEl.getAttribute("name");
         List<OperationAcsl> out = new ArrayList<>();
         List<String> separationArrayTargets =
@@ -325,9 +356,9 @@ public final class BxmlOperationsTranslator {
 
             List<String> connectionConcreteAssigns =
                     resolveConnectionConcreteAssigns(
-                            child, opCtx, assignsAbstract, abstractVariableNames, rootAbstractMachineName,
-                            machineEl, mergedRefinementChain, gluing, useGhostAbstraction, varRhsOverrides,
-                            bxmlDirectory);
+                            child, opCtx, assignsAbstract, abstractVariableNames, collapsedVariableNames,
+                            rootAbstractMachineName, machineEl, mergedRefinementChain, gluing,
+                            useGhostAbstraction, varRhsOverrides, bxmlDirectory);
 
             ImplementationLoopsResult implResult =
                     resolveImplementationLoops(
@@ -536,6 +567,7 @@ public final class BxmlOperationsTranslator {
             BxmlTranslateContext opCtx,
             boolean assignsAbstract,
             Set<String> abstractVariableNames,
+            Set<String> collapsedVariableNames,
             String rootAbstractMachineName,
             Element machineEl,
             List<Element> mergedRefinementChain,
@@ -544,43 +576,57 @@ public final class BxmlOperationsTranslator {
             Map<String, String> varRhsOverrides,
             Path bxmlDirectory) {
         List<String> connectionConcreteAssigns = List.of();
-        if (assignsAbstract
-                && rootAbstractMachineName != null
-                && !rootAbstractMachineName.isBlank()
-                && mergedRefinementChain != null
-                && !mergedRefinementChain.isEmpty()) {
-            Set<String> assignedAbs =
+        if (rootAbstractMachineName == null
+                || rootAbstractMachineName.isBlank()
+                || mergedRefinementChain == null
+                || mergedRefinementChain.isEmpty()) {
+            return connectionConcreteAssigns;
+        }
+        Set<String> assignedAbs = new LinkedHashSet<>();
+        if (assignsAbstract) {
+            assignedAbs.addAll(
                     GhostContractPredicates.assignedAbstractVariablesInOperation(
-                            child, abstractVariableNames);
-            if (!assignedAbs.isEmpty()) {
-                connectionConcreteAssigns =
-                        ConcreteAssignTargetResolver.listConcreteAssignTargetsForAbstractMutation(
-                                rootAbstractMachineName,
-                                machineEl,
-                                mergedRefinementChain,
-                                assignedAbs,
-                                gluing,
-                                opCtx,
-                                bxmlDirectory);
-                if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
-                    connectionConcreteAssigns =
-                            ConcreteAssignTargetResolver.listImplementationAssignTargetsForAbstractVariables(
-                                    rootAbstractMachineName,
-                                    mergedRefinementChain,
-                                    assignedAbs,
-                                    opCtx);
-                }
-                if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
-                    connectionConcreteAssigns =
-                            ConcreteAssignTargetResolver.listLinkedConcreteAssignTargetsForOperation(
-                                    rootAbstractMachineName,
-                                    machineEl,
-                                    mergedRefinementChain,
-                                    assignedAbs,
-                                    opCtx,
-                                    varRhsOverrides);
-                }
-            }
+                            child, abstractVariableNames));
+        }
+        // Variáveis colapsadas (mesmo nome abstrata/implementação, array-backed sem ghost twin) não
+        // entram em abstractVariableNames/assignsAbstract (ver javadoc de collapsedVariableNames no
+        // translateOperations acima) mas ainda precisam de assigns concreto quando a operação as
+        // atribui — mesma resolução por ligação de refinamento, união separada para não acionar
+        // ghostSlug/dummyGhostEnsureVarNames (que continuam a olhar só para assignsAbstract).
+        if (collapsedVariableNames != null && !collapsedVariableNames.isEmpty()) {
+            assignedAbs.addAll(
+                    GhostContractPredicates.assignedAbstractVariablesInOperation(
+                            child, collapsedVariableNames));
+        }
+        if (assignedAbs.isEmpty()) {
+            return connectionConcreteAssigns;
+        }
+        connectionConcreteAssigns =
+                ConcreteAssignTargetResolver.listConcreteAssignTargetsForAbstractMutation(
+                        rootAbstractMachineName,
+                        machineEl,
+                        mergedRefinementChain,
+                        assignedAbs,
+                        gluing,
+                        opCtx,
+                        bxmlDirectory);
+        if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
+            connectionConcreteAssigns =
+                    ConcreteAssignTargetResolver.listImplementationAssignTargetsForAbstractVariables(
+                            rootAbstractMachineName,
+                            mergedRefinementChain,
+                            assignedAbs,
+                            opCtx);
+        }
+        if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
+            connectionConcreteAssigns =
+                    ConcreteAssignTargetResolver.listLinkedConcreteAssignTargetsForOperation(
+                            rootAbstractMachineName,
+                            machineEl,
+                            mergedRefinementChain,
+                            assignedAbs,
+                            opCtx,
+                            varRhsOverrides);
         }
         return connectionConcreteAssigns;
     }

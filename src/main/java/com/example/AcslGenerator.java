@@ -559,7 +559,8 @@ public final class AcslGenerator {
                                 importedInvariantPredicateNames,
                                 varRhsOverrides,
                                 bxmlDirectory,
-                                new ArrayList<>(invariantSourceMachineNames))
+                                new ArrayList<>(invariantSourceMachineNames),
+                                collapsedVariableNames)
                         : List.of();
         state.operations = operations;
     }
