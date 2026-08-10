@@ -514,6 +514,14 @@ final class DummyGhostAxiomaticBuilder {
             String elem = t.substring(4, t.length() - 1).trim();
             return "DSet<" + elem + ">";
         }
+        // Instanciação genérica Relation<A,B>/Function<A,B> (ver
+        // BxmlTypeRegistry#powCartesianProductToAcslRelationType, par escalar-escalar) — o universo
+        // ghost isolado não vê "type Relation<A,B> = Set<Tuple<A,B> >;" de types.acsl (front-end
+        // isolado, sem símbolos de -acsl-import), por isso precisa do equivalente local DRelation<A,B>.
+        if ((t.startsWith("Relation<") || t.startsWith("Function<")) && t.endsWith(">")) {
+            String inner = t.substring(t.indexOf('<') + 1, t.length() - 1).trim();
+            return "DRelation<" + inner + ">";
+        }
         // Nome achatado (ver BxmlTypeRegistry#powCartesianProductToAcslRelationType /
         // #flattenGenericTypeExprToIdentifier) para um codomínio tupla de N>=2 elementos, qualquer
         // mistura de inteiro/booleano — tem múltiplos segmentos com "Tuple" maiúsculo, não pode

@@ -542,18 +542,27 @@ public final class BxmlMachineVariables {
 
     /**
      * B: {@code v : Dom --> Cod} num invariante → tipo {@code logic} como função total ({@code
-     * Function_*_*}) em vez de {@code Relation_*_*}.
+     * Function<A,B>}, instanciação genérica ACSL já resolvida via {@code type Function<A,B> =
+     * Relation<A,B>;} em {@code types.acsl}) em vez de {@code Relation_*_*}.
      */
     static String relationLogicTypeToFunctionLogicType(String relationLogicType) {
         if (relationLogicType == null || relationLogicType.isBlank()) {
-            return "Function_int_int";
+            return "Function<integer,integer>";
         }
-        return switch (relationLogicType.trim()) {
-            case "Relation_int_int" -> "Function_int_int";
-            case "Relation_int_bool" -> "Function_integer_boolean";
-            case "Relation_bool_int" -> "Function_bool_int";
-            default -> relationLogicType;
-        };
+        String t = relationLogicType.trim();
+        // Instanciação genérica (ex.: Relation<integer,integer>) → Function<A,B> via o mesmo par de
+        // parâmetros: resolve para QUALQUER par A,B via type Function<A,B> = Relation<A,B>; em
+        // types.acsl, sem depender de aliases achatados estáticos que não existem nessa forma.
+        if (t.startsWith("Relation<")) {
+            return "Function<" + t.substring("Relation<".length());
+        }
+        // Nome achatado legado (ex.: Relation_Tuple_integer_integer_boolean, codomínio tupla N>=2):
+        // declarado explicitamente em par com o correspondente Function_* pelo TupleCodomainTypeRegistry
+        // (ver BxmlTypeRegistry#registerCartesianRelationType) — mantém a mesma substituição de prefixo.
+        if (t.startsWith("Relation_")) {
+            return "Function_" + t.substring("Relation_".length());
+        }
+        return t;
     }
 
     static boolean concreteVariableInvIsTotalArrowFunction(Element implMachineEl, String varName) {

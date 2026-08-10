@@ -38,6 +38,11 @@ final class GhostNamespacePrefixer {
         // Set<A> → DSet<A>, Tuple<A,B> → DTuple<A,B> no mundo ghost
         s = s.replaceAll("(?<!D)\\bSet<", "DSet<");
         s = s.replaceAll("(?<!D)\\bTuple<", "DTuple<");
+        // Instanciação genérica Relation<A,B>/Function<A,B> → DRelation<A,B> (mesmo alvo do lado
+        // achatado — ver DummyGhostAxiomaticBuilder#dummyAxiomaticLogicType): o front-end ghost
+        // isolado não vê type Relation<A,B>/Function<A,B> de types.acsl.
+        s = s.replaceAll("(?<!D)\\bRelation<", "DRelation<");
+        s = s.replaceAll("(?<!D)\\bFunction<", "DRelation<");
         return s;
     }
 
@@ -665,7 +670,10 @@ final class GhostNamespacePrefixer {
                 BxmlTypeRegistry types = BxmlTypeRegistry.fromMachine(machine);
                 String acsl = types.acslVariableLogicTypeFromTypref(id);
                 return acsl != null
-                        && (acsl.startsWith("Relation_") || acsl.startsWith("Function_"));
+                        && (acsl.startsWith("Relation_")
+                                || acsl.startsWith("Function_")
+                                || acsl.startsWith("Relation<")
+                                || acsl.startsWith("Function<"));
             } catch (NumberFormatException ignored) {
                 return false;
             }

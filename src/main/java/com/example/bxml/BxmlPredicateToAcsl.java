@@ -98,24 +98,23 @@ public final class BxmlPredicateToAcsl {
         if (t == null || t.isBlank()) {
             return "integer";
         }
-        return switch (t.trim()) {
-            case "Relation_int_int" -> "Function_int_int";
-            case "Relation_int_bool" -> "Function_int_bool";
-            case "Relation_bool_int" -> "Function_bool_int";
-            case "Relation_int_tuple_int_int_int" -> "Function_int_tuple_int_int_int";
-            default -> {
-                if (t.startsWith("Relation_")) {
-                    yield "Function_" + t.substring("Relation_".length());
-                }
-                yield t;
-            }
-        };
+        String trimmed = t.trim();
+        // Instanciação genérica (ex.: Relation<integer,integer>) → Function<A,B>, resolvida via
+        // type Function<A,B> = Relation<A,B>; em types.acsl, para QUALQUER par A,B.
+        if (trimmed.startsWith("Relation<")) {
+            return "Function<" + trimmed.substring("Relation<".length());
+        }
+        // Nome achatado legado (codomínio/domínio tupla, declarado em par pelo TupleCodomainTypeRegistry).
+        if (trimmed.startsWith("Relation_")) {
+            return "Function_" + trimmed.substring("Relation_".length());
+        }
+        return trimmed;
     }
 
     private static String functionArrowBinaryToAcslFunctionType(Element arrow) {
         Element[] dr = BxmlExpressionToAcsl.twoDirectExpChildren(arrow);
         if (dr[0] == null || dr[1] == null) {
-            return "Function_int_int";
+            return "Function<integer,integer>";
         }
         String lhs = arrowEndToBNameForProduct(dr[0]);
         String rhs = arrowEndToBNameForProduct(dr[1]);
