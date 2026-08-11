@@ -756,12 +756,25 @@ public final class BxmlExpressionToAcsl {
                 String trimmed = p.trim();
                 if (!trimmed.isEmpty()) parts.add(trimmed);
             }
-            if (parts.size() >= 2) {
-                String acc = buildEmptySetWitnessExpr(parts.get(0), ctx);
-                for (int i = 1; i < parts.size(); i++) {
-                    acc = "cartesian_product(" + acc + ", " + buildEmptySetWitnessExpr(parts.get(i), ctx) + ")";
+            if (parts.size() == 2) {
+                return "cartesian_product(" + buildEmptySetWitnessExpr(parts.get(0), ctx) + ", "
+                        + buildEmptySetWitnessExpr(parts.get(1), ctx) + ")";
+            }
+            if (parts.size() >= 3) {
+                // Domínio escalar + codomínio tupla de N-1>=2 elementos (ex.: PERSON +->
+                // (DAY*MONTH*YEAR) achata para "PERSON*DAY*MONTH*YEAR") — MESMA convenção de
+                // BxmlTypeRegistry#powCartesianProductToAcslRelationType/registerCartesianRelationType:
+                // grupo 1 = domínio, grupo 2 = codomínio aninhado à esquerda. Um fold uniforme das
+                // N partes (grupamento anterior) construía Set<Tuple<Tuple<Tuple<domínio,c1>,c2>,c3>>
+                // — testemunha de tipo diferente de Relation_X (Set<Tuple<domínio,
+                // Tuple<Tuple<c1,c2>,c3>>>), sem overload "equals" correspondente.
+                String domainWitness = buildEmptySetWitnessExpr(parts.get(0), ctx);
+                String codomainWitness = buildEmptySetWitnessExpr(parts.get(1), ctx);
+                for (int i = 2; i < parts.size(); i++) {
+                    codomainWitness = "cartesian_product(" + codomainWitness + ", "
+                            + buildEmptySetWitnessExpr(parts.get(i), ctx) + ")";
                 }
-                return acc;
+                return "cartesian_product(" + domainWitness + ", " + codomainWitness + ")";
             }
         }
         switch (t) {

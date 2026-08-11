@@ -98,8 +98,13 @@ final class MemoryDependentBlockReorderer {
         // (ex.: "iter_services_i_invariant{L}=" depende de "index{L}=" declarado noutro bloco).
         Map<String, AcsCommentSpan> declaringSpan = new HashMap<>();
         for (AcsCommentSpan sp : spans) {
+            // while, não if: um único span pode declarar VÁRIOS nomes {L}= (ex.: "axiomatic
+            // RegisterI_variables { bday{L}=…; bmonth{L}=…; byear{L}=…; }" é UM comentário só) — só
+            // registar o primeiro deixava "bmonth"/"byear" sem entrada em declaringSpan, então
+            // nenhum predicado que os referencia (ex.: RegisterI_invariant_2/_3) era detetado como
+            // dependente do bloco e nunca era movido para depois dele.
             Matcher dm = LABELED_DECL_NAME.matcher(sp.text);
-            if (dm.find()) {
+            while (dm.find()) {
                 declaringSpan.putIfAbsent(dm.group(1), sp);
             }
         }
