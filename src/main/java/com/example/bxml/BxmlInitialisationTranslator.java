@@ -131,23 +131,29 @@ public final class BxmlInitialisationTranslator {
     }
 
     /**
-     * Cláusulas {@code ensures} da inicialização para variáveis SEM camada ghost (ex.: colapsadas
-     * na implementação — ver {@link BxmlMachineVariables#collapsedIntoImplementationVariableNames}):
-     * quando a máquina usa abstração ghost para OUTRAS variáveis, o contrato real da INITIALISATION
-     * descarta {@code translate(...).ensures()} por inteiro (fica só a garantia ghost via {@code
-     * assert ghost__…}) — o que apagaria também a especificação de variáveis que já não têm
-     * rastreio ghost algum.
+     * Cláusulas {@code ensures} da inicialização para variáveis cujo LHS esteja em
+     * {@code keepVariableNames} — tipicamente (a) variáveis SEM camada ghost (ex.: colapsadas na
+     * implementação — ver {@link BxmlMachineVariables#collapsedIntoImplementationVariableNames}) e
+     * (b) variáveis COM camada ghost mas diretamente atribuídas na inicialização abstrata (ex.:
+     * RobustFifo's {@code queue := []}): quando a máquina usa abstração ghost, o contrato real da
+     * INITIALISATION descarta {@code translate(...).ensures()} por inteiro (fica só a garantia
+     * ghost via {@code assert ghost__…}, ou, para variáveis ghost, só {@code ensures
+     * dummy_ghost_v;}) — o que apagaria a especificação funcional de ambos os grupos. Variáveis
+     * ghost já têm uma função lógica de topo própria ({@code logic … v reads dummy_ghost_v;} — ver
+     * {@link MachineAxiomaticBlockFormatter}), então precisam da mesma promessa funcional direta
+     * que as operações mantêm (ver {@code BxmlOperationsTranslator#translateOperations}, que junta
+     * o ensures funcional do corpo ao {@code ensures dummy_ghost_v;}, nunca um no lugar do outro).
      *
      * <p>Ao contrário de {@link #translate}, usa sempre o {@code <Initialisation>} da máquina
      * ABSTRATA (nunca o da implementação): a implementação tipicamente REFINA uma escolha
      * não-determinística B ({@code v :: S --> T}) num valor concreto específico ({@code v := S*{c}}),
-     * e {@code v := S*{c}} não é a especificação — é só UMA testemunha válida dela. Para uma
-     * variável sem camada ghost, o contrato real deve continuar a prometer a ESPECIFICAÇÃO
-     * abstrata ({@code is_total_function(v, S, T)}), não o valor concreto de uma implementação
-     * particular (que seria sobre-específico e desnecessariamente mais difícil de provar).
+     * e {@code v := S*{c}} não é a especificação — é só UMA testemunha válida dela. O contrato real
+     * deve continuar a prometer a ESPECIFICAÇÃO abstrata ({@code is_total_function(v, S, T)}), não
+     * o valor concreto de uma implementação particular (que seria sobre-específico e
+     * desnecessariamente mais difícil de provar).
      *
      * <p>Filtra a substituição da inicialização abstrata para produzir só as cláusulas cujo LHS
-     * esteja em {@code nonGhostVariableNames}, reutilizando os parsers de folha já existentes
+     * esteja em {@code keepVariableNames}, reutilizando os parsers de folha já existentes
      * ({@link #parseAssignementSub}/{@link #parseBecomesInSub}/{@link #parseBecomesSuchThatSub}).
      *
      * <p>Limitação aceite: só cobre folhas diretas de {@code ;}/{@code ||} no nível de topo —
@@ -156,8 +162,8 @@ public final class BxmlInitialisationTranslator {
      * ocorre em nenhum exemplo atual.
      */
     public static List<String> ensuresForNonGhostVariables(
-            Element machineEl, BxmlTranslateContext ctx, Set<String> nonGhostVariableNames) {
-        if (nonGhostVariableNames == null || nonGhostVariableNames.isEmpty()) return List.of();
+            Element machineEl, BxmlTranslateContext ctx, Set<String> keepVariableNames) {
+        if (keepVariableNames == null || keepVariableNames.isEmpty()) return List.of();
         Element initSource = BxmlDomUtils.firstChildElement(machineEl, "Initialisation");
         if (initSource == null) return List.of();
         Element sub = BxmlDomUtils.firstSubChild(initSource);
@@ -165,7 +171,7 @@ public final class BxmlInitialisationTranslator {
         Set<String> allLhsNames = new LinkedHashSet<>();
         collectAssignedLhsNames(sub, allLhsNames);
         List<String> out = new ArrayList<>();
-        walkSubstitutionForVariables(sub, out, ctx, nonGhostVariableNames, allLhsNames);
+        walkSubstitutionForVariables(sub, out, ctx, keepVariableNames, allLhsNames);
         return out;
     }
 
@@ -707,26 +713,75 @@ public final class BxmlInitialisationTranslator {
         Element thenEl = BxmlDomUtils.firstChildElement(ifSub, "Then");
         if (condEl == null || thenEl == null) return;
 
+        Element thenSub = BxmlDomUtils.firstSubChild(thenEl);
+        Element elseEl = BxmlDomUtils.firstChildElement(ifSub, "Else");
+        Element elseSub = elseEl != null ? BxmlDomUtils.firstSubChild(elseEl) : null;
+
+        Set<String> thenAssigned = new LinkedHashSet<>();
+        collectAssignedLhsNames(thenSub, thenAssigned);
+        Set<String> elseAssigned = new LinkedHashSet<>();
+        collectAssignedLhsNames(elseSub, elseAssigned);
+
+        // B avalia a condição no PRÉ-estado, antes de qualquer efeito deste If_Sub — variáveis que
+        // este próprio If atribui (em qualquer ramo) precisam de \old() na condição, mesmo FORA de
+        // uma substituição paralela (||) que engloba (oldNames herdado só cobre atribuições de
+        // ramos IRMÃOS da ||; aqui cobre as atribuições PRÓPRIAS deste If, sempre necessárias —
+        // sem isto, "IF counter < max THEN counter := counter+1 END" gerava "counter < max ==> …"
+        // com "counter" cru, que em ensures por omissão lê o PÓS-estado, não o valor testado).
+        Set<String> condOldNames = new LinkedHashSet<>(oldNames);
+        condOldNames.addAll(thenAssigned);
+        condOldNames.addAll(elseAssigned);
+
         String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
         if (cond == null || cond.isBlank()) return;
-        if (!oldNames.isEmpty()) {
-            cond = applyOldWrapping(cond, oldNames);
+        if (!condOldNames.isEmpty()) {
+            cond = applyOldWrapping(cond, condOldNames);
         }
 
         List<String> thenEnsures = new ArrayList<>();
-        walkSubstitution(BxmlDomUtils.firstSubChild(thenEl), thenEnsures, ctx, oldNames);
+        walkSubstitution(thenSub, thenEnsures, ctx, oldNames);
         for (String e : thenEnsures) {
             ensures.add("(" + cond + ") ==> (" + e + ")");
         }
 
-        Element elseEl = BxmlDomUtils.firstChildElement(ifSub, "Else");
-        if (elseEl != null) {
-            List<String> elseEnsures = new ArrayList<>();
-            walkSubstitution(BxmlDomUtils.firstSubChild(elseEl), elseEnsures, ctx, oldNames);
-            for (String e : elseEnsures) {
-                ensures.add("!(" + cond + ") ==> (" + e + ")");
+        List<String> elseEnsures = new ArrayList<>();
+        walkSubstitution(elseSub, elseEnsures, ctx, oldNames);
+        for (String e : elseEnsures) {
+            ensures.add("!(" + cond + ") ==> (" + e + ")");
+        }
+
+        appendFrameEnsuresForAsymmetricBranches(thenAssigned, elseAssigned, cond, ensures, ctx);
+    }
+
+    /**
+     * Uma variável atribuída SÓ num dos ramos (o outro é {@code skip}, implícito — {@code IF cond
+     * THEN ... END} sem {@code ELSE} — ou explícito, ou simplesmente não a toca) fica INALTERADA
+     * nesse ramo, mas sem uma cláusula {@code ensures} explícita o WP não tem garantia nenhuma
+     * sobre o valor pós-estado dela quando o ramo oposto é tomado — cai para {@code \\at(v,
+     * Post) == \\at(v, Post)} (trivial) em vez de {@code v == \\old(v)}. Adiciona a "cláusula de
+     * frame" que falta em qualquer um dos lados.
+     */
+    private static void appendFrameEnsuresForAsymmetricBranches(
+            Set<String> thenAssigned, Set<String> elseAssigned, String cond, List<String> ensures,
+            BxmlTranslateContext ctx) {
+        for (String v : thenAssigned) {
+            if (!elseAssigned.contains(v)) {
+                ensures.add("!(" + cond + ") ==> (" + frameEquality(v, ctx) + ")");
             }
         }
+        for (String v : elseAssigned) {
+            if (!thenAssigned.contains(v)) {
+                ensures.add("(" + cond + ") ==> (" + frameEquality(v, ctx) + ")");
+            }
+        }
+    }
+
+    /** {@code v == \\old(v)} (escalar) ou {@code equals(v, \\old(v))} (conjunto/relação/função). */
+    private static String frameEquality(String varName, BxmlTranslateContext ctx) {
+        if (BxmlExpressionToAcsl.isSetValuedVariableName(varName, ctx)) {
+            return "equals(" + varName + ", \\old(" + varName + "))";
+        }
+        return varName + " == \\old(" + varName + ")";
     }
 
     /**
@@ -739,9 +794,8 @@ public final class BxmlInitialisationTranslator {
     private static void parseSelectAsConditionalEnsures(
             Element select, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
         Element whenClauses = BxmlDomUtils.firstChildElement(select, "When_Clauses");
-        List<String> whenConds = new ArrayList<>();
-        List<List<String>> whenEffects = new ArrayList<>();
-
+        List<Element> condEls = new ArrayList<>();
+        List<Element> thenSubs = new ArrayList<>();
         if (whenClauses != null) {
             NodeList children = whenClauses.getChildNodes();
             for (int i = 0; i < children.getLength(); i++) {
@@ -753,18 +807,37 @@ public final class BxmlInitialisationTranslator {
                 Element condEl = BxmlDomUtils.firstChildElement(when, "Condition");
                 Element thenEl = BxmlDomUtils.firstChildElement(when, "Then");
                 if (condEl == null || thenEl == null) continue;
-
-                String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
-                if (cond == null || cond.isBlank()) continue;
-                if (!oldNames.isEmpty()) {
-                    cond = applyOldWrapping(cond, oldNames);
-                }
-
-                List<String> branchEnsures = new ArrayList<>();
-                walkSubstitution(BxmlDomUtils.firstSubChild(thenEl), branchEnsures, ctx, oldNames);
-                whenConds.add(cond);
-                whenEffects.add(branchEnsures);
+                condEls.add(condEl);
+                thenSubs.add(BxmlDomUtils.firstSubChild(thenEl));
             }
+        }
+        Element elseEl = BxmlDomUtils.firstChildElement(select, "Else");
+        Element elseSub = elseEl != null ? BxmlDomUtils.firstSubChild(elseEl) : null;
+
+        // Todas as guardas WHEN (e o ELSE, implicitamente "não nenhuma das anteriores") avaliam no
+        // MESMO pré-estado, antes de qualquer efeito deste Select — variáveis atribuídas por
+        // QUALQUER ramo (não só o que efetivamente disparar) precisam de \old() em TODAS as
+        // condições, mesmo fora de uma substituição paralela (||) que engloba — mesmo motivo do
+        // fix em parseIfSubAsConditionalEnsures.
+        Set<String> condOldNames = new LinkedHashSet<>(oldNames);
+        for (Element thenSub : thenSubs) {
+            collectAssignedLhsNames(thenSub, condOldNames);
+        }
+        collectAssignedLhsNames(elseSub, condOldNames);
+
+        List<String> whenConds = new ArrayList<>();
+        List<List<String>> whenEffects = new ArrayList<>();
+        for (int i = 0; i < condEls.size(); i++) {
+            String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEls.get(i), ctx);
+            if (cond == null || cond.isBlank()) continue;
+            if (!condOldNames.isEmpty()) {
+                cond = applyOldWrapping(cond, condOldNames);
+            }
+
+            List<String> branchEnsures = new ArrayList<>();
+            walkSubstitution(thenSubs.get(i), branchEnsures, ctx, oldNames);
+            whenConds.add(cond);
+            whenEffects.add(branchEnsures);
         }
 
         List<String> priorConds = new ArrayList<>();
@@ -776,10 +849,9 @@ public final class BxmlInitialisationTranslator {
             priorConds.add(whenConds.get(i));
         }
 
-        Element elseEl = BxmlDomUtils.firstChildElement(select, "Else");
         if (elseEl != null) {
             List<String> elseEnsures = new ArrayList<>();
-            walkSubstitution(BxmlDomUtils.firstSubChild(elseEl), elseEnsures, ctx, oldNames);
+            walkSubstitution(elseSub, elseEnsures, ctx, oldNames);
             String elseCond = selectElseCondition(whenConds);
             for (String e : elseEnsures) {
                 ensures.add("(" + elseCond + ") ==> (" + e + ")");

@@ -257,6 +257,19 @@ public final class BxmlExpressionToAcsl {
         }
     }
 
+    /**
+     * Como {@link #isSetValuedId}, mas a partir só do nome (sem o {@code Id} original do BXML) —
+     * usado por quem só tem a variável já resolvida como {@code String} (ex.: {@link
+     * BxmlInitialisationTranslator}'s condições de "frame" para variáveis intocadas num ramo de
+     * {@code If_Sub}). Sem {@code typref} disponível, cai em {@code false} (equalidade escalar) se
+     * a variável não estiver em {@link BxmlTranslateContext#variableLogicTypes()} — mesmo padrão de
+     * "resposta autoritativa só quando presente" usado nos outros pontos deste ficheiro.
+     */
+    public static boolean isSetValuedVariableName(String name, BxmlTranslateContext ctx) {
+        if (name == null || ctx == null) return false;
+        return isSetLikeVariableType(ctx.variableLogicTypes().get(name));
+    }
+
     private static boolean isSetLikeVariableType(String t) {
         if (t == null || t.isBlank()) return false;
         if (t.startsWith("Set<")) return true;

@@ -19,8 +19,9 @@ public final class BxmlLoopTranslator {
 
     private BxmlLoopTranslator() {}
 
-    public record LoopContract(int index, String invariant, String variant, List<String> assigns) {
+    public record LoopContract(int index, List<String> invariant, String variant, List<String> assigns) {
         public LoopContract {
+            invariant = invariant == null ? List.of() : List.copyOf(invariant);
             assigns = assigns == null ? List.of() : List.copyOf(assigns);
         }
     }
@@ -184,9 +185,11 @@ public final class BxmlLoopTranslator {
             Element implementationMachineEl, int index, Map<String, List<String>> importedOpAssigns,
             Path bxmlDirectory) {
         Element invEl = BxmlDomUtils.firstChildElement(whileEl, "Invariant");
-        String invariant = "";
+        List<String> invariant = List.of();
         if (invEl != null) {
-            invariant = BxmlPredicateToAcsl.translateInvariantContent(invEl, ctx).trim();
+            invariant = BxmlPredicateToAcsl.translateInvariantConjuncts(invEl, ctx).stream()
+                    .map(String::trim)
+                    .toList();
         }
 
         Element varEl = BxmlDomUtils.firstChildElement(whileEl, "Variant");

@@ -686,7 +686,9 @@ public final class BxmlOperationsTranslator {
         if (!arrayParamLens.isEmpty() && !loops.isEmpty()) {
             List<BxmlLoopTranslator.LoopContract> rewrittenLoops = new ArrayList<>();
             for (BxmlLoopTranslator.LoopContract lc : loops) {
-                String inv = rewriteAcslStringForArrayBackedParams(lc.invariant(), arrayParamLens);
+                List<String> inv = lc.invariant().stream()
+                        .map(s -> rewriteAcslStringForArrayBackedParams(s, arrayParamLens))
+                        .toList();
                 rewrittenLoops.add(new BxmlLoopTranslator.LoopContract(
                         lc.index(), inv, lc.variant(), lc.assigns()));
             }
@@ -897,7 +899,9 @@ public final class BxmlOperationsTranslator {
             List<BxmlLoopTranslator.LoopContract> loops, Set<String> funcTypedOutputs) {
         List<BxmlLoopTranslator.LoopContract> result = new ArrayList<>();
         for (BxmlLoopTranslator.LoopContract lc : loops) {
-            String inv = rewriteArrayOutputFunctionApply(lc.invariant(), funcTypedOutputs);
+            List<String> inv = lc.invariant().stream()
+                    .map(s -> rewriteArrayOutputFunctionApply(s, funcTypedOutputs))
+                    .toList();
             String upperBound = extractLoopUpperBound(lc.variant(), lc.assigns(), funcTypedOutputs);
             List<String> newAssigns = new ArrayList<>();
             for (String a : lc.assigns()) {
@@ -1382,8 +1386,10 @@ public final class BxmlOperationsTranslator {
             }
             for (BxmlLoopTranslator.LoopContract loop : loops) {
                 sb.append("    at loop ").append(loop.index()).append(":\n");
-                if (loop.invariant() != null && !loop.invariant().isBlank()) {
-                    sb.append("        loop invariant (").append(loop.invariant()).append(");\n");
+                for (String conjunct : loop.invariant()) {
+                    if (conjunct != null && !conjunct.isBlank()) {
+                        sb.append("        loop invariant (").append(conjunct).append(");\n");
+                    }
                 }
                 if (!loop.assigns().isEmpty()) {
                     sb.append("        loop assigns ").append(String.join(", ", loop.assigns())).append(";\n");

@@ -513,11 +513,19 @@ public final class AcslGenerator {
         // ensures "real" completo (initBare.ensures()) é descartado — mas isso apagaria também a
         // especificação de variáveis SEM camada ghost (colapsadas, ex. limit): ficam sem ensures
         // algum em lado nenhum. Filtra a mesma tradução para incluir só as cláusulas dessas
-        // variáveis — ver BxmlInitialisationTranslator#ensuresForNonGhostVariables.
+        // variáveis — ver BxmlInitialisationTranslator#ensuresForNonGhostVariables. Inclui também
+        // as variáveis ghost diretamente atribuídas na inicialização abstrata (ex.: RobustFifo's
+        // "queue := []"): como as operações (BxmlOperationsTranslator#translateOperations mantém o
+        // ensures funcional junto do "ensures dummy_ghost_<v>"), essas variáveis já têm uma função
+        // lógica de topo própria ("logic … v reads dummy_ghost_v;" — ver
+        // MachineAxiomaticBlockFormatter), então "ensures dummy_ghost_v;" sozinho não basta: fica
+        // sem nenhuma promessa sobre o valor de v.
+        Set<String> initEnsuresKeepNames = new LinkedHashSet<>(collapsedVariableNames);
+        initEnsuresKeepNames.addAll(dummyGhostVarsForInit);
         List<String> initEnsuresForContract =
                 initGhostAssert
                         ? BxmlInitialisationTranslator.ensuresForNonGhostVariables(
-                                machineEl, ctx, collapsedVariableNames)
+                                machineEl, ctx, initEnsuresKeepNames)
                         : new ArrayList<>(initBare.ensures());
         InitialisationAcsl initMarked =
                 new InitialisationAcsl(

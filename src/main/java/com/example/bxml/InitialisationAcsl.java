@@ -87,8 +87,10 @@ import com.example.bxml.CartesianProductLoopSpecDetector.CartesianProductLoopSpe
             }
             for (BxmlLoopTranslator.LoopContract loop : explicitLoops) {
                 sb.append("    at loop ").append(loop.index()).append(":\n");
-                if (loop.invariant() != null && !loop.invariant().isBlank()) {
-                    sb.append("        loop invariant (").append(loop.invariant()).append(");\n");
+                for (String conjunct : loop.invariant()) {
+                    if (conjunct != null && !conjunct.isBlank()) {
+                        sb.append("        loop invariant (").append(conjunct).append(");\n");
+                    }
                 }
                 if (!loop.assigns().isEmpty()) {
                     sb.append("        loop assigns ").append(String.join(", ", loop.assigns())).append(";\n");
