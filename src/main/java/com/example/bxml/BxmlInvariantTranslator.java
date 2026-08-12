@@ -35,22 +35,34 @@ public final class BxmlInvariantTranslator {
     }
 
     /**
+     * Conjunctos de topo de todos os blocos {@code <Invariant>} da máquina, em ordem — achata tanto
+     * vários blocos {@code <Invariant>} irmãos quanto, dentro de cada um, uma conjunção B de topo
+     * ({@code P & Q & R}, ver {@link BxmlPredicateToAcsl#translateInvariantConjuncts}) — cada
+     * conjuncto vira o seu próprio predicado nomeado em {@link #formatInvariantPredicates}/{@link
+     * #listInvariantPredicateNames}, em vez de um só predicado com corpo conjuntivo.
+     */
+    private static List<String> allInvariantConjuncts(Element machineEl, BxmlTranslateContext ctx) {
+        List<String> conjuncts = new ArrayList<>();
+        for (Element inv : listDirectInvariants(machineEl)) {
+            conjuncts.addAll(BxmlPredicateToAcsl.translateInvariantConjuncts(inv, ctx));
+        }
+        return conjuncts;
+    }
+
+    /**
      * Nomes ACSL dos predicados de invariante (mesma ordem que em {@link #formatInvariantPredicates}).
      */
     public static List<String> listInvariantPredicateNames(Element machineEl, BxmlTranslateContext ctx) {
         String machineName = machineEl.getAttribute("name");
-        List<Element> invs = listDirectInvariants(machineEl);
+        List<String> conjuncts = allInvariantConjuncts(machineEl, ctx);
         List<String> names = new ArrayList<>();
-        if (invs.isEmpty()) return names;
-
-        if (invs.size() == 1) {
-            String body = BxmlPredicateToAcsl.translateInvariantContent(invs.get(0), ctx);
-            if (!body.isBlank()) names.add(machineName + "_invariant");
+        if (conjuncts.isEmpty()) return names;
+        if (conjuncts.size() == 1) {
+            names.add(machineName + "_invariant");
             return names;
         }
-        for (int i = 0; i < invs.size(); i++) {
-            String body = BxmlPredicateToAcsl.translateInvariantContent(invs.get(i), ctx);
-            if (!body.isBlank()) names.add(machineName + "_invariant_" + (i + 1));
+        for (int i = 0; i < conjuncts.size(); i++) {
+            names.add(machineName + "_invariant_" + (i + 1));
         }
         return names;
     }
@@ -60,22 +72,18 @@ public final class BxmlInvariantTranslator {
      */
     public static String formatInvariantPredicates(Element machineEl, BxmlTranslateContext ctx) {
         String machineName = machineEl.getAttribute("name");
-        List<Element> invs = listDirectInvariants(machineEl);
-        if (invs.isEmpty()) return "";
+        List<String> conjuncts = allInvariantConjuncts(machineEl, ctx);
+        if (conjuncts.isEmpty()) return "";
 
         StringBuilder sb = new StringBuilder();
-        if (invs.size() == 1) {
-            String body = BxmlPredicateToAcsl.translateInvariantContent(invs.get(0), ctx);
-            if (body.isBlank()) return "";
+        if (conjuncts.size() == 1) {
             sb.append("predicate ").append(machineName).append("_invariant =\n");
-            sb.append("    ").append(body).append(";\n");
+            sb.append("    ").append(conjuncts.get(0)).append(";\n");
             return sb.toString();
         }
-        for (int i = 0; i < invs.size(); i++) {
-            String body = BxmlPredicateToAcsl.translateInvariantContent(invs.get(i), ctx);
-            if (body.isBlank()) continue;
+        for (int i = 0; i < conjuncts.size(); i++) {
             sb.append("predicate ").append(machineName).append("_invariant_").append(i + 1).append(" =\n");
-            sb.append("    ").append(body).append(";\n");
+            sb.append("    ").append(conjuncts.get(i)).append(";\n");
             sb.append("\n");
         }
         return sb.toString().replaceAll("\\n+$", "\n");

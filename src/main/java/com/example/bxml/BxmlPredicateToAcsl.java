@@ -44,6 +44,41 @@ public final class BxmlPredicateToAcsl {
     }
 
     /**
+     * Como {@link #translateInvariantContent}, mas devolve os conjunctos de topo separadamente em
+     * vez de uma única string unida por {@code " && "} — um {@code B: P & Q & R} vira 3 entradas
+     * {@code [P, Q, R]}. Usado por {@link BxmlInvariantTranslator} para declarar múltiplos
+     * predicados nomeados ({@code Machine_invariant_1}, {@code Machine_invariant_2}, …) em vez de
+     * um só predicado com corpo conjuntivo, e por {@link BxmlLoopTranslator} para gerar uma
+     * {@code loop invariant} por conjuncto em vez de uma só cláusula que embrulha vários — cada
+     * conjuncto vira o seu próprio goal de WP, em vez de um goal único que falha/passa em bloco.
+     */
+    public static List<String> translateInvariantConjuncts(Element invariantEl, BxmlTranslateContext ctx) {
+        List<String> out = new ArrayList<>();
+        Element p = BxmlDomUtils.firstPredChild(invariantEl);
+        collectTopLevelAndConjuncts(p, ctx, out);
+        return out;
+    }
+
+    /** Achata {@code Nary_Pred op='&'} de topo (recursivamente); outros nós viram uma folha só. */
+    private static void collectTopLevelAndConjuncts(
+            Element p, BxmlTranslateContext ctx, List<String> out) {
+        if (p == null) return;
+        if ("Nary_Pred".equals(p.getLocalName()) && "&".equals(p.getAttribute("op"))) {
+            NodeList nl = p.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element e = (Element) n;
+                if ("Attr".equals(e.getLocalName())) continue;
+                collectTopLevelAndConjuncts(e, ctx, out);
+            }
+            return;
+        }
+        String t = translatePred(p, ctx);
+        if (!t.isBlank()) out.add(t);
+    }
+
+    /**
      * Filho preditivo direto de {@code Properties} (ex.: {@code Exp_Comparison}, {@code Nary_Pred}).
      */
     public static String translatePropertyPred(Element predElement, BxmlTranslateContext ctx) {

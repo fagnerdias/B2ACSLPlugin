@@ -257,10 +257,24 @@ public final class BxmlExpressionToAcsl {
         }
     }
 
+    /**
+     * Como {@link #isSetValuedId}, mas a partir só do nome (sem o {@code Id} original do BXML) —
+     * usado por quem só tem a variável já resolvida como {@code String} (ex.: {@link
+     * BxmlInitialisationTranslator}'s condições de "frame" para variáveis intocadas num ramo de
+     * {@code If_Sub}). Sem {@code typref} disponível, cai em {@code false} (equalidade escalar) se
+     * a variável não estiver em {@link BxmlTranslateContext#variableLogicTypes()} — mesmo padrão de
+     * "resposta autoritativa só quando presente" usado nos outros pontos deste ficheiro.
+     */
+    public static boolean isSetValuedVariableName(String name, BxmlTranslateContext ctx) {
+        if (name == null || ctx == null) return false;
+        return isSetLikeVariableType(ctx.variableLogicTypes().get(name));
+    }
+
     private static boolean isSetLikeVariableType(String t) {
         if (t == null || t.isBlank()) return false;
         if (t.startsWith("Set<")) return true;
-        return t.startsWith("Relation_");
+        return t.startsWith("Relation_") || t.startsWith("Relation<")
+                || t.startsWith("Function_") || t.startsWith("Function<");
     }
 
     /**
@@ -543,6 +557,14 @@ public final class BxmlExpressionToAcsl {
         return "->".equals(o) || "-&gt;".equals(o);
     }
 
+    /** B concatenação de sequências {@code s1 ^ s2} → {@code \\concat(s1, s2)} (E-ACSL / listas). */
+    private static boolean isSequenceConcatOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        return "^".equals(op.trim());
+    }
+
     /** B restrição de frente {@code s /|\ n} (mantém os primeiros n) → {@code restrict_front(s, n)}. */
     private static boolean isSequenceRestrictFrontOp(String op) {
         if (op == null) {
@@ -734,12 +756,25 @@ public final class BxmlExpressionToAcsl {
                 String trimmed = p.trim();
                 if (!trimmed.isEmpty()) parts.add(trimmed);
             }
-            if (parts.size() >= 2) {
-                String acc = buildEmptySetWitnessExpr(parts.get(0), ctx);
-                for (int i = 1; i < parts.size(); i++) {
-                    acc = "cartesian_product(" + acc + ", " + buildEmptySetWitnessExpr(parts.get(i), ctx) + ")";
+            if (parts.size() == 2) {
+                return "cartesian_product(" + buildEmptySetWitnessExpr(parts.get(0), ctx) + ", "
+                        + buildEmptySetWitnessExpr(parts.get(1), ctx) + ")";
+            }
+            if (parts.size() >= 3) {
+                // Domínio escalar + codomínio tupla de N-1>=2 elementos (ex.: PERSON +->
+                // (DAY*MONTH*YEAR) achata para "PERSON*DAY*MONTH*YEAR") — MESMA convenção de
+                // BxmlTypeRegistry#powCartesianProductToAcslRelationType/registerCartesianRelationType:
+                // grupo 1 = domínio, grupo 2 = codomínio aninhado à esquerda. Um fold uniforme das
+                // N partes (grupamento anterior) construía Set<Tuple<Tuple<Tuple<domínio,c1>,c2>,c3>>
+                // — testemunha de tipo diferente de Relation_X (Set<Tuple<domínio,
+                // Tuple<Tuple<c1,c2>,c3>>>), sem overload "equals" correspondente.
+                String domainWitness = buildEmptySetWitnessExpr(parts.get(0), ctx);
+                String codomainWitness = buildEmptySetWitnessExpr(parts.get(1), ctx);
+                for (int i = 2; i < parts.size(); i++) {
+                    codomainWitness = "cartesian_product(" + codomainWitness + ", "
+                            + buildEmptySetWitnessExpr(parts.get(i), ctx) + ")";
                 }
-                return acc;
+                return "cartesian_product(" + domainWitness + ", " + codomainWitness + ")";
             }
         }
         switch (t) {
@@ -861,6 +896,9 @@ public final class BxmlExpressionToAcsl {
         }
         if (isSequencePrependOp(op)) {
             return "\\concat([|" + left + "|], " + right + ")";
+        }
+        if (isSequenceConcatOp(op)) {
+            return "\\concat(" + left + ", " + right + ")";
         }
         if (isSequenceRestrictFrontOp(op)) {
             // B: s /|\ n (mantém os primeiros n elementos) → restrict_front (ACSL_Lib/sequence_functions/restrict_front.acsl)
