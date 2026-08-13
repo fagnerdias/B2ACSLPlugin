@@ -129,6 +129,47 @@ final class FramaCRunner {
     }
 
     /**
+     * Igual a {@link #renameReservedWordCollision}, mas restrito ao texto dentro de blocos {@code
+     * /*@ ... *&#47;} de {@code mergedCode} — nunca ao C "puro" fora deles. Necessário porque
+     * {@code badToken} pode coincidir com um tipo C legítimo já usado, sem relação com a colisão,
+     * nas partes não-ACSL do próprio {@code mergedCode} (ex.: {@code uint16_t} do {@code stdint.h}
+     * colidindo com um conjunto B do mesmo nome): um rename cego no ficheiro inteiro reescreveria
+     * também essas declarações C reais, quebrando a compilação. Ver {@link
+     * #renameReservedWordCollision} para o motivo de existir esta 2ª passada.
+     */
+    private static void renameReservedWordCollisionInAcslCommentsOnly(Path mergedCode, String badToken)
+            throws IOException {
+        if (mergedCode == null || !Files.isRegularFile(mergedCode)) {
+            return;
+        }
+        Pattern wordPattern =
+                Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(badToken) + "(?![A-Za-z0-9_])");
+        String replacement = badToken + "_b";
+        String text = Files.readString(mergedCode, StandardCharsets.UTF_8);
+        List<AcsCommentSpan> spans = AcslCommentSpanScanner.findAllAcsCommentSpans(text);
+        if (spans.isEmpty()) {
+            return;
+        }
+        StringBuilder rebuilt = new StringBuilder(text.length());
+        int last = 0;
+        boolean changed = false;
+        for (AcsCommentSpan span : spans) {
+            rebuilt.append(text, last, span.start);
+            String renamedSpan =
+                    wordPattern.matcher(span.text).replaceAll(Matcher.quoteReplacement(replacement));
+            if (!renamedSpan.equals(span.text)) {
+                changed = true;
+            }
+            rebuilt.append(renamedSpan);
+            last = span.end;
+        }
+        rebuilt.append(text, last, text.length());
+        if (changed) {
+            Files.writeString(mergedCode, rebuilt.toString(), StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
      * {@code .acsl} para {@code -acsl-import} numa única invocação Frama-C: raízes SEES quando
      * existem; senão união (ordem estável) dos ficheiros resolvidos por cada {@code .c}.
      */
@@ -367,7 +408,7 @@ final class FramaCRunner {
         // → "set") já curada mais cedo no .acsl fonte. Reaplica-se aqui, no fim, para cobrir
         // qualquer reintrodução independentemente de qual passo a causou.
         for (String healed : healedReservedWords) {
-            renameReservedWordCollision(List.of(mergedCode), null, healed);
+            renameReservedWordCollisionInAcslCommentsOnly(mergedCode, healed);
         }
 
         String cSourcesLabel =

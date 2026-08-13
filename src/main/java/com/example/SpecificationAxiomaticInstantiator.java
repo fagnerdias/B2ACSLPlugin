@@ -270,6 +270,12 @@ public final class SpecificationAxiomaticInstantiator {
             if (nestingCount != leaves.size() - 1) return;
             String codomain = leaves.get(0);
             for (int i = 1; i < leaves.size(); i++) {
+                // Cada nível de aninhamento intermédio (ex.: o par-base (leaf0, leaf1) que constrói
+                // Tuple<leaf0,leaf1> antes de aninhar leaf2) também precisa da sua própria declaração
+                // couple/first/second — sem isto só o par final (domain, codomainCompleto) é
+                // registado e o Frama-C rejeita "couple(leaf0, leaf1)" usado para CONSTRUIR o
+                // elemento intermédio com "no such predicate or logic function couple(...)".
+                pairs.add(List.of(codomain, leaves.get(i)));
                 codomain = "Tuple<" + codomain + "," + leaves.get(i) + ">";
             }
             pairs.add(List.of(domain, codomain));
@@ -296,6 +302,13 @@ public final class SpecificationAxiomaticInstantiator {
             if (nestingCount != domainLeaves.size() - 1) return;
             String domain = domainLeaves.get(0);
             for (int i = 1; i < domainLeaves.size(); i++) {
+                // Espelho do fix em classifyFlattenedTupleCodomainType: regista também cada par
+                // intermédio (ex.: o par-base (leaf0, leaf1) que constrói Tuple<leaf0,leaf1> antes de
+                // aninhar leaf2), não só o par final (domainCompleto, codomain) — sem isto,
+                // function_apply(f, couple(xx, yy)) usado para CONSTRUIR o elemento de domínio a
+                // partir dos argumentos escalares não tem overload de couple e o Frama-C rejeita com
+                // "no such predicate or logic function couple(...)".
+                pairs.add(List.of(domain, domainLeaves.get(i)));
                 domain = "Tuple<" + domain + "," + domainLeaves.get(i) + ">";
             }
             pairs.add(List.of(domain, codomain));
