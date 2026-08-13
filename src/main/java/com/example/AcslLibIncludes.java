@@ -74,6 +74,24 @@ public final class AcslLibIncludes {
     private static final Pattern GLOBAL_SET_CONSTANT_ID =
             Pattern.compile("(?<![A-Za-z0-9_])(?:NAT1|NAT|INT|BOOL)(?![A-Za-z0-9_])");
 
+    /** Relação predefinida do B {@code succ} ({@code Function<integer,integer>}, {@code x |-> x+1}). */
+    private static final String SUCC_LIB_REL = "relation_functions/succ.acsl";
+
+    /** Relação predefinida do B {@code pred} ({@code Function<integer,integer>}, {@code x |-> x-1}). */
+    private static final String PRED_LIB_REL = "relation_functions/pred.acsl";
+
+    /**
+     * {@code succ}/{@code pred} do B usados como identificador solto (ex.: {@code (nn|->nn+1):succ}
+     * → {@code belongs(couple(nn, nn+1), succ)}) — mesmo esquema de deteção por identificador bare
+     * usado para {@link #GLOBAL_SET_CONSTANT_ID}, já que nenhum dos dois aparece em forma de chamada
+     * {@code succ(...)}/{@code pred(...)} no texto ACSL gerado.
+     */
+    private static final Pattern SUCC_ID =
+            Pattern.compile("(?<![A-Za-z0-9_])succ(?![A-Za-z0-9_])");
+
+    private static final Pattern PRED_ID =
+            Pattern.compile("(?<![A-Za-z0-9_])pred(?![A-Za-z0-9_])");
+
     /**
      * Ordem preferida dos {@code include} para o {@code .acsl} gerado: dependências lógicas
      * da {@code B2ACSLLib} (tuple → set → relation → function → sequence).
@@ -110,6 +128,8 @@ public final class AcslLibIncludes {
             "relation_functions/domain_restriction.acsl",
             "relation_functions/range_restriction.acsl",
             "relation_functions/overwrite.acsl",
+            "relation_functions/succ.acsl",
+            "relation_functions/pred.acsl",
             "function_functions/is_function.acsl",
             "function_functions/is_function_of.acsl",
             "function_functions/is_partial.acsl",
@@ -641,6 +661,12 @@ public final class AcslLibIncludes {
 
         if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
             files.add(VARIABLES_LIB_REL);
+        }
+        if (SUCC_ID.matcher(acslText).find()) {
+            files.add(SUCC_LIB_REL);
+        }
+        if (PRED_ID.matcher(acslText).find()) {
+            files.add(PRED_LIB_REL);
         }
         if (containsSymbolCall(acslText, "integer_pow")) {
             files.add(MATH_LIB_REL);
