@@ -212,7 +212,8 @@ public final class BxmlExpressionToAcsl {
             case "Unary_Exp" -> {
                 String op = exp.getAttribute("op");
                 yield "ran".equals(op) || "dom".equals(op) || "id".equals(op)
-                        || "closure".equals(op) || "closure1".equals(op);
+                        || "closure".equals(op) || "closure1".equals(op)
+                        || "union".equals(op) || "inter".equals(op);
             }
             case "EmptySet" -> true;
             case "Quantified_Set" -> true;
@@ -817,6 +818,15 @@ public final class BxmlExpressionToAcsl {
             // "unbound logic function POW". set_functions/pow_set.acsl: novo primitivo genérico
             // pow_set<A>(Set<A> universe) : Set<Set<A>>, belongs(s,pow_set(u)) <==> inclusion(s,u).
             case "POW" -> "pow_set(" + a + ")";
+            // B: union(ENS)/inter(ENS) — união/interseção generalizadas de uma família de conjuntos
+            // (ENS : Set<Set<A>>), distinto do quantificador UNION(z).(D|E)/INTER(z).(D|E) (esse vai
+            // por GeneralizedQuantifierTranslator/UnionInterFunctionRegistry). "union" é palavra
+            // reservada do léxico ACSL (mesmo keyword de "union" de C); sem caso próprio caía no
+            // default abaixo, produzindo "union(FAM)" cru — símbolo não declarado, rejeitado pelo
+            // Frama-C. set_functions/generalized_union_intersection.acsl: general_union<A>/
+            // general_inter<A>(Set<Set<A>>) : Set<A>.
+            case "union" -> "general_union(" + a + ")";
+            case "inter" -> "general_inter(" + a + ")";
             default -> opTrim + "(" + a + ")";
         };
     }

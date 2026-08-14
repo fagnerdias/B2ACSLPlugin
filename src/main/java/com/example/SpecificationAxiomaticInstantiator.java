@@ -98,9 +98,29 @@ public final class SpecificationAxiomaticInstantiator {
 
     // ── Contexto de instanciação ──────────────────────────────────────────────
 
-    /** Tipos concretos extraídos de {@code specification_types.txt}. */
+    /**
+     * Tipos concretos extraídos de {@code specification_types.txt}.
+     *
+     * @param setElemTypes fecho sob {@code pow_set} ({@link #closeSetElemUnderPowSet}): inclui um
+     *     {@code Set<T>} sintético a mais por tipo natural, disponível como TEXTO (2º argumento de
+     *     {@code belongs}, tipo de retorno de {@code pow_set}) — nunca deve ser usado como lista de
+     *     candidatos de instanciação (ver {@link #naturalSetElemTypes}).
+     * @param naturalSetElemTypes {@code setElemTypes} ANTES do fecho — só tipos com evidência
+     *     direta na especificação (declarados, ou par explícito). É esta lista (não {@code
+     *     setElemTypes}) que {@link SpecificationAxiomaticInstantiator#buildSubstitutions} deve
+     *     usar como candidatos de instanciação de blocos aridade-1 ({@code belongs<A>}, {@code
+     *     pow_set<A>}, {@code empty<A>}, …): instanciar TAMBÉM sobre o topo sintético do fecho (ex.
+     *     {@code Set<Set<T>>} quando só {@code Set<T>} é natural) exigiria {@code belongs} para o
+     *     nível SEGUINTE ({@code Set<Set<Set<T>>>}), que por sua vez pediria mais um — sem fim,
+     *     porque o topo do fecho anterior alimenta o próximo fecho. Cada nível sintético só serve
+     *     de tipo de RESULTADO para o nível abaixo, nunca precisa ser ele próprio um ponto de
+     *     instanciação. Com {@code POW} aninhado (B: {@code FAM : POW1(POW(ELEM))}), o natural já
+     *     alcança {@code Set<Set<T>>} (o próprio tipo de {@code FAM}) — o fecho de 1 nível dá
+     *     exatamente o {@code Set<Set<Set<T>>>} que falta como texto, sem cascata.
+     */
     private record MonoContext(
             List<String> setElemTypes,
+            List<String> naturalSetElemTypes,
             List<String> listElemTypes,
             List<List<String>> pairTypes) {
 
@@ -138,11 +158,13 @@ public final class SpecificationAxiomaticInstantiator {
             pairs = symmetrizePairs(pairs);
             pairs = renormalizePairWhitespace(pairs);
             addPairComponentsToSetElem(pairs, setElem);
+            List<String> natural = List.copyOf(setElem);
             if (needsPowSetClosure) {
                 closeSetElemUnderPowSet(setElem);
             }
 
-            return new MonoContext(List.copyOf(setElem), List.copyOf(listElem), List.copyOf(pairs));
+            return new MonoContext(
+                    List.copyOf(setElem), natural, List.copyOf(listElem), List.copyOf(pairs));
         }
 
         /**
@@ -197,10 +219,17 @@ public final class SpecificationAxiomaticInstantiator {
         }
 
         /**
-         * {@code Set<X>}: X vira elemento de setElem. Se X for {@code Tuple<A,B>}, também expressa
-         * uma relação (A,B): sem registar o par aqui, blocos de aridade 2 (dom, ran,
-         * cartesian_product, is_total_function, …) nunca são instanciados para pares só vistos
-         * nesta forma "expandida" — como os aliases sempre presentes de types.acsl (ex.:
+         * {@code Set<X>}: X vira elemento de setElem — mas o tipo COMPLETO {@code t} (ex.
+         * {@code Set<Set<integer>>}, não só {@code Set<integer>}) TAMBÉM entra, senão uma
+         * declaração diretamente aninhada (B: {@code FAM : POW1(POW(ELEM))}, ACSL:
+         * {@code logic Set<Set<integer>> FAM;}) nunca contribui o SEU PRÓPRIO nível como
+         * candidato de instanciação — só o nível interior (via {@code inner} abaixo), deixando
+         * {@code belongs(FAM, pow_set(pow_set(ELEM)))} sem overload (o nível de {@code FAM}
+         * precisa ser {@code A} em {@code belongs<A>}, não só aparecer como {@code Set<A>} de
+         * outro nível). Se X for {@code Tuple<A,B>}, também expressa uma relação (A,B): sem
+         * registar o par aqui, blocos de aridade 2 (dom, ran, cartesian_product,
+         * is_total_function, …) nunca são instanciados para pares só vistos nesta forma
+         * "expandida" — como os aliases sempre presentes de types.acsl (ex.:
          * Relation_int_bool = Set<Tuple<integer,boolean> >), que hoje só alimentam setElemTypes
          * (via este mesmo ramo) e nunca pairTypes, deixando dom/ran inconsistentes com os tipos
          * listados em axiomatic new_types.
@@ -211,6 +240,7 @@ public final class SpecificationAxiomaticInstantiator {
             if (isTypeVariable(inner) || containsStatementChars(inner) || isLegacyDType(inner)) {
                 return;
             }
+            setElem.add(t);
             setElem.add(inner);
             if (inner.startsWith("Tuple<") && inner.endsWith(">")) {
                 List<String> tupleParts = splitTopComma(inner.substring(6, inner.length() - 1));
@@ -431,8 +461,14 @@ public final class SpecificationAxiomaticInstantiator {
          * s, universe : Set<T> — exige belongs(Set<T>, Set<Set<T>>), ou seja, Set<T> precisa
          * ele próprio estar em setElem. Sem este fecho, só o T literal do POW(...) da
          * especificação ganhava Set<T> (via o ramo de pairs acima) e as instanciações pow_set
-         * para os DEMAIS tipos-base (ex. boolean) ficavam com belongs em falta. Fecho de UM
-         * nível só (não recursivo): basta para o uso atual de pow_set, que não aninha POW(POW(X)).
+         * para os DEMAIS tipos-base (ex. boolean) ficavam com belongs em falta. Fecho de UM nível
+         * só (não recursivo) — mesmo com {@code POW} aninhado (B: {@code FAM : POW1(POW(ELEM))}),
+         * já basta: os níveis intermédios da especificação (ex. {@code Set<integer>},
+         * {@code Set<Set<integer>>}) já são NATURAIS (declarados, ver {@link
+         * MonoContext#naturalSetElemTypes}), só o nível seguinte ao maior deles precisa deste
+         * fecho como texto disponível. Ver {@link SpecificationAxiomaticInstantiator#buildSubstitutions}
+         * para o porquê de {@code naturalSetElemTypes} (não este {@code setElem} já fechado) ser a
+         * lista de candidatos de instanciação — usar o já-fechado geraria uma cascata sem fim.
          */
         private static void closeSetElemUnderPowSet(Set<String> setElem) {
             Set<String> setClosure = new LinkedHashSet<>();
@@ -716,18 +752,55 @@ public final class SpecificationAxiomaticInstantiator {
                 // catch-alls genuinamente genéricos sempre que a especificação usasse \list em
                 // QUALQUER outro ponto (ex.: só {@code integer}, mesmo quando o axioma também
                 // precisa de {@code boolean}/{@code Tuple<...>}).
-                candidates.addAll(ctx.setElemTypes());
+                //
+                // naturalSetElemTypes (não setElemTypes, o fecho pós-pow_set): instanciar TAMBÉM
+                // sobre o topo sintético do fecho (Set<T> um nível acima do maior tipo natural)
+                // exigiria belongs para MAIS um nível ainda (o topo do fecho vira, por si, um novo
+                // "maior tipo" a fechar) — cascata sem fim que só termina cortando o fecho na
+                // origem, nunca reagindo a ela depois de instanciada. Ver javadoc de
+                // MonoContext#naturalSetElemTypes.
+                candidates.addAll(ctx.naturalSetElemTypes());
                 // pow_set<A> ("belongs(s, pow_set(universe))", s/universe : Set<A>) instancia sobre
-                // o MESMO setElemTypes que belongs — que agora inclui Set<T> sintéticos (ver fecho
-                // em MonoContext#from, necessário para belongs(Set<T>, Set<Set<T>>) quando pow_set É
-                // usado para T). Sem esta exclusão, pow_set também se auto-instancia para esses
-                // Set<T> sintéticos (pow_set_def_Set_boolean = POW(POW(boolean)), nunca usado por B
-                // aqui), cujo corpo por sua vez precisa de belongs(Set<Set<T>>, Set<Set<Set<T>>>) —
-                // lacuna em cascata, sem fim natural. B não usa POW(POW(X)) nesta base de exemplos;
-                // pow_set nunca precisa de um candidato já composto (Set<...>) como seu PRÓPRIO tipo
-                // de elemento.
-                if (content.contains("pow_set(")) {
-                    candidates.removeIf(t -> t.startsWith("Set<"));
+                // os MESMOS candidatos que belongs (naturalSetElemTypes) — mas só faz sentido
+                // instanciar pow_set num tipo COMPOSTO T (contém "<": Set<...>, Tuple<...>, ou
+                // qualquer outro construtor genérico) quando Set<T> (o RESULTADO de pow_set<T>) é
+                // ele próprio um tipo natural, i.e. algo na especificação realmente usa/compara um
+                // valor desse tipo (ex.: FAM : Set<Set<integer>>, comparado com
+                // pow_set(pow_set(ELEM)) : Set<Set<Set<integer>>> — instancia pow_set em T=integer e
+                // T=Set<integer>, mas NÃO em T=Set<Set<integer>>, já que Set<Set<Set<integer>>> não é
+                // natural). Sem esta condição, pow_set auto-instancia-se no topo do fecho
+                // (pow_set_def_Set_boolean = POW(POW(boolean)), nunca usado por B aqui), cujo corpo
+                // por sua vez precisaria de belongs(Set<Set<T>>, Set<Set<Set<T>>>) — mesma cascata
+                // sem fim que a mudança acima já evita para belongs, mas reintroduzida aqui se pow_set
+                // continuasse a aceitar QUALQUER composto presente em naturalSetElemTypes. Restringir
+                // a "Set<"-prefixados só (em vez de "contém '<'") deixava passar o par-base SEMPRE
+                // presente Tuple<integer,integer> (de types.acsl's Relation_integer_integer,
+                // adicionado a naturalSetElemTypes mesmo quando a especificação nunca usa relações)
+                // como candidato de pow_set, pedindo belongs(Set<Tuple<integer,integer>>,
+                // Set<Set<Tuple<integer,integer>>>) nunca gerado — mesma classe de erro.
+                //
+                // Gatilho declaresOrCalls (não só "pow_set(" cru): a PRÓPRIA declaração de pow_set
+                // ("logic Set<Set<A>> pow_set<A>(Set<A> universe);") contém "pow_set<A>(", não
+                // "pow_set(" — só o AXIOMA que a usa ("belongs(s, pow_set(universe))") contém a
+                // forma sem sufixo genérico. Sem cobrir também "pow_set<", esta guarda nunca disparava
+                // para a declaração da própria função, deixando-a instanciada sem esta restrição
+                // (inconsistente com o axioma correspondente, embora inofensivo por si só, já que uma
+                // função declarada sem axioma não gera obrigações de prova).
+                if (declaresOrCalls(content, "pow_set")) {
+                    candidates.removeIf(t -> t.contains("<") && !naturalContainsSetOf(ctx, t, 1));
+                }
+                // general_union<A>/general_inter<A>: Set<Set<A>> -> Set<A> (união/interseção
+                // generalizada de uma FAMÍLIA de conjuntos — B: union(ENS)/inter(ENS)). Corpo do
+                // axioma (\exists/\forall Set<A> yy; belongs(yy, ens) && belongs(xx, yy)) precisa de
+                // belongs em DOIS níveis a partir de A: (A,Set<A>) — já coberto por belongs<A> na
+                // mesma A — e (Set<A>,Set<Set<A>>), um nível MAIS FUNDO que pow_set's própria
+                // necessidade. Mesmo raciocínio da guarda de pow_set, mas testando Set<Set<T>> (não
+                // só Set<T>) contra naturalSetElemTypes: só instancia em T se a família de conjuntos
+                // Set<Set<T>> for ela própria um tipo natural (ex. FAM). Para cv_sets isto restringe
+                // a T=integer (o único general_union(FAM) real), descartando T=Set<integer> e
+                // T=Set<Set<integer>> que senão pediriam belongs um ou dois níveis além do disponível.
+                if (declaresOrCalls(content, "general_union") || declaresOrCalls(content, "general_inter")) {
+                    candidates.removeIf(t -> !naturalContainsSetOf(ctx, t, 2));
                 }
             }
             return candidates.stream().map(List::of).toList();
@@ -741,6 +814,30 @@ public final class SpecificationAxiomaticInstantiator {
             return List.of();
         }
         return List.of();
+    }
+
+    /** {@code name(} (chamada) ou {@code name<} (declaração/axioma genérico do próprio símbolo). */
+    private static boolean declaresOrCalls(String content, String name) {
+        return content.contains(name + "(") || content.contains(name + "<");
+    }
+
+    /**
+     * {@code true} se {@code Set<...Set<t>...>} (com {@code wrapCount} camadas {@code Set<>}) for,
+     * ele próprio, um tipo natural (evidência direta na especificação — ver {@link
+     * MonoContext#naturalSetElemTypes}), comparando via {@link #normalizeTypeWhitespace} para
+     * tolerar variações de espaçamento entre formas equivalentes do mesmo tipo (ex.
+     * {@code "Set<Set<integer> >"} vs {@code "Set<Set<integer>>"}).
+     */
+    private static boolean naturalContainsSetOf(MonoContext ctx, String t, int wrapCount) {
+        String wrapped = t;
+        for (int i = 0; i < wrapCount; i++) {
+            wrapped = "Set<" + wrapped + ">";
+        }
+        String target = normalizeTypeWhitespace(wrapped);
+        for (String n : ctx.naturalSetElemTypes()) {
+            if (normalizeTypeWhitespace(n).equals(target)) return true;
+        }
+        return false;
     }
 
     private static Map<String, String> buildSubstMap(

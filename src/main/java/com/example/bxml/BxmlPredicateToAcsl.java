@@ -11,10 +11,16 @@ import org.w3c.dom.NodeList;
  * Traduz predicados BXML ({@code pred_group}) para expressões ACSL.
  *
  * <p>{@code v : iseq(T)} / {@code v : seq(T)} → {@code iSeq} / {@code is_seq_of};
- * {@code ss : POW(S)} → {@code inclusion(ss, S)}; {@code ss : FIN(ss)} → {@code is_finite(ss)};
+ * {@code ss : POW(S)} → {@code belongs(ss, pow_set(S))}; {@code ss : FIN(ss)} → {@code is_finite(ss)};
+ * {@code ss : POW1(S)} → {@code belongs(ss, pow_set(S)) && card(ss) > 0} (mesma base de POW, mais
+ * não-vazio via {@code card}); {@code ss : FIN1(S)} → {@code is_finite(ss) && card(ss) > 0}
+ * (mesma base de FIN);
  * {@code x : BOOL} → {@code belongs(x, BOOL)}; {@code x : NAT} → {@code belongs(x, NAT)};
  * {@code x : INT} → {@code belongs(x, INT)};
- * {@code x /: s} → {@code not_belongs(x, s)}; comparadores inteiros {@code <=i}, {@code <i} →
+ * {@code x /: s} → {@code not_belongs(x, s)}; {@code ss <: tt} → {@code inclusion(ss, tt)};
+ * {@code ss /<: tt} → {@code not_inclusion(ss, tt)}; {@code ss <<: tt} → {@code
+ * strict_inclusion(ss, tt)}; {@code ss /<<: tt} → {@code not_strict_inclusion(ss, tt)};
+ * comparadores inteiros {@code <=i}, {@code <i} →
  * {@code <=}, {@code <}; igualdade entre conjuntos ({@code Set<…>}, {@code ran} sobre relação, …) →
  * {@code equals(a, b)}; escalares (ex.: {@code card}) mantêm {@code ==}.
  *
@@ -265,6 +271,15 @@ public final class BxmlPredicateToAcsl {
         if ("<:".equals(op)) {
             return "inclusion(" + left + ", " + right + ")";
         }
+        if ("/<:".equals(op)) {
+            return "not_inclusion(" + left + ", " + right + ")";
+        }
+        if ("<<:".equals(op)) {
+            return "strict_inclusion(" + left + ", " + right + ")";
+        }
+        if ("/<<:".equals(op)) {
+            return "not_strict_inclusion(" + left + ", " + right + ")";
+        }
         if ("=".equals(op)) {
             return translateEqualityComparison(leftEl, rightEl, left, right, ctx);
         }
@@ -286,18 +301,32 @@ public final class BxmlPredicateToAcsl {
 
     private static String translateMembershipComparison(
             Element leftEl, Element rightEl, BxmlTranslateContext ctx) {
-        // ss : POW(S) → inclusion(ss, S); ss : FIN(ss) → is_finite(ss)
+        // ss : POW(S) → belongs(ss, pow_set(S)); ss : FIN(ss) → is_finite(ss)
         if ("Unary_Exp".equals(rightEl.getLocalName())) {
             String uop = rightEl.getAttribute("op");
             if ("POW".equals(uop)) {
                 String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
                 Element inner = BxmlDomUtils.firstNonAttrElementChild(rightEl);
-                String setAtom = bTypeArgToSeqOfSetName(inner, ctx);
-                return "inclusion(" + left + ", " + setAtom + ")";
+                String setAtom = powDomainSetAtom(inner, ctx);
+                return powSetMembership(left, setAtom);
             }
             if ("FIN".equals(uop) || "fin".equals(uop)) {
                 String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
                 return "is_finite(" + left + ")";
+            }
+            // ss : POW1(S) — subconjuntos NÃO-VAZIOS de S (POW menos {}); mesma base de POW
+            // (pow_set), acrescida de card(ss) > 0.
+            if ("POW1".equals(uop) || "pow1".equals(uop)) {
+                String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                Element inner = BxmlDomUtils.firstNonAttrElementChild(rightEl);
+                String setAtom = powDomainSetAtom(inner, ctx);
+                return powSetMembership(left, setAtom) + " && (card(" + left + ") > 0)";
+            }
+            // ss : FIN1(S) — subconjuntos finitos NÃO-VAZIOS de S; mesma base de FIN (is_finite,
+            // domínio S não verificado — idem à limitação já existente em FIN), mais card(ss) > 0.
+            if ("FIN1".equals(uop) || "fin1".equals(uop)) {
+                String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                return "is_finite(" + left + ") && (card(" + left + ") > 0)";
             }
             if ("iseq".equals(uop)) {
                 String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
@@ -428,6 +457,9 @@ public final class BxmlPredicateToAcsl {
         String o = raw.trim();
         return switch (o) {
             case "&lt;:" -> "<:";
+            case "/&lt;:", "/<:" -> "/<:";
+            case "&lt;&lt;:", "<<:" -> "<<:";
+            case "/&lt;&lt;:", "/<<:" -> "/<<:";
             case "&lt;=i", "<=i" -> "<=";
             case "&lt;i", "<i" -> "<";
             case "&gt;=i", ">=i" -> ">=";
@@ -514,6 +546,22 @@ public final class BxmlPredicateToAcsl {
             };
         }
         return "NAT";
+    }
+
+    /**
+     * Domínio de {@code POW(S)}/{@code POW1(S)}: nome simples ({@code ELEM}) → {@link
+     * #bTypeArgToSeqOfSetName}; expressão aninhada (ex. {@code POW(ELEM)} em {@code POW1(POW(ELEM))})
+     * → tradutor de expressões genérico ({@code pow_set(ELEM)}).
+     */
+    private static String powDomainSetAtom(Element typeArg, BxmlTranslateContext ctx) {
+        return typeArg != null && "Id".equals(typeArg.getLocalName())
+                ? bTypeArgToSeqOfSetName(typeArg, ctx)
+                : BxmlExpressionToAcsl.translate(typeArg, ctx);
+    }
+
+    /** {@code ss : POW(S)} / {@code ss : POW1(S)} → {@code belongs(ss, pow_set(S))} (set_functions/pow_set.acsl). */
+    private static String powSetMembership(String left, String setAtom) {
+        return "belongs(" + left + ", pow_set(" + setAtom + "))";
     }
 
     /**

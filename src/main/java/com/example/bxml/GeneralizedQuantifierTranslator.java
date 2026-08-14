@@ -406,8 +406,16 @@ final class GeneralizedQuantifierTranslator {
         String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
         String bodyForX = replaceWordBoundary(bodyStr, boundVarName, "x");
 
+        // NÃO escanear guardPred aqui: para DomainKind.SET, classifyDomain exige que TODOS os
+        // conjuntos da guarda sejam da forma "z:S_i" (senão devolve null, cai em TODO) — logo a
+        // guarda inteira já foi consumida em dc.domainExprText() (o argumento "dom" passado no
+        // call site), sem sobrar nenhum filtro textual que entre no CORPO da função gerada. Incluir
+        // guardPred aqui capturava o próprio identificador do domínio (ex.: FAM em "ss:FAM") como
+        // um parâmetro livre espúrio — duplicado com o "dom" já passado — e o Frama-C rejeitava a
+        // chamada gerada (ex. inter_func01(FAM, FAM)) com "incompatible types" (FAM : Set<Set<A>>
+        // usado onde se esperava o tipo do parâmetro livre espúrio).
         java.util.List<String>[] ft = freeVarsAndTypes(
-                java.util.List.of(boundVarName), ctx, bodyExp, guardPred);
+                java.util.List.of(boundVarName), ctx, bodyExp);
         java.util.List<String> freeVarNames = ft[0];
         java.util.List<String> freeVarTypes = ft[1];
 
@@ -691,8 +699,14 @@ final class GeneralizedQuantifierTranslator {
         String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
         String bodyForX = replaceWordBoundary(bodyStr, boundVarName, "x");
 
+        // NÃO escanear guardPred — mesmo motivo de registerSetDomainSum (SIGMA): para
+        // DomainKind.SET a guarda inteira já foi consumida em dc.domainExprText() (o "dom" passado
+        // no call site), sem filtro residual que entre no corpo da função gerada. Escanear guardPred
+        // capturava o próprio identificador do domínio (ex.: FAM em "ss:FAM") como parâmetro livre
+        // espúrio, gerando chamadas mal tipadas como inter_func01(FAM, FAM) — Frama-C rejeitava com
+        // "incompatible types".
         java.util.List<String>[] ft = freeVarsAndTypes(
-                java.util.List.of(boundVarName), ctx, bodyExp, guardPred);
+                java.util.List.of(boundVarName), ctx, bodyExp);
         java.util.List<String> freeVarNames = ft[0];
         java.util.List<String> freeVarTypes = ft[1];
 

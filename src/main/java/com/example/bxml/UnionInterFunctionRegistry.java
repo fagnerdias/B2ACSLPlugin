@@ -166,7 +166,7 @@ public final class UnionInterFunctionRegistry {
     private void appendIntervalEntry(StringBuilder sb, Entry e) {
         Op op = e.op();
         String name = e.name();
-        String setType = "Set<" + e.elementType() + ">";
+        String setType = BxmlTypeRegistry.wrapSetType(e.elementType());
         List<String> typedFree = typedParams(e.freeVarNames(), e.freeVarTypes());
         String fp = typedFree.isEmpty() ? "" : String.join(", ", typedFree) + ", ";
         String fa = e.freeVarNames().isEmpty() ? "" : String.join(", ", e.freeVarNames()) + ", ";
@@ -370,15 +370,20 @@ public final class UnionInterFunctionRegistry {
     private void appendSetEntry(StringBuilder sb, Entry e) {
         Op op = e.op();
         String name = e.name();
-        String setType = "Set<" + e.elementType() + ">";
+        String setType = BxmlTypeRegistry.wrapSetType(e.elementType());
         List<String> typedFree = typedParams(e.freeVarNames(), e.freeVarTypes());
         String fp = typedFree.isEmpty() ? "" : String.join(", ", typedFree) + ", ";
         String fa = e.freeVarNames().isEmpty() ? "" : String.join(", ", e.freeVarNames()) + ", ";
         String T = e.boundVarType() == null || e.boundVarType().isBlank() ? "integer" : e.boundVarType();
+        // wrapSetType (não "Set<" + T + ">" à mão): T pode já ser Set<...> (ex.: domínio FAM :
+        // Set<Set<integer>>, cada elemento ss : Set<integer>) — sem o espaço antes do "> " de fecho,
+        // o lexer ACSL lê "Set<Set<integer>>" como terminando em ">>" (um único token) e aborta com
+        // "[Syntax error] >>." (mesmo caso documentado em BxmlTypeRegistry#wrapSetType).
+        String domSetType = BxmlTypeRegistry.wrapSetType(T);
 
         sb.append("  /* ").append(e.sourceComment()).append(" */\n");
         sb.append("  logic ").append(setType).append(" ").append(name).append("(").append(fp)
-                .append("Set<").append(T).append("> dom);\n\n");
+                .append(domSetType).append(" dom);\n\n");
 
         if (op == Op.UNION) {
             // Dois witnesses de tipos DIFERENTES: "witness" só fixa o tipo do DOMÍNIO (Set<T>, ex.
@@ -388,14 +393,14 @@ public final class UnionInterFunctionRegistry {
             // e.bodyForX() aqui (como fazia antes) referenciava "x", a variável ligada do corpo, que
             // NÃO está no escopo deste axioma (só _add a declara) — "unbound logic variable x".
             sb.append("  axiom ").append(name).append("_empty:\n")
-                    .append("    \\forall ").append(fp).append("Set<").append(T)
-                    .append("> witness, Set<").append(e.elementType()).append("> resultWitness;\n")
+                    .append("    \\forall ").append(fp).append(domSetType)
+                    .append(" witness, ").append(setType).append(" resultWitness;\n")
                     .append("      equals(").append(name).append("(").append(fa)
                     .append("empty(witness)), empty(resultWitness));\n\n");
             // Sem not_belongs(x, dom): ∪ é idempotente — o axioma vale mesmo com repetição de
             // inserção, ao contrário do análogo em SigmaFunctionRegistry.
             sb.append("  axiom ").append(name).append("_add:\n")
-                    .append("    \\forall ").append(fp).append("Set<").append(T).append("> dom, ")
+                    .append("    \\forall ").append(fp).append(domSetType).append(" dom, ")
                     .append(T).append(" x;\n")
                     .append("      is_finite(dom) ==>\n")
                     .append("        equals(").append(name).append("(").append(fa)
@@ -409,7 +414,7 @@ public final class UnionInterFunctionRegistry {
                     .append("      equals(").append(name).append("(").append(fa)
                     .append("singleton(x)), ").append(e.bodyForX()).append(");\n\n");
             sb.append("  axiom ").append(name).append("_add:\n")
-                    .append("    \\forall ").append(fp).append("Set<").append(T).append("> dom, ")
+                    .append("    \\forall ").append(fp).append(domSetType).append(" dom, ")
                     .append(T).append(" x;\n")
                     .append("      is_finite(dom) && !equals(dom, empty(dom)) ==>\n")
                     .append("        equals(").append(name).append("(").append(fa)

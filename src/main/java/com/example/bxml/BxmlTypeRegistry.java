@@ -114,7 +114,7 @@ public final class BxmlTypeRegistry {
                 return powCartesianProductToAcslRelationType(inner);
             }
             if (inner.startsWith("POW(")) {
-                return "Set<" + rawBTypeToAcslVariableLogicType(inner) + ">";
+                return wrapSetType(rawBTypeToAcslVariableLogicType(inner));
             }
             return "Set<" + acslElementTypeNameStatic(inner) + ">";
         }
@@ -161,9 +161,21 @@ public final class BxmlTypeRegistry {
     private static String resolveCartesianPartType(String part) {
         if (part != null && part.startsWith("POW(") && part.endsWith(")")) {
             String inner = part.substring(4, part.length() - 1).trim();
-            return "Set<" + resolveCartesianPartType(inner) + ">";
+            return wrapSetType(resolveCartesianPartType(inner));
         }
         return acslElementTypeNameStatic(part);
+    }
+
+    /**
+     * {@code Set<inner>}, com espaço antes do {@code >} de fecho quando {@code inner} já termina em
+     * {@code >} (ex.: {@code Set<Set<integer>>} → {@code Set<Set<integer> >}) — sem o espaço, o
+     * lexer ACSL do Frama-C lê {@code >>} como um único token e aborta o parse com
+     * {@code [Syntax error] >>.} (mesmo motivo pelo qual {@code types.acsl} já escreve
+     * {@code Set< Set<A> >} à mão).
+     */
+    public static String wrapSetType(String inner) {
+        String i = inner == null ? "" : inner;
+        return i.endsWith(">") ? "Set<" + i + " >" : "Set<" + i + ">";
     }
 
     public static String powCartesianProductToAcslRelationType(String innerProduct) {
