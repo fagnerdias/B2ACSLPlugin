@@ -371,6 +371,49 @@ public final class BxmlPredicateToAcsl {
             return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")"
                     + " && is_surjective(" + fun + ", " + rangeSet + ")";
         }
+        // f : (S >+> T) — injeção PARCIAL (ACSL_Lib is_partial.acsl + is_injective.acsl); is_injective
+        // não recebe domínio/imagem (só quantifica sobre o próprio par), mesmo formato de composição
+        // de is_total_function/is_surjective acima para -->>.
+        if (BxmlExpressionToAcsl.isPartialInjectionArrowType(rightEl)) {
+            Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+            if (domRng[0] == null || domRng[1] == null) return "";
+            String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+            String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+            return "is_partial_function(" + fun + ", " + domainSet + ", " + rangeSet + ")"
+                    + " && is_injective(" + fun + ")";
+        }
+        // f : (S >-> T) — injeção TOTAL (ACSL_Lib is_total.acsl + is_injective.acsl)
+        if (BxmlExpressionToAcsl.isTotalInjectionArrowType(rightEl)) {
+            Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+            if (domRng[0] == null || domRng[1] == null) return "";
+            String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+            String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+            return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")"
+                    + " && is_injective(" + fun + ")";
+        }
+        // f : (S +->> T) — sobrejeção PARCIAL (ACSL_Lib is_partial.acsl + is_surjective.acsl)
+        if (BxmlExpressionToAcsl.isPartialSurjectionArrowType(rightEl)) {
+            Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+            if (domRng[0] == null || domRng[1] == null) return "";
+            String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+            String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+            return "is_partial_function(" + fun + ", " + domainSet + ", " + rangeSet + ")"
+                    + " && is_surjective(" + fun + ", " + rangeSet + ")";
+        }
+        // f : (S >->> T) — bijeção TOTAL (ACSL_Lib is_total.acsl + is_bijective.acsl, que já compõe
+        // is_injective + is_surjective).
+        if (BxmlExpressionToAcsl.isTotalBijectionArrowType(rightEl)) {
+            Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
+            if (domRng[0] == null || domRng[1] == null) return "";
+            String fun = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
+            String rangeSet = functionArrowRangeSet(domRng[1], ctx);
+            return "is_total_function(" + fun + ", " + domainSet + ", " + rangeSet + ")"
+                    + " && is_bijective(" + fun + ", " + rangeSet + ")";
+        }
         String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
         if (BxmlExpressionToAcsl.isIntervalBinaryExp(rightEl)) {
             String right = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(rightEl, ctx);

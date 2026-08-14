@@ -449,6 +449,50 @@ public final class BxmlExpressionToAcsl {
         return "-->>".equals(o) || "--&gt;&gt;".equals(o);
     }
 
+    /** Tipo conjunto de injeções parciais B {@code S >+> T} em {@code Binary_Exp}. */
+    public static boolean isPartialInjectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return ">+>".equals(o) || "&gt;+&gt;".equals(o);
+    }
+
+    /** Tipo conjunto de injeções totais B {@code S >-> T} em {@code Binary_Exp}. */
+    public static boolean isTotalInjectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return ">->".equals(o) || "&gt;-&gt;".equals(o);
+    }
+
+    /** Tipo conjunto de sobrejeções parciais B {@code S +->> T} em {@code Binary_Exp}. */
+    public static boolean isPartialSurjectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return "+->>".equals(o) || "+-&gt;&gt;".equals(o);
+    }
+
+    /** Tipo conjunto de bijeções totais B {@code S >->> T} em {@code Binary_Exp}. */
+    public static boolean isTotalBijectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return ">->>".equals(o) || "&gt;-&gt;&gt;".equals(o);
+    }
+
     /** B maplet {@code cc |-> bb} → {@code couple(cc, bb)} (ACSL_Lib/tuple_functions/tuple_couple.acsl). */
     private static boolean isMapletOp(String op) {
         if (op == null) return false;
