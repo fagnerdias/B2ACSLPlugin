@@ -311,8 +311,13 @@ final class LibAxiomaticBlockReorderer {
                 seenLib = true;
             } else if (seenLib && sp.axiomaticName != null
                     && !libAndAxioms.contains(sp.axiomaticName)
+                    && !sp.axiomaticName.endsWith("_tuple_types")
                     && i < lastLibIdx) {
-                // Non-lib block after at least one lib block, and more lib blocks follow
+                // Non-lib block after at least one lib block, and more lib blocks follow.
+                // "_tuple_types" excluído: são FORNECEDORES de tipo (ver
+                // moveTupleTypesBlocksAfterNewTypes), não consumidores — mover para o fim
+                // reintroduziria "no such type" nos blocos de lib monomorfizados que os precedem
+                // e dependem deles (ex.: dom/relation_ran instanciados no mesmo par).
                 toMove.add(sp);
             }
         }

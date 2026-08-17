@@ -225,7 +225,11 @@ public final class BxmlExpressionToAcsl {
                         || isCartesianProduct(op)
                         || isDomainRestrictionOp(op)
                         || isRangeRestrictionOp(op)
+                        || isDomainSubtractionOp(op)
+                        || isRangeSubtractionOp(op)
                         || isIntervalBinaryExp(exp)
+                        || isDirectProductOp(op)
+                        || "prj1".equals(op) || "prj2".equals(op)
                         || "<+".equals(op);
             }
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
@@ -581,6 +585,48 @@ public final class BxmlExpressionToAcsl {
         return "<|".equals(o) || "&lt;|".equals(o);
     }
 
+    /** B subtração de domínio {@code S <<| r} → {@code domain_subtraction(r, S)} (ACSL_Lib/relation_functions/domain_subtraction.acsl). */
+    private static boolean isDomainSubtractionOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "<<|".equals(o) || "&lt;&lt;|".equals(o);
+    }
+
+    /** B subtração de imagem {@code r |>> S} → {@code range_subtraction(r, S)} (ACSL_Lib/relation_functions/range_subtraction.acsl). */
+    private static boolean isRangeSubtractionOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "|>>".equals(o) || "|&gt;&gt;".equals(o);
+    }
+
+    /** B tipo conjunto de relações {@code S <-> T} → conjunto de todas as relações de S para T. */
+    private static boolean isRelationArrowOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "<->".equals(o) || "&lt;-&gt;".equals(o);
+    }
+
+    /** Tipo conjunto de relações B {@code S <-> T} em {@code Binary_Exp}. */
+    public static boolean isRelationArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        return isRelationArrowOp(e.getAttribute("op"));
+    }
+
+    /** B produto direto {@code R1 >< R2} → {@code direct_product(R1, R2)} (ACSL_Lib/relation_functions/direct_product.acsl). */
+    private static boolean isDirectProductOp(String op) {
+        if (op == null) return false;
+        String o = op.trim();
+        return "><".equals(o) || "&gt;&lt;".equals(o);
+    }
+
     /** B append à sequência {@code s <- x} → {@code \\concat(s, [| x |])} (E-ACSL / listas). */
     private static boolean isSequenceAppendOp(String op) {
         if (op == null) {
@@ -889,6 +935,16 @@ public final class BxmlExpressionToAcsl {
             String setRef = intervalOrSetComprehensionRef(pair[1], ctx);
             return "range_restriction(" + rel + ", " + setRef + ")";
         }
+        if (isDomainSubtractionOp(op)) {
+            String setRef = intervalOrSetComprehensionRef(pair[0], ctx);
+            String rel = translate(pair[1], ctx);
+            return "domain_subtraction(" + rel + ", " + setRef + ")";
+        }
+        if (isRangeSubtractionOp(op)) {
+            String rel = translate(pair[0], ctx);
+            String setRef = intervalOrSetComprehensionRef(pair[1], ctx);
+            return "range_subtraction(" + rel + ", " + setRef + ")";
+        }
         if (isMapletOp(op)) {
             String left = castBareIntegerIdForTuple(pair[0], translate(pair[0], ctx));
             String right = castBareIntegerIdForTuple(pair[1], translate(pair[1], ctx));
@@ -965,6 +1021,20 @@ public final class BxmlExpressionToAcsl {
         if ("mod".equals(op)) return "(" + left + " % " + right + ")";
         if ("**i".equals(op == null ? "" : op.trim())) {
             return "integer_pow(" + left + ", " + right + ")";
+        }
+        String opTrimmed = op == null ? "" : op.trim();
+        // B: prj1(E,F)/prj2(E,F) — relações de projeção de E*F (ACSL_Lib/relation_functions/
+        // prj1.acsl,prj2.acsl). Binary_Exp com dois filhos diretos (E, F), não chamada função —
+        // sem caso próprio caía no infixo cru "(E prj1 F)" (default abaixo), inválido em ACSL.
+        if ("prj1".equals(opTrimmed)) {
+            return "prj1(" + left + ", " + right + ")";
+        }
+        if ("prj2".equals(opTrimmed)) {
+            return "prj2(" + left + ", " + right + ")";
+        }
+        // B: R1 >< R2 — produto direto (ACSL_Lib/relation_functions/direct_product.acsl).
+        if (isDirectProductOp(opTrimmed)) {
+            return "direct_product(" + left + ", " + right + ")";
         }
         String infix = integerBinaryOpToAcsl(op);
         return "(" + left + " " + infix + " " + right + ")";

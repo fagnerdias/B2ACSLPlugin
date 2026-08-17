@@ -133,7 +133,7 @@ public final class SpecificationAxiomaticInstantiator {
          * próprio.
          */
         static MonoContext from(List<String> specTypes) {
-            return from(specTypes, true);
+            return from(specTypes, true, true);
         }
 
         /**
@@ -144,8 +144,19 @@ public final class SpecificationAxiomaticInstantiator {
          *        overloads {@code Set<Set<T>>} de {@code belongs}/{@code empty}/{@code singleton}/
          *        {@code set_union}/{@code set_intersection}/{@code card}) que {@code pow_set} nunca
          *        vai precisar — só existiam "por prevenção" mesmo quando nada os referencia.
+         * @param needsPairSymmetrization {@code false} quando o operador de inversão relacional B
+         *        ({@code ~}, traduzido para {@code relation_inverse}) não é sequer usado nesta
+         *        especificação: salta {@link #symmetrizePairs}, evitando registar o par REVERSO
+         *        (B,A) para cada par (A,B) — só necessário para {@code relation_inverse<A,B>
+         *        (Relation<A,B>) : Relation<B,A>} ter o alias do RESULTADO disponível. Sem uso de
+         *        {@code ~}, o par reverso nunca é consultado por ninguém, só polui
+         *        setElemTypes/pairTypes com combinações nunca usadas (ex.: cv_rel regista
+         *        Relation_Set_integer_integer, nunca referenciado, ao lado do real
+         *        Relation_integer_Set_integer — mesma classe de "só existia por prevenção" que
+         *        {@code needsPowSetClosure} já trata para pow_set).
          */
-        static MonoContext from(List<String> specTypes, boolean needsPowSetClosure) {
+        static MonoContext from(
+                List<String> specTypes, boolean needsPowSetClosure, boolean needsPairSymmetrization) {
             Set<String> setElem = new LinkedHashSet<>();
             Set<String> listElem = new LinkedHashSet<>();
             Set<List<String>> pairs = new LinkedHashSet<>();
@@ -155,7 +166,9 @@ public final class SpecificationAxiomaticInstantiator {
             }
 
             derivePairsFromSetElemIfEmpty(setElem, pairs);
-            pairs = symmetrizePairs(pairs);
+            if (needsPairSymmetrization) {
+                pairs = symmetrizePairs(pairs);
+            }
             pairs = renormalizePairWhitespace(pairs);
             addPairComponentsToSetElem(pairs, setElem);
             List<String> natural = List.copyOf(setElem);
@@ -505,7 +518,8 @@ public final class SpecificationAxiomaticInstantiator {
         // Enriquece specTypes com tipos concretos já presentes no merge
         List<String> augmented = augmentWithConcreteTypesFromText(specTypes, content);
 
-        MonoContext ctx = MonoContext.from(augmented, content.contains("pow_set("));
+        MonoContext ctx = MonoContext.from(
+                augmented, content.contains("pow_set("), content.contains("relation_inverse("));
         if (ctx.singleTypes().isEmpty() && ctx.pairTypes().isEmpty()) return;
 
         content = processAllBlocks(content, ctx);
@@ -760,6 +774,23 @@ public final class SpecificationAxiomaticInstantiator {
                 // origem, nunca reagindo a ela depois de instanciada. Ver javadoc de
                 // MonoContext#naturalSetElemTypes.
                 candidates.addAll(ctx.naturalSetElemTypes());
+                // pow_set<A> instancia-se SEMPRE em tipos-base (mesmo quando Set<T> não é natural —
+                // ver comentário em closeSetElemUnderPowSet: "incluindo tipos-base sempre presentes
+                // como boolean"), por design desde antes desta sessão. belongs<A> (e os restantes
+                // blocos aridade-1 que partilham este candidates) precisa então do candidato Set<T>
+                // para cada tipo-base T também, senão o PRÓPRIO corpo de pow_set_def em T (que chama
+                // belongs(s, pow_set(universe)), s/universe:Set<T>, pow_set(universe):Set<Set<T>>)
+                // fica com belongs(Set<T>,Set<Set<T>>) em falta (ex.: boolean é sempre candidato de
+                // pow_set mesmo nunca aparecendo em POW(...) nenhum do B de origem — sem este
+                // acréscimo, belongs(Set<boolean>,Set<Set<boolean>>) nunca é gerado). Só tipos-base
+                // (sem "<"): envolver um tipo já composto reintroduziria a cascata que
+                // naturalSetElemTypes evita acima — e não precisa, pow_set nunca se auto-instancia em
+                // composto sem o próprio Set<T> já ser natural (guarda abaixo).
+                for (String t : ctx.naturalSetElemTypes()) {
+                    if (!t.contains("<")) {
+                        candidates.add(normalizeTypeWhitespace("Set<" + t + ">"));
+                    }
+                }
                 // pow_set<A> ("belongs(s, pow_set(universe))", s/universe : Set<A>) instancia sobre
                 // os MESMOS candidatos que belongs (naturalSetElemTypes) — mas só faz sentido
                 // instanciar pow_set num tipo COMPOSTO T (contém "<": Set<...>, Tuple<...>, ou
@@ -806,6 +837,43 @@ public final class SpecificationAxiomaticInstantiator {
             return candidates.stream().map(List::of).toList();
         }
         if (arity == 2) {
+            // rel<A,B>(Relation<A, Set<B> > R) / fnc<A,B>(Relation<A,B> R) : Function<A, Set<B> > —
+            // ambos referenciam Relation<A, Set<B>> na PRÓPRIA assinatura (parâmetro de rel, retorno
+            // de fnc), um nível de aninhamento além do par (A,B) em si. Instanciar sobre TODO
+            // ctx.pairTypes() (ex.: o par simetrizado (Set<integer>,integer) que só existe para
+            // outros blocos aridade-2) pede um alias Relation_A_Set_B que nunca foi gerado (mesma
+            // classe de "no such type" que a guarda de pow_set/general_union já evita para
+            // aridade-1) — restringe a pares (A,B) cujo (A, Set<B>) também é ele próprio um par
+            // registado (ex.: FF : Relation<integer,Set<integer>> torna (integer,integer) válido
+            // para rel(FF)/fnc(RC), mas não (integer,Set<integer>) nem o seu simetrizado).
+            Set<String> registeredPairs = new LinkedHashSet<>();
+            for (List<String> p : ctx.pairTypes()) {
+                if (p.size() == 2) {
+                    registeredPairs.add(
+                            normalizeTypeWhitespace(p.get(0)) + "|" + normalizeTypeWhitespace(p.get(1)));
+                }
+            }
+            if (declaresOrCalls(content, "rel") || declaresOrCalls(content, "fnc")) {
+                return filterPairsByRegisteredKey(
+                        ctx, registeredPairs,
+                        (a, b) -> normalizeTypeWhitespace(a) + "|" + normalizeTypeWhitespace("Set<" + b + ">"));
+            }
+            // prj1<A,B>(Set<A> ee, Set<B> ff) : Relation<Tuple<A,B>,A> / prj2<A,B>(...) :
+            // Relation<Tuple<A,B>,B> — mesma classe do guard de rel/fnc acima, mas o "nível a mais"
+            // é o domínio (Tuple<A,B>, não Set<B>): só instancia (A,B) se o par derivado
+            // (Tuple<A,B>, A) [prj1] / (Tuple<A,B>, B) [prj2] também estiver registado.
+            if (declaresOrCalls(content, "prj1")) {
+                return filterPairsByRegisteredKey(
+                        ctx, registeredPairs,
+                        (a, b) -> normalizeTypeWhitespace("Tuple<" + a + "," + b + ">")
+                                + "|" + normalizeTypeWhitespace(a));
+            }
+            if (declaresOrCalls(content, "prj2")) {
+                return filterPairsByRegisteredKey(
+                        ctx, registeredPairs,
+                        (a, b) -> normalizeTypeWhitespace("Tuple<" + a + "," + b + ">")
+                                + "|" + normalizeTypeWhitespace(b));
+            }
             return ctx.pairTypes().stream().map(List::copyOf).toList();
         }
         if (arity == 3) {
@@ -819,6 +887,26 @@ public final class SpecificationAxiomaticInstantiator {
     /** {@code name(} (chamada) ou {@code name<} (declaração/axioma genérico do próprio símbolo). */
     private static boolean declaresOrCalls(String content, String name) {
         return content.contains(name + "(") || content.contains(name + "<");
+    }
+
+    /**
+     * Filtra {@code ctx.pairTypes()} mantendo só os pares {@code (A,B)} cuja chave derivada (via
+     * {@code keyOf}) já está em {@code registeredPairs} — usado por blocos aridade-2 cuja própria
+     * assinatura referencia um tipo composto a mais que o par {@code (A,B)} em si (ex. {@code
+     * Relation<A, Set<B> >} em {@code rel}/{@code fnc}, {@code Relation<Tuple<A,B>, A>} em {@code
+     * prj1}), evitando instanciar em pares cujo alias derivado nunca foi gerado ("no such type").
+     */
+    private static List<List<String>> filterPairsByRegisteredKey(
+            MonoContext ctx, Set<String> registeredPairs,
+            java.util.function.BiFunction<String, String, String> keyOf) {
+        List<List<String>> filtered = new ArrayList<>();
+        for (List<String> p : ctx.pairTypes()) {
+            if (p.size() != 2) continue;
+            if (registeredPairs.contains(keyOf.apply(p.get(0), p.get(1)))) {
+                filtered.add(p);
+            }
+        }
+        return filtered.stream().map(List::copyOf).toList();
     }
 
     /**
@@ -981,7 +1069,8 @@ public final class SpecificationAxiomaticInstantiator {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
 
         List<String> augmented = augmentWithConcreteTypesFromText(specTypes, content);
-        MonoContext ctx = MonoContext.from(augmented, content.contains("pow_set("));
+        MonoContext ctx = MonoContext.from(
+                augmented, content.contains("pow_set("), content.contains("relation_inverse("));
 
         Map<String, String> renames = buildTypeRenameMap(ctx);
         if (renames.isEmpty()) return;

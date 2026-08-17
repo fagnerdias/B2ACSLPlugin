@@ -712,6 +712,8 @@ public final class AcslGenerator {
         String concreteLinkRoot =
                 BxmlMachineVariables.anyImplementationUsesAbstractVariablesOnly(
                                 machineEl, mergedMachineElements)
+                        || BxmlMachineVariables.abstractMachineIsSelfContainedArrayBacked(
+                                machineEl, mergedMachineElements)
                         ? baseName
                         : null;
         String varsAbstract =

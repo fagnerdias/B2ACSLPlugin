@@ -211,6 +211,34 @@ public final class BxmlMachineVariables {
     }
 
     /**
+     * Verdadeiro quando a máquina abstrata NÃO TEM nenhuma implementação/refinamento fundida (B
+     * clássico: {@code CONCRETE_VARIABLES} declaradas diretamente na própria abstrata, sem
+     * separação em {@code MACHINE}/{@code IMPLEMENTATION} — ex.: {@code cv_rel}, cujo {@code bdp/}
+     * só tem {@code cv_rel.bxml}, sem {@code cv_rel_i.bxml}/{@code cv_rel_r.bxml}) e pelo menos uma
+     * das suas próprias variáveis é array-backed (tipada como {@code v : lo..hi --> T} no seu
+     * próprio {@code <Invariant>}, via {@link #concreteVariableFunctionArrowElement}) — nesse caso a
+     * máquina deve ligar-se A SI PRÓPRIA ({@code logic v = array_to_function_int((int*)(Raiz__v),
+     * tamanho);}) em vez de ficar como variável lógica ghost sem RHS, já que não existe nenhuma
+     * máquina de implementação separada para prover essa ligação (o que dava "unbound logic
+     * variable" no {@code -wp}, mesmo com um {@code .c} escrito à mão fornecendo o array real).
+     */
+    public static boolean abstractMachineIsSelfContainedArrayBacked(
+            Element abstractMachineEl, List<Element> mergedMachineElements) {
+        if (abstractMachineEl == null) {
+            return false;
+        }
+        if (mergedMachineElements != null && !mergedMachineElements.isEmpty()) {
+            return false;
+        }
+        for (String v : declaredVariableNames(abstractMachineEl)) {
+            if (concreteVariableFunctionArrowElement(abstractMachineEl, v) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Variáveis abstratas cuja implementação declara {@code Concrete_Variables} com o MESMO NOME
      * (namespaces B são por máquina — reusar o nome é o padrão normal quando a implementação é um
      * refinamento direto da variável abstrata, ex. {@code limit} tanto em {@code Customer} quanto
