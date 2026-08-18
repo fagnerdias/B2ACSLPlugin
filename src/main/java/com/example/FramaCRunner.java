@@ -383,7 +383,6 @@ final class FramaCRunner {
         }
 
         MergedCodeStructuralPlacement.stripLeadingFramaCNonCOutput(mergedCode);
-        MergedCodeStructuralPlacement.moveNewTypesAxiomaticBlockAfterPreamble(mergedCode);
         B2ACSLPipeline.removeGhostPatternAxiomaticBlocks(mergedCode);
         B2ACSLPipeline.stripDummyPrefixFromMergedCode(mergedCode);
         B2ACSLPipeline.insertGhostVariableDeclarationsFromGhostCi(mergedCode, ghostCi);
@@ -392,15 +391,27 @@ final class FramaCRunner {
         B2ACSLPipeline.addParenthesesToVoidGhostCalls(mergedCode);
         B2ACSLPipeline.placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
         B2ACSLPipeline.liftPureGhostEnsuresToOperationContracts(mergedCode);
-        LibAxiomaticBlockReorderer.reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
-        MergedCodeStructuralPlacement.moveTupleCodomainAxiomaticBlocksAfterNewTypes(mergedCode);
         LemmaLibraryFilter.appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
+        // Fase A do plano de padronização de ordem de axiomáticas: reorganiza o conteúdo ACSL
+        // seguro de mover em 3 regiões contíguas (TIPO, ASSINATURA+MISTO, AXIOMA), substituindo
+        // por classificação de CONTEÚDO a heurística de NOME que os passes antigos usavam. Blocos
+        // ligados a memória (NOME{L}= ou "reads GLOBAL;") e tudo que os referencia
+        // transitivamente ficam de fora, exatamente onde já estão (ver
+        // AxiomaticTierSorter#computeTransitivelyAnchoredExclusions).
+        // Fase B do plano: os passes antigos que este passe único substitui —
+        // MergedCodeStructuralPlacement#moveNewTypesAxiomaticBlockAfterPreamble/
+        // #moveTupleCodomainAxiomaticBlocksAfterNewTypes, LibAxiomaticBlockReorderer#
+        // reorderLibAxiomaticBlocksPerAcslLibIncludesOrder (8 sub-passes) e LemmaLibraryFilter#
+        // ensureSequenceListToFunctionDeclBeforeFirstUse — foram retirados daqui após validação
+        // (suite completa de 17 exemplos sem regressão, ver plans/execute-o-projeto-cv-sets-
+        // squishy-patterson.md). MemoryDependentBlockReorderer mantém-se: ortogonal, trata blocos
+        // {L}= entre si e face aos seus globais C, fora do âmbito deste sort.
+        AxiomaticTierSorter.sortIntoThreeTiers(mergedCode);
         SpecificationAxiomaticInstantiator.monomorphizeGenericAcslBlocks(
                 mergedCode, specificationUsedTypes);
         SpecificationAxiomaticInstantiator.renameParameterizedTypesToConcrete(
                 mergedCode, specificationUsedTypes);
         SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
-        LemmaLibraryFilter.ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
         MemoryDependentBlockReorderer.moveMemoryDependentVariableBlocksAfterTheirGlobals(mergedCode);
         // Última etapa: várias transformações acima (ex. placeGhostOperationSpecsAboveFunctions)
         // fazem a SUA PRÓPRIA remoção do prefixo "dummy_" ao inserir texto lido diretamente de

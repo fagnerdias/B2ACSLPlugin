@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -22,10 +21,6 @@ import java.util.regex.Pattern;
 final class LemmaLibraryFilter {
 
     private LemmaLibraryFilter() {}
-
-    /** Primeira utilização da lib {@code list_to_function(} (não {@code dummy_list_to_function}). */
-    private static final Pattern LIST_TO_FUNCTION_LIB_CALL =
-            Pattern.compile("(?<![A-Za-z0-9_])list_to_function\\s*\\(");
 
     /** Lemas admitidos da B2ACSLLib (anexados ao fim do merge Frama-C). */
     private static final String ACSL_LIB_LEMMAS_RESOURCE = B2AcslLibraryPaths.classpathResource("lemmas.acsl");
@@ -161,138 +156,6 @@ final class LemmaLibraryFilter {
             return Optional.of(Files.readString(dev, StandardCharsets.UTF_8));
         }
         return Optional.empty();
-    }
-
-    /**
-     * Após monomorfização / renomeações, o Frama-C pode deixar
-     * {@code axiomatic sequence_list_to_function…} depois de blocos (ex.
-     * {@code sequence_utils_axioms}) que já chamam {@code list_to_function(}. Este passo move a
-     * declaração (e {@code sequence_list_to_function_axioms…}) para imediatamente antes do primeiro
-     * {@code list_to_function(} real, ou após {@code new_types} se não houver uso.
-     */
-    static void ensureSequenceListToFunctionDeclBeforeFirstUse(Path mergedC) throws IOException {
-        if (!Files.isRegularFile(mergedC)) {
-            return;
-        }
-        String content = Files.readString(mergedC, StandardCharsets.UTF_8);
-        String updated = ensureSequenceListToFunctionDeclBeforeFirstUseInString(content);
-        if (!updated.equals(content)) {
-            Files.writeString(mergedC, updated, StandardCharsets.UTF_8);
-        }
-    }
-
-    private static String ensureSequenceListToFunctionDeclBeforeFirstUseInString(String content) {
-        List<AcsCommentSpan> spans = AcslCommentSpanScanner.findAllAcsCommentSpans(content);
-        List<AcsCommentSpan> declOnly = new ArrayList<>();
-        List<AcsCommentSpan> axiomOnly = new ArrayList<>();
-        for (AcsCommentSpan sp : spans) {
-            if (sp.axiomaticName == null) {
-                continue;
-            }
-            String n = sp.axiomaticName;
-            if (n.startsWith("sequence_list_to_function_axioms")) {
-                axiomOnly.add(sp);
-            } else if (n.equals("sequence_list_to_function") || n.startsWith("sequence_list_to_function_")) {
-                declOnly.add(sp);
-            }
-        }
-        List<AcsCommentSpan> toMove = new ArrayList<>(declOnly.size() + axiomOnly.size());
-        declOnly.sort(Comparator.comparingInt(s -> s.start));
-        axiomOnly.sort(Comparator.comparingInt(s -> s.start));
-        toMove.addAll(declOnly);
-        toMove.addAll(axiomOnly);
-        if (toMove.isEmpty()) {
-            return content;
-        }
-
-        List<AcsCommentSpan> removeOrder = new ArrayList<>(toMove);
-        removeOrder.sort(Comparator.comparingInt((AcsCommentSpan s) -> s.start).reversed());
-        String cut = content;
-        for (AcsCommentSpan sp : removeOrder) {
-            cut = cut.substring(0, sp.start) + cut.substring(sp.end);
-        }
-
-        Matcher use = LIST_TO_FUNCTION_LIB_CALL.matcher(cut);
-        int insertAt;
-        if (use.find()) {
-            int at = use.start();
-            insertAt = cut.lastIndexOf("/*@", at);
-            if (insertAt < 0) {
-                insertAt = findInsertAfterNewTypesBlockEnd(cut);
-            }
-        } else {
-            insertAt = findInsertAfterNewTypesBlockEnd(cut);
-        }
-        if (insertAt < 0) {
-            insertAt = AcslCommentSpanScanner.findPreambleInsertIndex(cut);
-        }
-        // sequence_list_to_function_axioms usa outros símbolos da lib no seu PRÓPRIO corpo (ex.
-        // length(list_to_function(l)), is_sequence(...), function_apply(...)) — mover o bloco para
-        // logo antes do seu primeiro USO real, sem olhar para essas dependências, pode reintroduzir a
-        // MESMA violação declare-antes-de-usar que este passo tenta resolver, só que para o símbolo
-        // dependente (ex. "length") em vez de para list_to_function. Empurra o ponto de inserção para
-        // depois de qualquer declaração (logic/predicate) já presente no ficheiro de que
-        // list_to_function dependa transitivamente.
-        insertAt = pushInsertAfterSymbolDeclDependencies(cut, insertAt, "list_to_function");
-
-        StringBuilder sb = new StringBuilder();
-        for (AcsCommentSpan sp : toMove) {
-            sb.append(sp.text);
-        }
-        return cut.substring(0, insertAt) + sb + cut.substring(insertAt);
-    }
-
-    /** Índice imediatamente após o span {@code axiomatic new_types} (ou primeiro {@code /*@}). */
-    private static int findInsertAfterNewTypesBlockEnd(String cut) {
-        List<AcsCommentSpan> ss = AcslCommentSpanScanner.findAllAcsCommentSpans(cut);
-        for (AcsCommentSpan sp : ss) {
-            if ("new_types".equals(sp.axiomaticName)) {
-                return sp.end;
-            }
-        }
-        return AcslCommentSpanScanner.findPreambleInsertIndex(cut);
-    }
-
-    /**
-     * Empurra {@code insertAt} para depois de qualquer declaração ({@code logic}/{@code predicate})
-     * já presente em {@code content}, de um símbolo do qual {@code rootSymbol} dependa transitivamente
-     * (ver {@link AcslLibSymbolDependencyMap#transitiveDependencySymbols(String)}) — necessário quando
-     * se reposiciona {@code rootSymbol} (ex. {@code list_to_function}) para logo antes do seu próprio
-     * primeiro USO: se um símbolo de que ele depende (ex. {@code length}, referenciado dentro do
-     * próprio corpo dos axiomas de {@code list_to_function}) já estiver declarado MAIS À FRENTE no
-     * ficheiro do que o ponto de inserção calculado, mover para lá deixaria essa dependência por
-     * declarar nesse ponto — a mesma violação declare-antes-de-usar que esta função tenta resolver,
-     * só que para o símbolo dependente. Devolve {@code insertAt} inalterado se nenhuma dependência
-     * conhecida tiver uma declaração no ficheiro em posição igual/posterior.
-     */
-    private static int pushInsertAfterSymbolDeclDependencies(
-            String content, int insertAt, String rootSymbol) {
-        Set<String> deps =
-                AcslLibSymbolDependencyMap.instance().transitiveDependencySymbols(rootSymbol);
-        if (deps.isEmpty()) {
-            return insertAt;
-        }
-        List<AcsCommentSpan> spans = AcslCommentSpanScanner.findAllAcsCommentSpans(content);
-        int result = insertAt;
-        for (String dep : deps) {
-            if (dep.equals(rootSymbol)) {
-                continue;
-            }
-            Pattern declPattern =
-                    Pattern.compile(
-                            "(?m)^.*\\b(?:logic|predicate)\\b.*?\\b"
-                                    + Pattern.quote(dep)
-                                    + "\\s*\\(");
-            for (AcsCommentSpan sp : spans) {
-                if (sp.end <= result) {
-                    continue;
-                }
-                if (declPattern.matcher(sp.text).find()) {
-                    result = Math.max(result, sp.end);
-                }
-            }
-        }
-        return result;
     }
 
 }

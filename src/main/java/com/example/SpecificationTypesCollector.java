@@ -192,6 +192,11 @@ public final class SpecificationTypesCollector {
                         .values()) {
             addNormalizedType(acslTypes, acsl);
         }
+        for (String acsl :
+                BxmlMachineVariables.inferAbstractConstantsLogicTypesFromProperties(machineEl, registry)
+                        .values()) {
+            addNormalizedType(acslTypes, acsl);
+        }
         collectTyprefsFromIds(machineEl, "Abstract_Variables", registry, acslTypes, bxmlEntries);
         collectTyprefsFromIds(machineEl, "Concrete_Variables", registry, acslTypes, bxmlEntries);
         collectTyprefsFromIds(machineEl, "Concrete_Constants", registry, acslTypes, bxmlEntries);
