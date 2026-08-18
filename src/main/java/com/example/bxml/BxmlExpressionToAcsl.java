@@ -1053,6 +1053,17 @@ public final class BxmlExpressionToAcsl {
         if (isDirectProductOp(opTrimmed)) {
             return "direct_product(" + left + ", " + right + ")";
         }
+        // B: iterate(r,n) — r composta consigo própria n vezes (ACSL_Lib/relation_functions/
+        // iterate.acsl). Binary_Exp com dois filhos diretos (r, n), mesma forma AST de prj1/prj2
+        // acima (chamada de função com 2 argumentos, não operador infixo B) — sem caso próprio
+        // caía no infixo cru "(r iterate n)" (default abaixo), inválido em ACSL: o -acsl-import
+        // rejeitava-o como erro de SINTAXE (não "unbound function"), e o mecanismo de auto-cura de
+        // colisão de palavra reservada (FramaCRunner) ficava a renomear "iterate" -> "iterate_b" ->
+        // "iterate_b_b" -> ... para sempre, sem nunca convergir (o problema nunca foi o NOME, era a
+        // FORMA da expressão).
+        if ("iterate".equals(opTrimmed)) {
+            return "iterate(" + left + ", " + right + ")";
+        }
         String infix = integerBinaryOpToAcsl(op);
         return "(" + left + " " + infix + " " + right + ")";
     }

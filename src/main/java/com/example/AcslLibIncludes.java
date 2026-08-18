@@ -137,6 +137,8 @@ public final class AcslLibIncludes {
             "relation_functions/prj1.acsl",
             "relation_functions/prj2.acsl",
             "relation_functions/direct_product.acsl",
+            "relation_functions/composition.acsl",
+            "relation_functions/closure1.acsl",
             "relation_functions/succ.acsl",
             "relation_functions/pred.acsl",
             "function_functions/is_function.acsl",
@@ -145,6 +147,12 @@ public final class AcslLibIncludes {
             "function_functions/is_total.acsl",
             "function_functions/apply.acsl",
             "function_functions/id.acsl",
+            // closure/iterate dependem de id() (identidade) — precisam de vir DEPOIS de
+            // function_functions/id.acsl na lista de includes (a ordem de FILE_ORDER é a ordem
+            // textual de "include" no .acsl gerado; sem isto, "unbound logic function id" em
+            // relation_axioms/relation_closure.acsl, id() referenciado antes de declarado).
+            "relation_functions/closure.acsl",
+            "relation_functions/iterate.acsl",
             "function_functions/is_injective.acsl",
             "function_functions/is_surjective.acsl",
             "function_functions/is_bijective.acsl",

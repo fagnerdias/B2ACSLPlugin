@@ -677,6 +677,34 @@ public final class SpecificationAxiomaticInstantiator {
             all.addAll(listElemTypes);
             return List.copyOf(all);
         }
+
+        /**
+         * Tipos T tais que (T,T) é um par NATURAL (pairTypes, não aliasPairTypes — nunca um par
+         * "envolvido" derivado, ver {@link #addRelationCompositionAliasPairs}/{@link
+         * #addDirectProductResultAliasPairs}): candidatos para blocos aridade-1 sobre
+         * {@code Relation<A,A>} (endorrelações homogéneas) como {@code id<A>}/{@code closure1<A>}/
+         * {@code closure<A>}/{@code iterate<A>}/{@code relation_composition<A>} — ver
+         * {@code buildSubstitutions}. Deliberadamente mais estreito que
+         * {@link #naturalSetElemTypes} (que inclui QUALQUER tipo alguma vez envolto em
+         * {@code Set<...>}, não só domínios de relação quadrada): usar naturalSetElemTypes aqui
+         * causava uma cascata — {@code id<A>} instanciado num T "de mais" (ex.
+         * {@code Set<integer>}, presente só porque ND é um conjunto de integers) exige
+         * {@code couple<T,T>}, que por sua vez é adicionado como novo par "natural" fantasma, que
+         * por sua vez instancia closure1/closure/iterate/relation_composition NESSE T também — e
+         * cada um desses introduz mais um nível de {@code Set<Tuple<T,T>>} aninhado, sem nunca
+         * convergir. Restringir a pares JÁ genuinamente naturais (ex.: RR:Relation&lt;integer,
+         * integer&gt; → (integer,integer) já está em pairTypes por si só) evita a cascata por
+         * construção: nenhum destes blocos consegue "criar" um novo T não visto na especificação.
+         */
+        List<String> squareRelationDomainTypes() {
+            Set<String> out = new LinkedHashSet<>();
+            for (List<String> pair : pairTypes) {
+                if (pair.size() == 2 && pair.get(0).equals(pair.get(1)) && !isTypeVariable(pair.get(0))) {
+                    out.add(pair.get(0));
+                }
+            }
+            return List.copyOf(out);
+        }
     }
 
     // ── API pública ───────────────────────────────────────────────────────────
@@ -991,6 +1019,35 @@ public final class SpecificationAxiomaticInstantiator {
                             + "|Set\\s*<\\s*Tuple\\s*<\\s*integer\\s*,\\s*A\\s*>\\s*>");
 
     /**
+     * Sinal de que {@code A} é o domínio de uma endorrelação homogénea {@code Relation<A,A>} —
+     * {@code id<A>}/{@code closure1<A>}/{@code closure<A>}/{@code iterate<A>}/{@code
+     * relation_composition<A>} usam todos esta forma na própria assinatura. Aceita a forma não
+     * expandida ({@code Relation<A,A>}, como escrita nos ficheiros-fonte da lib) e a forma
+     * canonicalizada pelo {@code frama-c -print} ({@code Set<Tuple<A,A>>}), mesmo padrão duplo de
+     * {@link #SEQUENCE_ENCODED_AS_FUNCTION_OF_A} acima e pela mesma razão (o sinónimo de tipo
+     * {@code Relation<A,B> = Set<Tuple<A,B>>} de {@code types.acsl} é canonicalizado cedo).
+     */
+    private static final Pattern SQUARE_RELATION_AA =
+            Pattern.compile(
+                    "Relation\\s*<\\s*A\\s*,\\s*A\\s*>"
+                            + "|Set\\s*<\\s*Tuple\\s*<\\s*A\\s*,\\s*A\\s*>\\s*>");
+
+    /**
+     * Chamada a {@code id}/{@code closure1}/{@code closure}/{@code iterate}/{@code
+     * relation_composition} — cobre os AXIOMAS de cada bloco (ex. {@code id_belongs<A>: \forall
+     * Set<A> s, A x; ... id(s) ...}), cujo texto NÃO repete a assinatura {@code Relation<A,A>} do
+     * {@code logic}/{@code predicate} irmão (cada declaração é classificada isoladamente, ver
+     * {@code processBlock}: "candidatos derivados apenas do CONTEÚDO DESSA declaração") — sem
+     * isto, só a declaração `logic` em si ficava restrita a squareRelationDomainTypes; os seus
+     * próprios axiomas continuavam a cair no ramo largo (naturalSetElemTypes), reintroduzindo a
+     * mesma cascata que {@link #SQUARE_RELATION_AA} evita. Mesmo padrão de lookbehind negativo de
+     * {@link #REL_FNC_PRJ_SELF_REFERENCE} (não casa "valid(" só por terminar em "id(").
+     */
+    private static final Pattern SQUARE_RELATION_FUNCTION_CALL =
+            Pattern.compile(
+                    "(?<![A-Za-z0-9_])(id|closure1|closure|iterate|relation_composition)\\(");
+
+    /**
      * Casa a declaração/uso PRÓPRIO de {@code rel}/{@code fnc}/{@code prj1}/{@code prj2}
      * (ex. {@code rel<A,B>(...)}, {@code rel(R)}) — nunca um nome que só termina nessas letras
      * (ex. {@code dom_of_empty_rel<A,B>} em lemmas.acsl), graças ao lookbehind negativo que
@@ -1010,8 +1067,20 @@ public final class SpecificationAxiomaticInstantiator {
             boolean hasList = content.contains("\\list<A") || content.contains("[|");
             boolean hasSet  = content.contains("Set<A");
             boolean hasSequenceFunction = SEQUENCE_ENCODED_AS_FUNCTION_OF_A.matcher(content).find();
+            boolean hasSquareRelation =
+                    SQUARE_RELATION_AA.matcher(content).find()
+                            || SQUARE_RELATION_FUNCTION_CALL.matcher(content).find();
 
-            if (hasList || (!hasSet && hasSequenceFunction)) {
+            if (hasSquareRelation) {
+                // id<A>/closure1<A>/closure<A>/iterate<A>/relation_composition<A>: A é o domínio
+                // de uma endorrelação Relation<A,A>. Candidatos vêm de squareRelationDomainTypes
+                // (pares NATURAIS (T,T) já em pairTypes), não de naturalSetElemTypes — ver javadoc
+                // de MonoContext#squareRelationDomainTypes para o porquê (naturalSetElemTypes
+                // causava uma cascata: id instanciado num T "de mais" exige couple<T,T>, que vira
+                // par natural fantasma, que por sua vez re-instancia closure1/closure/iterate/
+                // relation_composition NESSE T também, sem nunca convergir).
+                candidates.addAll(ctx.squareRelationDomainTypes());
+            } else if (hasList || (!hasSet && hasSequenceFunction)) {
                 // Axiomas/lemas de sequência (\list<A>, ou Function<integer,A> como em
                 // is_sequence_def_B<A>): o parâmetro A é um tipo de elemento de lista. Usa
                 // apenas listElemTypes para não gerar instâncias para Tuple<...> ou boolean que
@@ -1315,7 +1384,11 @@ public final class SpecificationAxiomaticInstantiator {
         // silenciosa (sem erro do Frama-C, os tipos extra são só nunca referenciados) que gerava
         // 270 dos 318 aliases de tipo do cv_rel (85%) sem NENHUM uso em todo o ficheiro.
         MonoContext ctx = MonoContext.from(
-                augmented, content.contains("pow_set("), content.contains("relation_inverse("), false, false);
+                augmented,
+                content.contains("pow_set("),
+                content.contains("relation_inverse("),
+                false,
+                false);
 
         Map<String, String> renames = buildTypeRenameMap(ctx);
         if (renames.isEmpty()) return;
