@@ -229,17 +229,36 @@ public final class BxmlMachineVariables {
             // diretamente OU herda o estado de uma máquina importada via invariante de colagem
             // (ex. "loopnn == nn" em Mult_i, ligando o "nn" de Mult ao "loopnn" de Body). Sem
             // IMPORTS não há ambiguidade nenhuma (não existe outra máquina para se colar) — qualifica
-            // sempre. Com IMPORTS, só qualifica se houver ligação array-backed sólida: uma variável
-            // cuja única "ligação" é invariante de colagem com OUTRA máquina não tem representação
-            // concreta própria nenhuma — defini-la diretamente como a variável da outra máquina
-            // tornaria essa invariante de colagem uma tautologia (nn == loopnn == Body__loopnn,
-            // nunca prova nada sobre a sincronização real); precisa continuar ghost, com a colagem
-            // verificada como obrigação de prova de verdade.
-            if (hasArrayBackedVariable || BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
+            // sempre. Com IMPORTS, só qualifica se houver ligação array-backed sólida OU nenhum
+            // invariante próprio: uma variável cuja única "ligação" é invariante de colagem com
+            // OUTRA máquina não tem representação concreta própria nenhuma — defini-la diretamente
+            // como a variável da outra máquina tornaria essa invariante de colagem uma tautologia
+            // (nn == loopnn == Body__loopnn, nunca prova nada sobre a sincronização real); precisa
+            // continuar ghost, com a colagem verificada como obrigação de prova de verdade. Mas uma
+            // invariante de colagem só pode existir DENTRO do <Invariant> da própria implementação
+            // (é isso que a expressaria) — sem NENHUM invariante próprio (ex.: cv_struct_i, cujo
+            // IMPORTS cv_base existe só para PROMOTES bset, sem relação nenhuma com sv), não há
+            // ambiguidade nenhuma a proteger, mesmo com IMPORTS presente por outra razão. Sem este
+            // caso, "sv" ficava sem ligação C nenhuma ("logic integer sv;" sem "= cv_struct__sv"),
+            // deixando WP sem forma de observar as suas atribuições ("assigns \\nothing" inválido).
+            if (hasArrayBackedVariable
+                    || BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()
+                    || !hasNonTrivialInvariant(mel)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Verdadeiro se {@code mel} tem um {@code <Invariant>} com predicado real (não ausente).
+     * Uma invariante de colagem entre a variável concreta e uma máquina importada só pode
+     * viver dentro do PRÓPRIO {@code <Invariant>} de {@code mel} — sem nenhum, não há como
+     * existir ambiguidade nenhuma a proteger em {@link #anyImplementationUsesAbstractVariablesOnly}.
+     */
+    private static boolean hasNonTrivialInvariant(Element mel) {
+        Element inv = BxmlDomUtils.firstChildElement(mel, "Invariant");
+        return inv != null && BxmlDomUtils.firstPredChild(inv) != null;
     }
 
     /**

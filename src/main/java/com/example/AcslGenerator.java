@@ -277,6 +277,7 @@ public final class AcslGenerator {
         int headerLen;
         String propertiesBlock;
         Map<Element, Map<String, String>> mergedVariableRenames;
+        List<BDefinitionsTranslator.ResolvedDefinition> bDefinitions = List.of();
     }
 
     /**
@@ -611,6 +612,17 @@ public final class AcslGenerator {
             sb.append(setsBlock);
             sb.append("\n");
         }
+
+        // 0b) DEFINITIONS B (ver BDefinitionsTranslator — só existe como texto em expand_src/, o
+        // BXML já vem com as macros totalmente expandidas). guardado em state.bDefinitions para
+        // finalizeAndWriteAcslFile reescrever os pontos de uso já gerados (ensures/invariant/…)
+        // para referenciar os nomes simbólicos em vez dos valores literais.
+        BDefinitionsTranslator.parse(bxmlDirectory, baseName)
+                .ifPresent(
+                        t -> {
+                            appendBlockWithSpacing(sb, t.axiomaticBlock());
+                            state.bDefinitions = t.defs();
+                        });
 
         // 1) Constantes e propriedades (só máquina abstrata raiz deste ficheiro)
         // Lambda-defined constants used in ANY_Sub ghost ops are declared in ghost_operations.ci's
@@ -984,6 +996,12 @@ public final class AcslGenerator {
         String fullAcsl = sb.toString();
         if (omitLibIncludesFromPreamble) {
             fullAcsl = AcslLibIncludes.removeLibIncludesFromPreamble(fullAcsl);
+        }
+        if (!state.bDefinitions.isEmpty()) {
+            // Reescreve os pontos de uso (ensures/invariant/…, já gerados a partir do BXML
+            // totalmente expandido) para referenciar os nomes simbólicos de DEFINITIONS em vez dos
+            // valores literais que o BXML só conhece — ver BDefinitionsTranslator.
+            fullAcsl = BDefinitionsTranslator.rewriteCallSites(fullAcsl, state.bDefinitions);
         }
         Path acslFile = state.acslFile;
         Files.writeString(acslFile, fullAcsl);
