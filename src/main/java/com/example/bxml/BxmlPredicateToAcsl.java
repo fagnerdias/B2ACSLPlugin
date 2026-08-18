@@ -354,14 +354,26 @@ public final class BxmlPredicateToAcsl {
                 return "belongs(" + left + ", seq(" + setAtom + "))";
             }
             // ss : seq1(D) / iseq1(D) / perm(D) — sequências não-vazias / não-vazias e injetivas /
-            // permutações sobre D. Sem construtor de valor "conjunto de todas as sequências
-            // [não-vazias/injetivas/permutação] limitadas por D" (Set<\list<A>>) na lib — sem esta
-            // exceção, caía no fallback genérico belongs(left, translate(rightEl)), que produz texto
-            // literal indefinido ("seq1(interval_set(...))", "unbound logic function" no Frama-C).
-            // Omitir é mais seguro que gerar uma referência a função indefinida — mesmo padrão de
-            // under-generation tolerada já usado acima para seq(seq(...)) e noutros pontos desta sessão.
+            // permutações sobre D. Ao contrário de "seq(seq(...))" aninhado (que precisa de um
+            // Set<\list<A>> de facto, ver seq.acsl), aqui D é sempre o domínio de base (nunca
+            // aninhado nesta forma) e "ss" é usado como predicado de tipo TOPO — decompõe-se em
+            // predicados já existentes na lib, sem precisar de seq1_set/iseq1_set/perm_set:
+            //   seq1(D)  = seq(D) menos a sequência vazia
+            //   iseq1(D) = seq1(D) ∩ injetiva (iSeq, já existe, domain-agnostic)
+            //   perm(D)  = sequência injetiva cuja imagem é EXATAMENTE D (sequence_ran/equals, já
+            //              existem) — implica automaticamente o comprimento certo, sem precisar de
+            //              comparar \length(ss) com card(D) à parte.
             if ("seq1".equals(uop) || "iseq1".equals(uop) || "perm".equals(uop)) {
-                return "";
+                String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+                Element typeArg = BxmlDomUtils.firstNonAttrElementChild(rightEl);
+                String setAtom = bTypeArgToSeqOfSetName(typeArg, ctx);
+                if (setAtom == null) return "";
+                String base = "belongs(" + left + ", seq(" + setAtom + "))";
+                return switch (uop) {
+                    case "seq1" -> base + " && (" + left + " != [| |])";
+                    case "iseq1" -> base + " && (" + left + " != [| |]) && iSeq(" + left + ")";
+                    default -> base + " && iSeq(" + left + ") && equals(sequence_ran(" + left + "), " + setAtom + ")";
+                };
             }
         }
         // r : (S <-> T) — relação (conjunto de TODOS os pares (x,y), x:S, y:T, sem exigir
