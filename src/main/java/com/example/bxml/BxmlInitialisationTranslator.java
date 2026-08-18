@@ -670,8 +670,13 @@ public final class BxmlInitialisationTranslator {
      * Becomes_In}), incluindo dentro de ramos {@code Then}/{@code Else}/{@code When} — para que uma
      * {@code ||} que engloba um {@code If_Sub}/{@code Select} saiba de TODAS as variáveis
      * simultaneamente atribuídas, mesmo as só atribuídas num dos ramos condicionais.
+     *
+     * <p>Pacote-visível (não {@code private}): também reusado por
+     * {@link BxmlOperationsTranslator#translateLocalOperations} para o {@code assigns} de
+     * LOCAL_OPERATIONS (ex. cv_struct's {@code lclear}) — mesma derivação de nomes atribuídos, sem
+     * duplicar a lógica.
      */
-    private static void collectAssignedLhsNames(Element sub, Set<String> out) {
+    static void collectAssignedLhsNames(Element sub, Set<String> out) {
         if (sub == null) return;
         switch (sub.getLocalName()) {
             case "Assignement_Sub", "Becomes_Such_That", "Becomes_In" ->

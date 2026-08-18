@@ -554,23 +554,37 @@ public final class AcslGenerator {
         }
         List<OperationAcsl> operations =
                 isAbstraction
-                        ? BxmlOperationsTranslator.translateOperations(
-                                machineEl,
-                                ctx,
-                                allInvariantPredicateNames,
-                                operationStateVariableNames,
-                                libScanRemovedBodies,
-                                baseName,
-                                mergedMachineElements,
-                                gluing,
-                                useGhostAbstraction,
-                                importedOpAssigns,
-                                importedInvariantPredicateNames,
-                                varRhsOverrides,
-                                bxmlDirectory,
-                                new ArrayList<>(invariantSourceMachineNames),
-                                collapsedVariableNames)
-                        : List.of();
+                        ? new ArrayList<>(
+                                BxmlOperationsTranslator.translateOperations(
+                                        machineEl,
+                                        ctx,
+                                        allInvariantPredicateNames,
+                                        operationStateVariableNames,
+                                        libScanRemovedBodies,
+                                        baseName,
+                                        mergedMachineElements,
+                                        gluing,
+                                        useGhostAbstraction,
+                                        importedOpAssigns,
+                                        importedInvariantPredicateNames,
+                                        varRhsOverrides,
+                                        bxmlDirectory,
+                                        new ArrayList<>(invariantSourceMachineNames),
+                                        collapsedVariableNames))
+                        : new ArrayList<>();
+        // LOCAL_OPERATIONS (ex. cv_struct_i's lclear): funções auxiliares privadas da
+        // implementação, sem contraparte na máquina abstrata — translateOperations acima nunca as
+        // visita (itera só <Operations> de machineEl, a máquina ABSTRATA). Ver
+        // BxmlOperationsTranslator#translateLocalOperations.
+        if (isAbstraction) {
+            for (Element mel : mergedMachineElements) {
+                if ("implementation".equalsIgnoreCase(mel.getAttribute("type"))) {
+                    operations.addAll(
+                            BxmlOperationsTranslator.translateLocalOperations(
+                                    mel, baseName, ctx, allInvariantPredicateNames));
+                }
+            }
+        }
         state.operations = operations;
     }
 
