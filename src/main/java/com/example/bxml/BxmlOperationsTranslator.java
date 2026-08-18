@@ -576,10 +576,21 @@ public final class BxmlOperationsTranslator {
             Map<String, String> varRhsOverrides,
             Path bxmlDirectory) {
         List<String> connectionConcreteAssigns = List.of();
+        // mergedRefinementChain vazio normalmente significa "nada a ligar" (sem refinamento nem
+        // implementação) — MAS uma máquina abstrata self-contained array-backed (ex.: cv_rel, sem
+        // _i.bxml separado) também tem cadeia vazia e MESMO ASSIM liga o seu próprio array C
+        // diretamente; sem esta exceção, uma operação que atribui essa variável (ex.:
+        // cv_rel__upd escrevendo cv_rel__fmap[ii]) nunca alcançava
+        // listLinkedConcreteAssignTargetsForOperation mais abaixo, ficando com "assigns \nothing"
+        // — contrato UNSOUND (mesma classe de bug já corrigida para a INITIALISATION).
+        boolean selfContainedArrayBacked =
+                machineEl != null
+                        && BxmlMachineVariables.abstractMachineIsSelfContainedArrayBacked(
+                                machineEl, mergedRefinementChain);
         if (rootAbstractMachineName == null
                 || rootAbstractMachineName.isBlank()
                 || mergedRefinementChain == null
-                || mergedRefinementChain.isEmpty()) {
+                || (mergedRefinementChain.isEmpty() && !selfContainedArrayBacked)) {
             return connectionConcreteAssigns;
         }
         Set<String> assignedAbs = new LinkedHashSet<>();
@@ -597,6 +608,18 @@ public final class BxmlOperationsTranslator {
             assignedAbs.addAll(
                     GhostContractPredicates.assignedAbstractVariablesInOperation(
                             child, collapsedVariableNames));
+        }
+        // Mesma lacuna do OR acima (selfContainedArrayBacked), um nível mais fundo: uma variável
+        // CONCRETE_VARIABLES declarada diretamente na máquina self-contained (ex.: cv_rel__fmap)
+        // nunca é "abstrata" nem "colapsada" (não há duas declarações, machine1/machine2, para
+        // colapsar) — é uma TERCEIRA categoria, nunca antes precisa porque só cv_rel a exercita.
+        // Sem isto, mesmo com o OR do guard acima a deixar chegar até aqui, assignedAbs continuava
+        // vazio (nem assignsAbstract nem collapsedVariableNames sabem de "fmap") e caía no mesmo
+        // "assigns \nothing" que se queria evitar.
+        if (selfContainedArrayBacked) {
+            assignedAbs.addAll(
+                    GhostContractPredicates.assignedAbstractVariablesInOperation(
+                            child, BxmlMachineVariables.declaredVariableNames(machineEl)));
         }
         if (assignedAbs.isEmpty()) {
             return connectionConcreteAssigns;

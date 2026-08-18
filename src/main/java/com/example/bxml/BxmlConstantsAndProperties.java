@@ -97,9 +97,16 @@ public final class BxmlConstantsAndProperties {
                         .map(v -> "integer " + v).toList());
                 decls.add("    logic boolean " + name + "(" + paramStr + ");");
             } else {
-                String tr = e.getAttribute("typref");
-                int typref = (tr == null || tr.isBlank()) ? -1 : Integer.parseInt(tr.trim());
-                String logicType = ctx.types().acslVariableLogicTypeFromTypref(typref);
+                // ctx.variableLogicTypes() primeiro: cobre constantes tipadas por predicado de
+                // sequência em PROPERTIES (ex. "SQ : seq(0..9)" -> \list<integer>) — o typref cru
+                // não distingue \list de Relation (ambos codificam-se como POW(INTEGER*T) no tipo B
+                // bruto), ver BxmlMachineVariables#inferAbstractConstantsLogicTypesFromProperties.
+                String logicType = ctx.variableLogicTypes().get(name);
+                if (logicType == null) {
+                    String tr = e.getAttribute("typref");
+                    int typref = (tr == null || tr.isBlank()) ? -1 : Integer.parseInt(tr.trim());
+                    logicType = ctx.types().acslVariableLogicTypeFromTypref(typref);
+                }
                 decls.add("    logic " + logicType + " " + name + ";");
             }
         }

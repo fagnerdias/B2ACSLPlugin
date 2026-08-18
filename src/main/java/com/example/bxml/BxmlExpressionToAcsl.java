@@ -211,9 +211,18 @@ public final class BxmlExpressionToAcsl {
             case "Id" -> isSetValuedId(exp, ctx);
             case "Unary_Exp" -> {
                 String op = exp.getAttribute("op");
+                // "rel"/"fnc" (B: transforma relação<->função, ver relation_functions/rel.acsl e
+                // fnc.acsl) caem no fallback genérico "opname(arg)" de translateUnary — nunca
+                // precisaram de um case próprio ali para GERAR o texto certo, mas isSetValued não
+                // tem fallback genérico (é uma lista fechada) e sem esta entrada
+                // translateEqualityComparison nunca reconhecia "rel(FF) == RC"/"fnc(RC) == FF"
+                // como comparação entre dois valores Set-valued, caindo no "==" nativo em vez de
+                // equals(...) — ambos Relation<A,B>/Function<A,B> (Set<Tuple<A,B>>), == não
+                // compara extensionalmente.
                 yield "ran".equals(op) || "dom".equals(op) || "id".equals(op)
                         || "closure".equals(op) || "closure1".equals(op)
-                        || "union".equals(op) || "inter".equals(op);
+                        || "union".equals(op) || "inter".equals(op)
+                        || "rel".equals(op) || "fnc".equals(op);
             }
             case "EmptySet" -> true;
             case "Quantified_Set" -> true;
@@ -908,6 +917,14 @@ public final class BxmlExpressionToAcsl {
             // "unbound logic function POW". set_functions/pow_set.acsl: novo primitivo genérico
             // pow_set<A>(Set<A> universe) : Set<Set<A>>, belongs(s,pow_set(u)) <==> inclusion(s,u).
             case "POW" -> "pow_set(" + a + ")";
+            // B seq(D) em posição de VALOR — mesmo padrão de POW acima, e também o caso GERAL
+            // usado agora por "X : seq(D)" (translateMembershipComparison traduz sempre para
+            // belongs(X, seq(D)), nunca mais is_seq_of diretamente — ver lá). Sem caso próprio,
+            // uma sequência-de-sequências ficava sem tradução alguma (nenhum Set<\list<A>>
+            // disponível). sequence_functions/seq.acsl: novo primitivo genérico seq<A>(Set<A> d) :
+            // Set<\list<A>>, belongs(l,seq(d)) <==> is_seq_of(l,d) (is_seq_of fica só como
+            // implementação interna do axioma-ponte, nunca mais emitido diretamente).
+            case "seq" -> "seq(" + a + ")";
             // B: union(ENS)/inter(ENS) — união/interseção generalizadas de uma família de conjuntos
             // (ENS : Set<Set<A>>), distinto do quantificador UNION(z).(D|E)/INTER(z).(D|E) (esse vai
             // por GeneralizedQuantifierTranslator/UnionInterFunctionRegistry). "union" é palavra
@@ -1083,6 +1100,25 @@ public final class BxmlExpressionToAcsl {
                 acc = "set_union(" + acc + ", singleton(" + parts.get(k) + "))";
             }
             return acc;
+        }
+        if ("[".equals(op)) {
+            // B: sequência em extensão [e1, e2, ..., en] (5.7/5.17 B Language Manual) → literal de
+            // lista ACSL nativa [| e1, e2, ..., en |] — mesma sintaxe já usada por \concat/insert
+            // (ver isSequenceAppendOp etc. acima). O caso de 0 elementos não ocorre aqui: B trata a
+            // sequência vazia "[]" como um nó BXML próprio (EmptySeq -> \Nil), nunca Nary_Exp "[".
+            // Recursivo por construção (translate(e, ctx) em cada filho): cobre sequência de
+            // sequências (ex. CC = [[3],[1,2]] -> [| [|3|], [|1,2|] |]), tal como o \list<\list<...>>
+            // inferido para CC em BxmlMachineVariables#inferAbstractConstantsLogicTypesFromProperties.
+            java.util.List<String> parts = new java.util.ArrayList<>();
+            NodeList children = n.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                Node node = children.item(i);
+                if (node.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element e = (Element) node;
+                if ("Attr".equals(e.getLocalName())) continue;
+                parts.add(translate(e, ctx));
+            }
+            return "[| " + String.join(", ", parts) + " |]";
         }
         return "/* nary " + op + " */";
     }

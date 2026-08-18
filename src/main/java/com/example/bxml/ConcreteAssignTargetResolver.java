@@ -153,11 +153,21 @@ public final class ConcreteAssignTargetResolver {
             List<Element> mergedMachineElements,
             BxmlTranslateContext ctx,
             Map<String, String> varRhsOverrides) {
+        // Duas formas de a máquina abstrata ligar as suas variáveis diretamente ao C, sem camada
+        // ghost: uma implementação separada que replica exatamente as variáveis abstratas
+        // (anyImplementationUsesAbstractVariablesOnly), OU a máquina abstrata não ter NENHUMA
+        // implementação e ligar o seu próprio array C sozinha (abstractMachineIsSelfContainedArrayBacked,
+        // ex.: cv_rel, sem _i.bxml separado). Faltava o segundo caso aqui: sem ele,
+        // cv_rel__INITIALISATION (que escreve cv_rel__fmap[0..2]) ficava sem nenhum assigns
+        // target, caindo no fallback "assigns \nothing" de InitialisationAcsl — contrato UNSOUND
+        // (a função escreve memória global que a assinatura diz não escrever).
         if (abstractMachineName == null
                 || abstractMachineName.isBlank()
                 || abstractMachineEl == null
-                || !BxmlMachineVariables.anyImplementationUsesAbstractVariablesOnly(
-                        abstractMachineEl, mergedMachineElements)) {
+                || !(BxmlMachineVariables.anyImplementationUsesAbstractVariablesOnly(
+                                abstractMachineEl, mergedMachineElements)
+                        || BxmlMachineVariables.abstractMachineIsSelfContainedArrayBacked(
+                                abstractMachineEl, mergedMachineElements))) {
             return List.of();
         }
         Set<String> declared = BxmlMachineVariables.declaredVariableNames(abstractMachineEl);
@@ -209,13 +219,19 @@ public final class ConcreteAssignTargetResolver {
             List<Element> mergedMachineElements,
             Set<String> assignedVariableNames,
             BxmlTranslateContext ctx) {
+        // Ver o mesmo OR em listLinkedConcreteAssignTargetsForInitialisation: sem
+        // abstractMachineIsSelfContainedArrayBacked aqui, uma operação (ex. cv_rel__upd, que
+        // escreve cv_rel__fmap[ii]) de uma máquina abstrata sem implementação separada ficava sem
+        // assigns target, caindo em "assigns \nothing" — contrato UNSOUND.
         if (abstractMachineName == null
                 || abstractMachineName.isBlank()
                 || abstractMachineEl == null
                 || assignedVariableNames == null
                 || assignedVariableNames.isEmpty()
-                || !BxmlMachineVariables.anyImplementationUsesAbstractVariablesOnly(
-                        abstractMachineEl, mergedMachineElements)) {
+                || !(BxmlMachineVariables.anyImplementationUsesAbstractVariablesOnly(
+                                abstractMachineEl, mergedMachineElements)
+                        || BxmlMachineVariables.abstractMachineIsSelfContainedArrayBacked(
+                                abstractMachineEl, mergedMachineElements))) {
             return List.of();
         }
         Set<String> declared = BxmlMachineVariables.declaredVariableNames(abstractMachineEl);
@@ -260,8 +276,10 @@ public final class ConcreteAssignTargetResolver {
                 || abstractMachineEl == null
                 || assignedVariableNames == null
                 || assignedVariableNames.isEmpty()
-                || !BxmlMachineVariables.anyImplementationUsesAbstractVariablesOnly(
-                        abstractMachineEl, mergedMachineElements)) {
+                || !(BxmlMachineVariables.anyImplementationUsesAbstractVariablesOnly(
+                                abstractMachineEl, mergedMachineElements)
+                        || BxmlMachineVariables.abstractMachineIsSelfContainedArrayBacked(
+                                abstractMachineEl, mergedMachineElements))) {
             return List.of();
         }
         Set<String> declared = BxmlMachineVariables.declaredVariableNames(abstractMachineEl);

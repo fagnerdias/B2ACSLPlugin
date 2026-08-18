@@ -10,7 +10,9 @@ import org.w3c.dom.NodeList;
 /**
  * Traduz predicados BXML ({@code pred_group}) para expressões ACSL.
  *
- * <p>{@code v : iseq(T)} / {@code v : seq(T)} → {@code iSeq} / {@code is_seq_of};
+ * <p>{@code v : iseq(T)} → {@code iSeq}; {@code v : seq(T)} → {@code belongs(v, seq(T))} (mesmo
+ * padrão de {@code POW}/{@code pow_set} abaixo — {@code is_seq_of} fica só como implementação
+ * interna do axioma-ponte {@code seq_def}, nunca emitido diretamente);
  * {@code ss : POW(S)} → {@code belongs(ss, pow_set(S))}; {@code ss : FIN(ss)} → {@code is_finite(ss)};
  * {@code ss : POW1(S)} → {@code belongs(ss, pow_set(S)) && card(ss) > 0} (mesma base de POW, mais
  * não-vazio via {@code card}); {@code ss : FIN1(S)} → {@code is_finite(ss) && card(ss) > 0}
@@ -336,7 +338,30 @@ public final class BxmlPredicateToAcsl {
                 String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
                 Element typeArg = BxmlDomUtils.firstNonAttrElementChild(rightEl);
                 String setAtom = bTypeArgToSeqOfSetName(typeArg, ctx);
-                return "is_seq_of(" + left + ", " + setAtom + ")";
+                // typeArg é ele próprio iseq(...) (ex. CC : seq(iseq(0..9))): sem iseq_set na lib
+                // (fora de âmbito, ver bTypeArgToSeqOfSetName) — devolve null em vez do fallback
+                // errado "NAT". Omitir este conjunto é mais seguro que gerar uma asserção mal
+                // tipada — mesmo padrão de under-generation tolerada já usado noutros pontos desta
+                // sessão (ex. becomes_element_of). typeArg = seq(...) (sequência-de-sequências,
+                // ex. CC : seq(seq(0..9))) já NÃO cai aqui — bTypeArgToSeqOfSetName resolve-o
+                // recursivamente via seq(...) em posição de valor (sequence_functions/seq.acsl).
+                if (setAtom == null) return "";
+                // "X : seq(D)" -> belongs(X, seq(D)) uniformemente (D já traduzido pelo mesmo
+                // helper usado por POW: seq<A>(Set<A>) : Set<\list<A>>, ver seq.acsl). is_seq_of
+                // deixa de ser emitido diretamente — só existe como implementação interna do
+                // axioma-ponte seq_def em sequence_axioms/seq_axioms.acsl (mesmo papel de
+                // "inclusion" para pow_set_def).
+                return "belongs(" + left + ", seq(" + setAtom + "))";
+            }
+            // ss : seq1(D) / iseq1(D) / perm(D) — sequências não-vazias / não-vazias e injetivas /
+            // permutações sobre D. Sem construtor de valor "conjunto de todas as sequências
+            // [não-vazias/injetivas/permutação] limitadas por D" (Set<\list<A>>) na lib — sem esta
+            // exceção, caía no fallback genérico belongs(left, translate(rightEl)), que produz texto
+            // literal indefinido ("seq1(interval_set(...))", "unbound logic function" no Frama-C).
+            // Omitir é mais seguro que gerar uma referência a função indefinida — mesmo padrão de
+            // under-generation tolerada já usado acima para seq(seq(...)) e noutros pontos desta sessão.
+            if ("seq1".equals(uop) || "iseq1".equals(uop) || "perm".equals(uop)) {
+                return "";
             }
         }
         // r : (S <-> T) — relação (conjunto de TODOS os pares (x,y), x:S, y:T, sem exigir
@@ -535,9 +560,13 @@ public final class BxmlPredicateToAcsl {
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Element e = (Element) n;
             if ("Attr".equals(e.getLocalName())) continue;
-            parts.add(translatePred(e, ctx));
+            // Um filho pode legitimamente traduzir para "" (ex.: seq(seq(...)), sem construtor de
+            // valor na lib — ver bTypeArgToSeqOfSetName) — sem filtrar, o join deixava um "&&"/"||"
+            // pendurado (ex.: "P1 &&  && P3"), erro de sintaxe no Frama-C.
+            String part = translatePred(e, ctx);
+            if (part != null && !part.isBlank()) parts.add(part);
         }
-        if ("&".equals(op)) return String.join(" && ", parts);
+        if (parts.isEmpty()) return "";
         if ("or".equals(op)) return String.join(" || ", parts);
         return String.join(" && ", parts);
     }
@@ -585,8 +614,36 @@ public final class BxmlPredicateToAcsl {
         return BxmlExpressionToAcsl.translate(codomainEl, ctx);
     }
 
-    /** Segundo argumento de {@code is_seq_of}/{@code inclusion} (conjunto ACSL da lib, ex. {@code NAT}). */
+    /**
+     * Segundo argumento de {@code is_seq_of}/{@code inclusion} (conjunto ACSL da lib, ex. {@code NAT}).
+     *
+     * @return {@code null} quando {@code typeArg} é ele próprio {@code iseq(...)} (sequência
+     *         injetiva de sequências) — sem construtor de valor {@code Set<\list<A>>} para essa
+     *         forma na lib, ver chamador em {@link #translateMembershipComparison}. {@code
+     *         seq(...)} aninhado JÁ é resolvido (ver abaixo).
+     */
     private static String bTypeArgToSeqOfSetName(Element typeArg, BxmlTranslateContext ctx) {
+        // D = seq(...) aninhado (ex.: CC : seq(seq(0..9))) — delega no tradutor de expressões
+        // genérico, que agora tem um caso próprio para "seq" em posição de valor
+        // (translateUnary -> seq(...), sequence_functions/seq.acsl); mesmo padrão de
+        // powDomainSetAtom abaixo para POW aninhado. Resolve qualquer profundidade de
+        // aninhamento futura de graça (translate desce recursivamente ao domínio interno).
+        if (typeArg != null && "Unary_Exp".equals(typeArg.getLocalName())
+                && "seq".equals(typeArg.getAttribute("op"))) {
+            return BxmlExpressionToAcsl.translate(typeArg, ctx);
+        }
+        // D = iseq(...) aninhado: sem iseq_set na lib (fora de âmbito — nenhum exemplo usa esta
+        // forma ainda); omitir é mais seguro que gerar "iseq(...)" cru (unbound).
+        if (typeArg != null && "Unary_Exp".equals(typeArg.getLocalName())
+                && "iseq".equals(typeArg.getAttribute("op"))) {
+            return null;
+        }
+        // D como intervalo (ex.: SQ : seq(0..9)) — sem este caso, caía direto no fallback "NAT"
+        // abaixo (só reconhecia Id), enfraquecendo silenciosamente is_seq_of(SQ, NAT) em vez de
+        // is_seq_of(SQ, interval_set(0, 9)).
+        if (BxmlExpressionToAcsl.isIntervalBinaryExp(typeArg)) {
+            return BxmlExpressionToAcsl.intervalOrSetComprehensionRef(typeArg, ctx);
+        }
         if (typeArg != null && "Id".equals(typeArg.getLocalName())) {
             String v = typeArg.getAttribute("value");
             if (v == null || v.isBlank()) return "NAT";
