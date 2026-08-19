@@ -2,27 +2,37 @@
   "_meta": {
     "generator": "scripts/generate_acsl_symbol_dependency_map.py",
     "root": "src/main/resources/lib/B2ACSLLib",
-    "symbol_count": 57
+    "symbol_count": 80
   },
   "symbols": [
     "apply",
+    "array2d_to_relation_bool",
+    "array2d_to_relation_int",
     "array_to_function_bool",
     "array_to_function_int",
     "becomes_element_of",
     "belongs",
     "card",
     "cartesian_product",
+    "closure",
+    "closure1",
+    "conc",
     "couple",
+    "direct_product",
     "disjoint",
     "dom",
     "domain_restriction",
+    "domain_subtraction",
     "empty",
     "equals",
     "first",
+    "fnc",
     "front",
     "function_apply",
     "function_singleton",
     "function_to_list",
+    "general_inter",
+    "general_union",
     "get",
     "iSeq",
     "id",
@@ -40,48 +50,71 @@
     "is_sequence",
     "is_surjective",
     "is_total_function",
+    "iterate",
     "last",
     "length",
     "list_to_function",
     "not_belongs",
+    "not_inclusion",
+    "not_strict_inclusion",
     "overwrite",
     "pair",
-    "ran",
+    "pow_set",
+    "pred",
+    "prj1",
+    "prj2",
     "range_restriction",
+    "range_subtraction",
+    "rel",
+    "relation_composition",
     "relation_inverse",
+    "relation_ran",
     "relation_singleton",
     "restrict_front",
     "restrict_tail",
+    "rev",
     "second",
+    "seq",
+    "sequence_ran",
     "set_difference",
     "set_intersection",
     "set_max",
     "set_min",
     "set_union",
-    "sigma",
     "singleton",
+    "strict_inclusion",
     "succ",
     "tail"
   ],
   "symbol_to_defining_file": {
     "apply": "relation_functions/apply.acsl",
+    "array2d_to_relation_bool": "function_functions/array2d_to_relation_bool.acsl",
+    "array2d_to_relation_int": "function_functions/array2d_to_relation_int.acsl",
     "array_to_function_bool": "function_functions/array_to_function_bool.acsl",
     "array_to_function_int": "function_functions/array_to_function_int.acsl",
     "becomes_element_of": "function_functions/becomes_element_of.acsl",
     "belongs": "set_functions/belongs.acsl",
     "card": "set_functions/card.acsl",
     "cartesian_product": "set_functions/cartesian_product.acsl",
+    "closure": "relation_functions/closure.acsl",
+    "closure1": "relation_functions/closure1.acsl",
+    "conc": "sequence_functions/conc.acsl",
     "couple": "tuple_functions/tuple_couple.acsl",
+    "direct_product": "relation_functions/direct_product.acsl",
     "disjoint": "set_functions/disjoint.acsl",
     "dom": "relation_functions/domain.acsl",
     "domain_restriction": "relation_functions/domain_restriction.acsl",
+    "domain_subtraction": "relation_functions/domain_subtraction.acsl",
     "empty": "set_functions/empty.acsl",
     "equals": "set_functions/equals.acsl",
     "first": "sequence_functions/first.acsl",
+    "fnc": "relation_functions/fnc.acsl",
     "front": "sequence_functions/front.acsl",
     "function_apply": "function_functions/apply.acsl",
     "function_singleton": "function_functions/singleton.acsl",
     "function_to_list": "sequence_functions/function_to_list.acsl",
+    "general_inter": "set_functions/generalized_union_intersection.acsl",
+    "general_union": "set_functions/generalized_union_intersection.acsl",
     "get": "sequence_functions/get.acsl",
     "iSeq": "sequence_functions/iseq.acsl",
     "id": "function_functions/id.acsl",
@@ -99,32 +132,51 @@
     "is_sequence": "sequence_functions/is_sequence.acsl",
     "is_surjective": "function_functions/is_surjective.acsl",
     "is_total_function": "function_functions/is_total.acsl",
+    "iterate": "relation_functions/iterate.acsl",
     "last": "sequence_functions/last.acsl",
     "length": "sequence_functions/length.acsl",
     "list_to_function": "sequence_functions/list_to_function.acsl",
     "not_belongs": "set_functions/belongs.acsl",
+    "not_inclusion": "set_functions/inclusion.acsl",
+    "not_strict_inclusion": "set_functions/equals.acsl",
     "overwrite": "relation_functions/overwrite.acsl",
     "pair": "set_functions/pair.acsl",
-    "ran": "relation_functions/range.acsl",
+    "pow_set": "set_functions/pow_set.acsl",
+    "pred": "set_axioms/NAT_succ_axioms.acsl",
+    "prj1": "relation_functions/prj1.acsl",
+    "prj2": "relation_functions/prj2.acsl",
     "range_restriction": "relation_functions/range_restriction.acsl",
+    "range_subtraction": "relation_functions/range_subtraction.acsl",
+    "rel": "relation_functions/rel.acsl",
+    "relation_composition": "relation_functions/composition.acsl",
     "relation_inverse": "relation_functions/inverse.acsl",
+    "relation_ran": "relation_functions/range.acsl",
     "relation_singleton": "relation_functions/singleton.acsl",
     "restrict_front": "sequence_functions/restrict_front.acsl",
     "restrict_tail": "sequence_functions/restrict_tail.acsl",
+    "rev": "sequence_functions/rev.acsl",
     "second": "tuple_functions/accessors.acsl",
+    "seq": "sequence_functions/seq.acsl",
+    "sequence_ran": "sequence_functions/range.acsl",
     "set_difference": "set_functions/difference.acsl",
     "set_intersection": "set_functions/intersection.acsl",
     "set_max": "set_functions/max.acsl",
     "set_min": "set_functions/min.acsl",
     "set_union": "set_functions/union.acsl",
-    "sigma": "aggregate_functions/sigma.acsl",
     "singleton": "set_functions/singleton.acsl",
+    "strict_inclusion": "set_functions/equals.acsl",
     "succ": "set_axioms/NAT_succ_axioms.acsl",
     "tail": "sequence_functions/tail.acsl"
   },
   "symbol_to_all_files": {
     "apply": [
       "relation_functions/apply.acsl"
+    ],
+    "array2d_to_relation_bool": [
+      "function_functions/array2d_to_relation_bool.acsl"
+    ],
+    "array2d_to_relation_int": [
+      "function_functions/array2d_to_relation_int.acsl"
     ],
     "array_to_function_bool": [
       "function_functions/array_to_function_bool.acsl"
@@ -145,8 +197,20 @@
     "cartesian_product": [
       "set_functions/cartesian_product.acsl"
     ],
+    "closure": [
+      "relation_functions/closure.acsl"
+    ],
+    "closure1": [
+      "relation_functions/closure1.acsl"
+    ],
+    "conc": [
+      "sequence_functions/conc.acsl"
+    ],
     "couple": [
       "tuple_functions/tuple_couple.acsl"
+    ],
+    "direct_product": [
+      "relation_functions/direct_product.acsl"
     ],
     "disjoint": [
       "set_functions/disjoint.acsl"
@@ -156,6 +220,9 @@
     ],
     "domain_restriction": [
       "relation_functions/domain_restriction.acsl"
+    ],
+    "domain_subtraction": [
+      "relation_functions/domain_subtraction.acsl"
     ],
     "empty": [
       "set_functions/empty.acsl"
@@ -168,6 +235,9 @@
       "sequence_functions/first.acsl",
       "tuple_functions/accessors.acsl"
     ],
+    "fnc": [
+      "relation_functions/fnc.acsl"
+    ],
     "front": [
       "sequence_functions/front.acsl"
     ],
@@ -179,6 +249,12 @@
     ],
     "function_to_list": [
       "sequence_functions/function_to_list.acsl"
+    ],
+    "general_inter": [
+      "set_functions/generalized_union_intersection.acsl"
+    ],
+    "general_union": [
+      "set_functions/generalized_union_intersection.acsl"
     ],
     "get": [
       "sequence_functions/get.acsl"
@@ -231,6 +307,9 @@
     "is_total_function": [
       "function_functions/is_total.acsl"
     ],
+    "iterate": [
+      "relation_functions/iterate.acsl"
+    ],
     "last": [
       "sequence_functions/last.acsl"
     ],
@@ -243,21 +322,47 @@
     "not_belongs": [
       "set_functions/belongs.acsl"
     ],
+    "not_inclusion": [
+      "set_functions/inclusion.acsl"
+    ],
+    "not_strict_inclusion": [
+      "set_functions/equals.acsl"
+    ],
     "overwrite": [
       "relation_functions/overwrite.acsl"
     ],
     "pair": [
       "set_functions/pair.acsl"
     ],
-    "ran": [
-      "relation_functions/range.acsl",
-      "sequence_functions/range.acsl"
+    "pow_set": [
+      "set_functions/pow_set.acsl"
+    ],
+    "pred": [
+      "set_axioms/NAT_succ_axioms.acsl"
+    ],
+    "prj1": [
+      "relation_functions/prj1.acsl"
+    ],
+    "prj2": [
+      "relation_functions/prj2.acsl"
     ],
     "range_restriction": [
       "relation_functions/range_restriction.acsl"
     ],
+    "range_subtraction": [
+      "relation_functions/range_subtraction.acsl"
+    ],
+    "rel": [
+      "relation_functions/rel.acsl"
+    ],
+    "relation_composition": [
+      "relation_functions/composition.acsl"
+    ],
     "relation_inverse": [
       "relation_functions/inverse.acsl"
+    ],
+    "relation_ran": [
+      "relation_functions/range.acsl"
     ],
     "relation_singleton": [
       "relation_functions/singleton.acsl"
@@ -268,8 +373,17 @@
     "restrict_tail": [
       "sequence_functions/restrict_tail.acsl"
     ],
+    "rev": [
+      "sequence_functions/rev.acsl"
+    ],
     "second": [
       "tuple_functions/accessors.acsl"
+    ],
+    "seq": [
+      "sequence_functions/seq.acsl"
+    ],
+    "sequence_ran": [
+      "sequence_functions/range.acsl"
     ],
     "set_difference": [
       "set_functions/difference.acsl"
@@ -286,11 +400,11 @@
     "set_union": [
       "set_functions/union.acsl"
     ],
-    "sigma": [
-      "aggregate_functions/sigma.acsl"
-    ],
     "singleton": [
       "set_functions/singleton.acsl"
+    ],
+    "strict_inclusion": [
+      "set_functions/equals.acsl"
     ],
     "succ": [
       "set_axioms/NAT_succ_axioms.acsl"
@@ -307,6 +421,34 @@
       "first",
       "second"
     ],
+    "array2d_to_relation_bool": [
+      "belongs",
+      "couple",
+      "dom",
+      "empty",
+      "equals",
+      "function_apply",
+      "inclusion",
+      "is_functional",
+      "is_partial_function",
+      "is_total_function",
+      "not_belongs",
+      "relation_ran"
+    ],
+    "array2d_to_relation_int": [
+      "belongs",
+      "couple",
+      "dom",
+      "empty",
+      "equals",
+      "function_apply",
+      "inclusion",
+      "is_functional",
+      "is_partial_function",
+      "is_total_function",
+      "not_belongs",
+      "relation_ran"
+    ],
     "array_to_function_bool": [
       "belongs",
       "couple",
@@ -319,7 +461,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran"
+      "relation_ran"
     ],
     "array_to_function_int": [
       "belongs",
@@ -333,7 +475,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran"
+      "relation_ran"
     ],
     "becomes_element_of": [
       "belongs",
@@ -347,7 +489,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran"
+      "relation_ran"
     ],
     "card": [
       "belongs",
@@ -369,6 +511,34 @@
       "set_union",
       "singleton"
     ],
+    "closure": [
+      "belongs",
+      "closure1",
+      "couple",
+      "dom",
+      "empty",
+      "equals",
+      "function_apply",
+      "id",
+      "inclusion",
+      "is_functional",
+      "is_partial_function",
+      "is_total_function",
+      "not_belongs",
+      "relation_ran",
+      "set_union"
+    ],
+    "closure1": [
+      "belongs",
+      "couple",
+      "empty",
+      "inclusion",
+      "not_belongs"
+    ],
+    "direct_product": [
+      "belongs",
+      "couple"
+    ],
     "disjoint": [
       "belongs",
       "card",
@@ -379,7 +549,8 @@
       "not_belongs",
       "set_intersection",
       "set_union",
-      "singleton"
+      "singleton",
+      "strict_inclusion"
     ],
     "dom": [
       "belongs",
@@ -394,6 +565,11 @@
       "not_belongs",
       "second"
     ],
+    "domain_subtraction": [
+      "belongs",
+      "first",
+      "not_belongs"
+    ],
     "empty": [
       "belongs",
       "not_belongs"
@@ -405,7 +581,13 @@
       "inclusion",
       "not_belongs",
       "set_union",
-      "singleton"
+      "singleton",
+      "strict_inclusion"
+    ],
+    "fnc": [
+      "belongs",
+      "couple",
+      "dom"
     ],
     "function_apply": [
       "belongs",
@@ -418,7 +600,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran"
+      "relation_ran"
     ],
     "function_singleton": [
       "belongs",
@@ -440,16 +622,26 @@
       "is_total_function",
       "length",
       "not_belongs",
-      "ran",
+      "relation_ran",
       "set_union",
       "singleton"
+    ],
+    "general_inter": [
+      "belongs",
+      "general_union"
+    ],
+    "general_union": [
+      "belongs",
+      "general_inter"
     ],
     "iSeq": [
       "belongs",
       "card",
       "empty",
+      "equals",
+      "is_finite",
       "not_belongs",
-      "ran",
+      "sequence_ran",
       "set_union",
       "singleton"
     ],
@@ -465,7 +657,7 @@
       "is_partial_function",
       "is_total_function",
       "not_belongs",
-      "ran"
+      "relation_ran"
     ],
     "inclusion": [
       "belongs",
@@ -496,7 +688,7 @@
       "inclusion",
       "is_functional",
       "not_belongs",
-      "ran"
+      "relation_ran"
     ],
     "is_functional": [
       "belongs",
@@ -514,7 +706,7 @@
       "inclusion",
       "is_functional",
       "not_belongs",
-      "ran"
+      "relation_ran"
     ],
     "is_pow_of": [
       "belongs",
@@ -545,7 +737,24 @@
       "is_functional",
       "is_partial_function",
       "not_belongs",
-      "ran"
+      "relation_ran"
+    ],
+    "iterate": [
+      "belongs",
+      "couple",
+      "dom",
+      "empty",
+      "equals",
+      "function_apply",
+      "id",
+      "inclusion",
+      "is_functional",
+      "is_partial_function",
+      "is_total_function",
+      "not_belongs",
+      "relation_composition",
+      "relation_ran",
+      "set_union"
     ],
     "length": [
       "belongs",
@@ -577,13 +786,30 @@
       "is_total_function",
       "length",
       "not_belongs",
-      "ran",
+      "relation_ran",
       "second",
       "set_union",
       "singleton"
     ],
     "not_belongs": [
       "belongs"
+    ],
+    "not_inclusion": [
+      "belongs",
+      "empty",
+      "inclusion",
+      "not_belongs"
+    ],
+    "not_strict_inclusion": [
+      "belongs",
+      "card",
+      "empty",
+      "equals",
+      "inclusion",
+      "not_belongs",
+      "set_union",
+      "singleton",
+      "strict_inclusion"
     ],
     "overwrite": [
       "belongs",
@@ -597,7 +823,24 @@
       "set_union",
       "singleton"
     ],
-    "ran": [
+    "pow_set": [
+      "belongs",
+      "empty",
+      "inclusion",
+      "not_belongs"
+    ],
+    "pred": [
+      "belongs",
+      "empty",
+      "inclusion",
+      "not_belongs",
+      "succ"
+    ],
+    "prj1": [
+      "belongs",
+      "couple"
+    ],
+    "prj2": [
       "belongs",
       "couple"
     ],
@@ -607,11 +850,30 @@
       "first",
       "second"
     ],
+    "range_subtraction": [
+      "belongs",
+      "couple",
+      "first",
+      "not_belongs",
+      "second"
+    ],
+    "rel": [
+      "belongs",
+      "couple"
+    ],
+    "relation_composition": [
+      "belongs",
+      "couple"
+    ],
     "relation_inverse": [
       "belongs",
       "couple",
       "first",
       "second"
+    ],
+    "relation_ran": [
+      "belongs",
+      "couple"
     ],
     "relation_singleton": [
       "belongs",
@@ -621,6 +883,19 @@
     "second": [
       "couple",
       "first"
+    ],
+    "seq": [
+      "belongs",
+      "is_seq_of"
+    ],
+    "sequence_ran": [
+      "belongs",
+      "empty",
+      "equals",
+      "is_finite",
+      "not_belongs",
+      "set_union",
+      "singleton"
     ],
     "set_difference": [
       "belongs",
@@ -653,11 +928,22 @@
     "singleton": [
       "belongs"
     ],
+    "strict_inclusion": [
+      "belongs",
+      "card",
+      "empty",
+      "equals",
+      "inclusion",
+      "not_belongs",
+      "set_union",
+      "singleton"
+    ],
     "succ": [
       "belongs",
       "empty",
       "inclusion",
-      "not_belongs"
+      "not_belongs",
+      "pred"
     ]
   },
   "includes_from": {
@@ -685,6 +971,22 @@
       "set_functions/belongs.acsl",
       "tuple_functions/tuple_couple.acsl"
     ],
+    "function_axioms/array2d_to_relation_bool_axioms.acsl": [
+      "function_functions/apply.acsl",
+      "function_functions/array2d_to_relation_bool.acsl",
+      "function_functions/is_function.acsl",
+      "relation_functions/domain.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
+    "function_axioms/array2d_to_relation_int_axioms.acsl": [
+      "function_functions/apply.acsl",
+      "function_functions/array2d_to_relation_int.acsl",
+      "function_functions/is_function.acsl",
+      "relation_functions/domain.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
     "function_axioms/array_to_function_bool_axioms.acsl": [
       "function_functions/apply.acsl",
       "function_functions/array_to_function_bool.acsl",
@@ -708,6 +1010,12 @@
     ],
     "function_functions/apply.acsl": [
       "function_axioms/apply_axioms.acsl"
+    ],
+    "function_functions/array2d_to_relation_bool.acsl": [
+      "function_axioms/array2d_to_relation_bool_axioms.acsl"
+    ],
+    "function_functions/array2d_to_relation_int.acsl": [
+      "function_axioms/array2d_to_relation_int_axioms.acsl"
     ],
     "function_functions/array_to_function_bool.acsl": [
       "function_axioms/array_to_function_bool_axioms.acsl"
@@ -771,11 +1079,14 @@
       "relation_functions/domain.acsl",
       "relation_functions/domain_restriction.acsl",
       "relation_functions/inverse.acsl",
+      "relation_functions/overwrite.acsl",
+      "relation_functions/range.acsl",
       "relation_functions/range_restriction.acsl",
       "sequence_functions/front.acsl",
       "sequence_functions/function_to_list.acsl",
       "sequence_functions/is_seq_of.acsl",
       "sequence_functions/list_to_function.acsl",
+      "sequence_functions/range.acsl",
       "sequence_functions/restrict_front.acsl",
       "sequence_functions/restrict_tail.acsl",
       "sequence_functions/tail.acsl",
@@ -825,6 +1136,30 @@
       "tuple_functions/accessors.acsl",
       "tuple_functions/tuple_couple.acsl"
     ],
+    "relation_axioms/relation_closure.acsl": [
+      "function_functions/id.acsl",
+      "relation_functions/closure.acsl",
+      "relation_functions/closure1.acsl",
+      "relation_functions/domain.acsl",
+      "relation_functions/range.acsl",
+      "set_functions/union.acsl"
+    ],
+    "relation_axioms/relation_closure1.acsl": [
+      "relation_functions/closure1.acsl",
+      "set_functions/belongs.acsl",
+      "set_functions/inclusion.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
+    "relation_axioms/relation_composition.acsl": [
+      "relation_functions/composition.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
+    "relation_axioms/relation_direct_product.acsl": [
+      "relation_functions/direct_product.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
     "relation_axioms/relation_domain.acsl": [
       "relation_functions/domain.acsl",
       "set_functions/belongs.acsl",
@@ -836,18 +1171,51 @@
       "set_functions/empty.acsl",
       "tuple_functions/accessors.acsl"
     ],
+    "relation_axioms/relation_domain_subtraction.acsl": [
+      "relation_functions/domain_subtraction.acsl",
+      "set_functions/belongs.acsl"
+    ],
+    "relation_axioms/relation_fnc.acsl": [
+      "relation_functions/domain.acsl",
+      "relation_functions/fnc.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
     "relation_axioms/relation_inverse.acsl": [
       "relation_functions/inverse.acsl",
       "set_functions/belongs.acsl",
       "tuple_functions/accessors.acsl",
       "tuple_functions/tuple_couple.acsl"
     ],
+    "relation_axioms/relation_iterate.acsl": [
+      "function_functions/id.acsl",
+      "relation_functions/composition.acsl",
+      "relation_functions/domain.acsl",
+      "relation_functions/iterate.acsl",
+      "relation_functions/range.acsl",
+      "set_functions/union.acsl"
+    ],
     "relation_axioms/relation_overwrite.acsl": [
       "relation_functions/domain.acsl",
       "relation_functions/overwrite.acsl",
       "set_functions/belongs.acsl"
     ],
+    "relation_axioms/relation_pred.acsl": [
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
+    "relation_axioms/relation_prj1.acsl": [
+      "relation_functions/prj1.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
+    "relation_axioms/relation_prj2.acsl": [
+      "relation_functions/prj2.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
     "relation_axioms/relation_range.acsl": [
+      "relation_functions/range.acsl",
       "set_functions/belongs.acsl",
       "tuple_functions/tuple_couple.acsl"
     ],
@@ -856,8 +1224,34 @@
       "set_functions/belongs.acsl",
       "tuple_functions/accessors.acsl"
     ],
+    "relation_axioms/relation_range_subtraction.acsl": [
+      "relation_functions/range_subtraction.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/accessors.acsl"
+    ],
+    "relation_axioms/relation_rel.acsl": [
+      "relation_functions/rel.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
+    "relation_axioms/relation_succ.acsl": [
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
     "relation_functions/apply.acsl": [
       "relation_axioms/relation_apply.acsl"
+    ],
+    "relation_functions/closure.acsl": [
+      "relation_axioms/relation_closure.acsl"
+    ],
+    "relation_functions/closure1.acsl": [
+      "relation_axioms/relation_closure1.acsl"
+    ],
+    "relation_functions/composition.acsl": [
+      "relation_axioms/relation_composition.acsl"
+    ],
+    "relation_functions/direct_product.acsl": [
+      "relation_axioms/relation_direct_product.acsl"
     ],
     "relation_functions/domain.acsl": [
       "relation_axioms/relation_domain.acsl"
@@ -865,11 +1259,29 @@
     "relation_functions/domain_restriction.acsl": [
       "relation_axioms/relation_domain_restriction.acsl"
     ],
+    "relation_functions/domain_subtraction.acsl": [
+      "relation_axioms/relation_domain_subtraction.acsl"
+    ],
+    "relation_functions/fnc.acsl": [
+      "relation_axioms/relation_fnc.acsl"
+    ],
     "relation_functions/inverse.acsl": [
       "relation_axioms/relation_inverse.acsl"
     ],
+    "relation_functions/iterate.acsl": [
+      "relation_axioms/relation_iterate.acsl"
+    ],
     "relation_functions/overwrite.acsl": [
       "relation_axioms/relation_overwrite.acsl"
+    ],
+    "relation_functions/pred.acsl": [
+      "relation_axioms/relation_pred.acsl"
+    ],
+    "relation_functions/prj1.acsl": [
+      "relation_axioms/relation_prj1.acsl"
+    ],
+    "relation_functions/prj2.acsl": [
+      "relation_axioms/relation_prj2.acsl"
     ],
     "relation_functions/range.acsl": [
       "relation_axioms/relation_range.acsl"
@@ -877,9 +1289,18 @@
     "relation_functions/range_restriction.acsl": [
       "relation_axioms/relation_range_restriction.acsl"
     ],
+    "relation_functions/range_subtraction.acsl": [
+      "relation_axioms/relation_range_subtraction.acsl"
+    ],
+    "relation_functions/rel.acsl": [
+      "relation_axioms/relation_rel.acsl"
+    ],
     "relation_functions/singleton.acsl": [
       "set_functions/singleton.acsl",
       "tuple_functions/tuple_couple.acsl"
+    ],
+    "relation_functions/succ.acsl": [
+      "relation_axioms/relation_succ.acsl"
     ],
     "sequence.acsl": [
       "function.acsl",
@@ -899,6 +1320,9 @@
       "sequence_functions/restrict_tail.acsl",
       "sequence_functions/tail.acsl",
       "types.acsl"
+    ],
+    "sequence_axioms/conc_axioms.acsl": [
+      "sequence_functions/conc.acsl"
     ],
     "sequence_axioms/front_axioms.acsl": [
       "sequence_functions/front.acsl"
@@ -921,6 +1345,7 @@
     ],
     "sequence_axioms/iseq_axioms.acsl": [
       "sequence_functions/iseq.acsl",
+      "sequence_functions/range.acsl",
       "set_functions/belongs.acsl",
       "set_functions/card.acsl"
     ],
@@ -948,6 +1373,7 @@
       "set_functions/inclusion.acsl"
     ],
     "sequence_axioms/range_axioms.acsl": [
+      "sequence_functions/range.acsl",
       "set_functions/belongs.acsl",
       "set_functions/empty.acsl",
       "set_functions/finite.acsl",
@@ -960,8 +1386,19 @@
     "sequence_axioms/restrict_tail_axioms.acsl": [
       "sequence_functions/restrict_tail.acsl"
     ],
+    "sequence_axioms/rev_axioms.acsl": [
+      "sequence_functions/rev.acsl"
+    ],
+    "sequence_axioms/seq_axioms.acsl": [
+      "sequence_functions/is_seq_of.acsl",
+      "sequence_functions/seq.acsl",
+      "set_functions/belongs.acsl"
+    ],
     "sequence_axioms/tail_axioms.acsl": [
       "sequence_functions/tail.acsl"
+    ],
+    "sequence_functions/conc.acsl": [
+      "sequence_axioms/conc_axioms.acsl"
     ],
     "sequence_functions/front.acsl": [
       "sequence_axioms/front_axioms.acsl"
@@ -995,6 +1432,12 @@
     ],
     "sequence_functions/restrict_tail.acsl": [
       "sequence_axioms/restrict_tail_axioms.acsl"
+    ],
+    "sequence_functions/rev.acsl": [
+      "sequence_axioms/rev_axioms.acsl"
+    ],
+    "sequence_functions/seq.acsl": [
+      "sequence_axioms/seq_axioms.acsl"
     ],
     "sequence_functions/tail.acsl": [
       "sequence_axioms/tail_axioms.acsl"
@@ -1077,6 +1520,10 @@
       "set_functions/singleton.acsl",
       "set_functions/union.acsl"
     ],
+    "set_axioms/generalized_union_intersection_axioms.acsl": [
+      "set_functions/belongs.acsl",
+      "set_functions/generalized_union_intersection.acsl"
+    ],
     "set_axioms/inclusion_axioms.acsl": [
       "set_functions/empty.acsl",
       "set_functions/inclusion.acsl"
@@ -1104,6 +1551,11 @@
       "set_functions/pair.acsl",
       "set_functions/singleton.acsl",
       "set_functions/union.acsl"
+    ],
+    "set_axioms/pow_set_axioms.acsl": [
+      "set_functions/belongs.acsl",
+      "set_functions/inclusion.acsl",
+      "set_functions/pow_set.acsl"
     ],
     "set_axioms/singleton_axioms.acsl": [
       "set_functions/belongs.acsl",
@@ -1139,10 +1591,14 @@
     ],
     "set_functions/equals.acsl": [
       "set_axioms/equals_axioms.acsl",
-      "set_functions/belongs.acsl"
+      "set_functions/belongs.acsl",
+      "set_functions/inclusion.acsl"
     ],
     "set_functions/finite.acsl": [
       "set_axioms/finite_axioms.acsl"
+    ],
+    "set_functions/generalized_union_intersection.acsl": [
+      "set_axioms/generalized_union_intersection_axioms.acsl"
     ],
     "set_functions/inclusion.acsl": [
       "set_axioms/inclusion_axioms.acsl",
@@ -1166,6 +1622,9 @@
     ],
     "set_functions/pow.acsl": [
       "set_functions/inclusion.acsl"
+    ],
+    "set_functions/pow_set.acsl": [
+      "set_axioms/pow_set_axioms.acsl"
     ],
     "set_functions/singleton.acsl": [
       "set_axioms/singleton_axioms.acsl"
