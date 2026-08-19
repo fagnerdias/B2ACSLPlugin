@@ -277,6 +277,7 @@ public final class AcslGenerator {
         int headerLen;
         String propertiesBlock;
         Map<Element, Map<String, String>> mergedVariableRenames;
+        List<BDefinitionsTranslator.ResolvedDefinition> bDefinitions = List.of();
     }
 
     /**
@@ -553,23 +554,37 @@ public final class AcslGenerator {
         }
         List<OperationAcsl> operations =
                 isAbstraction
-                        ? BxmlOperationsTranslator.translateOperations(
-                                machineEl,
-                                ctx,
-                                allInvariantPredicateNames,
-                                operationStateVariableNames,
-                                libScanRemovedBodies,
-                                baseName,
-                                mergedMachineElements,
-                                gluing,
-                                useGhostAbstraction,
-                                importedOpAssigns,
-                                importedInvariantPredicateNames,
-                                varRhsOverrides,
-                                bxmlDirectory,
-                                new ArrayList<>(invariantSourceMachineNames),
-                                collapsedVariableNames)
-                        : List.of();
+                        ? new ArrayList<>(
+                                BxmlOperationsTranslator.translateOperations(
+                                        machineEl,
+                                        ctx,
+                                        allInvariantPredicateNames,
+                                        operationStateVariableNames,
+                                        libScanRemovedBodies,
+                                        baseName,
+                                        mergedMachineElements,
+                                        gluing,
+                                        useGhostAbstraction,
+                                        importedOpAssigns,
+                                        importedInvariantPredicateNames,
+                                        varRhsOverrides,
+                                        bxmlDirectory,
+                                        new ArrayList<>(invariantSourceMachineNames),
+                                        collapsedVariableNames))
+                        : new ArrayList<>();
+        // LOCAL_OPERATIONS (ex. cv_struct_i's lclear): funções auxiliares privadas da
+        // implementação, sem contraparte na máquina abstrata — translateOperations acima nunca as
+        // visita (itera só <Operations> de machineEl, a máquina ABSTRATA). Ver
+        // BxmlOperationsTranslator#translateLocalOperations.
+        if (isAbstraction) {
+            for (Element mel : mergedMachineElements) {
+                if ("implementation".equalsIgnoreCase(mel.getAttribute("type"))) {
+                    operations.addAll(
+                            BxmlOperationsTranslator.translateLocalOperations(
+                                    mel, baseName, ctx, allInvariantPredicateNames));
+                }
+            }
+        }
         state.operations = operations;
     }
 
@@ -611,6 +626,17 @@ public final class AcslGenerator {
             sb.append(setsBlock);
             sb.append("\n");
         }
+
+        // 0b) DEFINITIONS B (ver BDefinitionsTranslator — só existe como texto em expand_src/, o
+        // BXML já vem com as macros totalmente expandidas). guardado em state.bDefinitions para
+        // finalizeAndWriteAcslFile reescrever os pontos de uso já gerados (ensures/invariant/…)
+        // para referenciar os nomes simbólicos em vez dos valores literais.
+        BDefinitionsTranslator.parse(bxmlDirectory, baseName)
+                .ifPresent(
+                        t -> {
+                            appendBlockWithSpacing(sb, t.axiomaticBlock());
+                            state.bDefinitions = t.defs();
+                        });
 
         // 1) Constantes e propriedades (só máquina abstrata raiz deste ficheiro)
         // Lambda-defined constants used in ANY_Sub ghost ops are declared in ghost_operations.ci's
@@ -711,6 +737,8 @@ public final class AcslGenerator {
         // compreensões e das constantes/propriedades das máquinas fundidas.
         String concreteLinkRoot =
                 BxmlMachineVariables.anyImplementationUsesAbstractVariablesOnly(
+                                machineEl, mergedMachineElements)
+                        || BxmlMachineVariables.abstractMachineIsSelfContainedArrayBacked(
                                 machineEl, mergedMachineElements)
                         ? baseName
                         : null;
@@ -982,6 +1010,12 @@ public final class AcslGenerator {
         String fullAcsl = sb.toString();
         if (omitLibIncludesFromPreamble) {
             fullAcsl = AcslLibIncludes.removeLibIncludesFromPreamble(fullAcsl);
+        }
+        if (!state.bDefinitions.isEmpty()) {
+            // Reescreve os pontos de uso (ensures/invariant/…, já gerados a partir do BXML
+            // totalmente expandido) para referenciar os nomes simbólicos de DEFINITIONS em vez dos
+            // valores literais que o BXML só conhece — ver BDefinitionsTranslator.
+            fullAcsl = BDefinitionsTranslator.rewriteCallSites(fullAcsl, state.bDefinitions);
         }
         Path acslFile = state.acslFile;
         Files.writeString(acslFile, fullAcsl);

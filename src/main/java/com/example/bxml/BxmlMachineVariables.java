@@ -81,6 +81,38 @@ public final class BxmlMachineVariables {
         return out;
     }
 
+    /**
+     * Tipos {@code logic} só para {@code Abstract_Constants} tipadas em {@code PROPERTIES} por um
+     * predicado de sequência ({@code C : seq(T)}, {@code iseq(T)}, etc.) — sem isto, {@link
+     * BxmlConstantsAndProperties#formatAbstractConstantsBlock} cai direto no {@code typref} cru, que
+     * não distingue {@code \list<T>} de {@code Relation<integer,T>} (ambos codificam-se como
+     * {@code POW(INTEGER*T)} no tipo B bruto — mesma ambiguidade documentada em {@link
+     * #inferTypesFromInvariants} para variáveis, mas nunca coberta para constantes abstratas até
+     * ao exemplo cv_seq, cujo {@code SQ : seq(0..9)} declarava {@code Relation<integer,integer>
+     * SQ;} em vez de {@code \list<integer> SQ;}, quebrando toda chamada a {@code front}/{@code
+     * last}/{@code is_seq_of} sobre {@code SQ} (assinaturas da lib só aceitam {@code \list<A>}).
+     */
+    public static Map<String, String> inferAbstractConstantsLogicTypesFromProperties(
+            Element machineEl, BxmlTypeRegistry types) {
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Abstract_Constants");
+        if (block == null) return out;
+        Map<String, String> fromProperties = inferTypesFromProperties(machineEl, types);
+        if (fromProperties.isEmpty()) return out;
+        NodeList ch = block.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName()) || !"Id".equals(e.getLocalName())) continue;
+            String name = e.getAttribute("value");
+            if (name == null || name.isBlank()) continue;
+            String t = fromProperties.get(name);
+            if (t != null) out.put(name, t);
+        }
+        return out;
+    }
+
     /** Nomes de variáveis declaradas ({@code Abstract_Variables} / {@code Concrete_Variables}). */
     public static Set<String> declaredVariableNames(Element machineEl) {
         LinkedHashSet<String> names = new LinkedHashSet<>();
@@ -197,13 +229,60 @@ public final class BxmlMachineVariables {
             // diretamente OU herda o estado de uma máquina importada via invariante de colagem
             // (ex. "loopnn == nn" em Mult_i, ligando o "nn" de Mult ao "loopnn" de Body). Sem
             // IMPORTS não há ambiguidade nenhuma (não existe outra máquina para se colar) — qualifica
-            // sempre. Com IMPORTS, só qualifica se houver ligação array-backed sólida: uma variável
-            // cuja única "ligação" é invariante de colagem com OUTRA máquina não tem representação
-            // concreta própria nenhuma — defini-la diretamente como a variável da outra máquina
-            // tornaria essa invariante de colagem uma tautologia (nn == loopnn == Body__loopnn,
-            // nunca prova nada sobre a sincronização real); precisa continuar ghost, com a colagem
-            // verificada como obrigação de prova de verdade.
-            if (hasArrayBackedVariable || BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
+            // sempre. Com IMPORTS, só qualifica se houver ligação array-backed sólida OU nenhum
+            // invariante próprio: uma variável cuja única "ligação" é invariante de colagem com
+            // OUTRA máquina não tem representação concreta própria nenhuma — defini-la diretamente
+            // como a variável da outra máquina tornaria essa invariante de colagem uma tautologia
+            // (nn == loopnn == Body__loopnn, nunca prova nada sobre a sincronização real); precisa
+            // continuar ghost, com a colagem verificada como obrigação de prova de verdade. Mas uma
+            // invariante de colagem só pode existir DENTRO do <Invariant> da própria implementação
+            // (é isso que a expressaria) — sem NENHUM invariante próprio (ex.: cv_struct_i, cujo
+            // IMPORTS cv_base existe só para PROMOTES bset, sem relação nenhuma com sv), não há
+            // ambiguidade nenhuma a proteger, mesmo com IMPORTS presente por outra razão. Sem este
+            // caso, "sv" ficava sem ligação C nenhuma ("logic integer sv;" sem "= cv_struct__sv"),
+            // deixando WP sem forma de observar as suas atribuições ("assigns \\nothing" inválido).
+            if (hasArrayBackedVariable
+                    || BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()
+                    || !hasNonTrivialInvariant(mel)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Verdadeiro se {@code mel} tem um {@code <Invariant>} com predicado real (não ausente).
+     * Uma invariante de colagem entre a variável concreta e uma máquina importada só pode
+     * viver dentro do PRÓPRIO {@code <Invariant>} de {@code mel} — sem nenhum, não há como
+     * existir ambiguidade nenhuma a proteger em {@link #anyImplementationUsesAbstractVariablesOnly}.
+     */
+    private static boolean hasNonTrivialInvariant(Element mel) {
+        Element inv = BxmlDomUtils.firstChildElement(mel, "Invariant");
+        return inv != null && BxmlDomUtils.firstPredChild(inv) != null;
+    }
+
+    /**
+     * Verdadeiro quando a máquina abstrata NÃO TEM nenhuma implementação/refinamento fundida (B
+     * clássico: {@code CONCRETE_VARIABLES} declaradas diretamente na própria abstrata, sem
+     * separação em {@code MACHINE}/{@code IMPLEMENTATION} — ex.: {@code cv_rel}, cujo {@code bdp/}
+     * só tem {@code cv_rel.bxml}, sem {@code cv_rel_i.bxml}/{@code cv_rel_r.bxml}) e pelo menos uma
+     * das suas próprias variáveis é array-backed (tipada como {@code v : lo..hi --> T} no seu
+     * próprio {@code <Invariant>}, via {@link #concreteVariableFunctionArrowElement}) — nesse caso a
+     * máquina deve ligar-se A SI PRÓPRIA ({@code logic v = array_to_function_int((int*)(Raiz__v),
+     * tamanho);}) em vez de ficar como variável lógica ghost sem RHS, já que não existe nenhuma
+     * máquina de implementação separada para prover essa ligação (o que dava "unbound logic
+     * variable" no {@code -wp}, mesmo com um {@code .c} escrito à mão fornecendo o array real).
+     */
+    public static boolean abstractMachineIsSelfContainedArrayBacked(
+            Element abstractMachineEl, List<Element> mergedMachineElements) {
+        if (abstractMachineEl == null) {
+            return false;
+        }
+        if (mergedMachineElements != null && !mergedMachineElements.isEmpty()) {
+            return false;
+        }
+        for (String v : declaredVariableNames(abstractMachineEl)) {
+            if (concreteVariableFunctionArrowElement(abstractMachineEl, v) != null) {
                 return true;
             }
         }
@@ -278,12 +357,23 @@ public final class BxmlMachineVariables {
     /**
      * Implementação com o mesmo conjunto de variáveis que a abstrata: o estado C é o da especificação
      * ({@code logic v = Raiz__v;}) e não se usa camada ghost paralela.
+     *
+     * <p>Terceira forma (além das duas que exigem uma implementação SEPARADA em {@code
+     * mergedMachineElements}): a máquina abstrata pode não ter implementação NENHUMA e ligar o seu
+     * próprio array C sozinha ({@link #abstractMachineIsSelfContainedArrayBacked}, ex.: cv_rel).
+     * Sem esta terceira opção, {@code needsGhostAbstraction} concluía (incorretamente) que uma
+     * máquina assim self-contained PRECISAVA de camada ghost — mas nenhuma camada ghost é
+     * gerada para esse caso (nunca foi preciso até cv_rel), então nenhum {@code assigns} concreto
+     * chegava a ser calculado (os resolvers de {@code ConcreteAssignTargetResolver} ficam presos
+     * atrás de {@code !useGhostAbstraction}), e as operações que escrevem o array (ex.
+     * {@code cv_rel__upd}) acabavam com {@code assigns \nothing} — contrato UNSOUND.
      */
     public static boolean usesDirectImplementationVariables(
             Element abstractMachineEl, List<Element> mergedMachineElements) {
         return implementationMirrorsAbstractVariables(abstractMachineEl, mergedMachineElements)
                 || anyImplementationUsesAbstractVariablesOnly(
-                        abstractMachineEl, mergedMachineElements);
+                        abstractMachineEl, mergedMachineElements)
+                || abstractMachineIsSelfContainedArrayBacked(abstractMachineEl, mergedMachineElements);
     }
 
     /** Ghost só quando há refinamento/implementação com estado distinto do da abstrata. */
@@ -378,6 +468,22 @@ public final class BxmlMachineVariables {
         return acc;
     }
 
+    /**
+     * Como {@link #inferTypesFromInvariants}, mas para {@code <Properties>} — usado pelas
+     * {@code Abstract_Constants} tipadas por sequência (ex. {@code SQ : seq(0..9)}). Reaproveita o
+     * mesmo caminhador recursivo de predicados: o único {@code Nary_Pred op="&"} sob
+     * {@code <Properties>} (todos os conjuntos {@code &}-separados da cláusula B ficam achatados
+     * num só nó) é percorrido filho a filho, tal como um invariante multi-conjunto.
+     */
+    static Map<String, String> inferTypesFromProperties(Element machineEl, BxmlTypeRegistry types) {
+        LinkedHashMap<String, String> acc = new LinkedHashMap<>();
+        Element propsEl = BxmlDomUtils.firstChildElement(machineEl, "Properties");
+        if (propsEl == null) return acc;
+        Element pred = BxmlDomUtils.firstPredChild(propsEl);
+        if (pred != null) walkPredForVariableTypes(pred, types, acc);
+        return acc;
+    }
+
     private static void walkPredForVariableTypes(
             Element p, BxmlTypeRegistry types, Map<String, String> acc) {
         String ln = p.getLocalName();
@@ -426,25 +532,47 @@ public final class BxmlMachineVariables {
                     }
                     return;
                 }
-                if ("Unary_Exp".equals(pair[1].getLocalName())
-                        && ("seq".equals(pair[1].getAttribute("op"))
-                            ||"iseq".equals(pair[1].getAttribute("op")))) {
-                    acc.put(v, acslListTypeForIseqUnary(pair[1], types));
+                if (isSequenceTypingOp(pair[1])) {
+                    acc.put(v, acslListTypeForSequenceUnary(pair[1], types));
                 }
             }
         }
     }
 
-    /** Argumento de {@code iseq(T)} no B → {@code \list<…>} com o tipo elemento de {@code T}. */
-    private static String acslListTypeForIseqUnary(Element unaryIseq, BxmlTypeRegistry types) {
-        Element arg = BxmlDomUtils.firstNonAttrElementChild(unaryIseq);
-        if (arg != null && "Id".equals(arg.getLocalName())) {
-            String rhs = arg.getAttribute("value");
-            if (isNamedBaseType(rhs)) {
-                return "\\list<" + types.acslElementTypeName(rhs) + ">";
-            }
+    private static boolean isSequenceTypingOp(Element exp) {
+        if (!"Unary_Exp".equals(exp.getLocalName())) return false;
+        String op = exp.getAttribute("op");
+        return "seq".equals(op) || "iseq".equals(op) || "seq1".equals(op) || "iseq1".equals(op)
+                || "perm".equals(op);
+    }
+
+    /**
+     * Tipo elemento ACSL de {@code seq(T)}/{@code iseq(T)}/{@code seq1(T)}/{@code iseq1(T)}/
+     * {@code perm(T)} no B → {@code \list<…>}. Recursivo: {@code T} pode ele próprio ser
+     * {@code seq(U)} (ex. {@code CC : seq(seq(0..9))}, sequência de sequências), produzindo
+     * {@code \list<\list<integer>>} em vez de colapsar erradamente para {@code \list<integer>}.
+     */
+    private static String acslListTypeForSequenceUnary(Element unarySeq, BxmlTypeRegistry types) {
+        Element arg = BxmlDomUtils.firstNonAttrElementChild(unarySeq);
+        String inner = acslSequenceElementType(arg, types);
+        // Espaço antes do "> " final quando o tipo interno também termina em ">" (ex.
+        // \list<\list<integer>>, sequência de sequências, CC : seq(seq(0..9))) — o lexer do
+        // Frama-C tokeniza ">>" como um único operador de shift, não dois fechos de genérico
+        // consecutivos (mesmo problema clássico do C++ pré-C++11; ver
+        // BxmlTypeRegistry#spaceOutAdjacentClosingAngleBrackets para o caso análogo em Set<Tuple<>>).
+        return "\\list<" + inner + (inner.endsWith(">") ? " " : "") + ">";
+    }
+
+    /** Tipo elemento ACSL do domínio {@code T} de {@code seq(T)} — "integer" por omissão (intervalos, NAT…). */
+    private static String acslSequenceElementType(Element arg, BxmlTypeRegistry types) {
+        if (arg == null) return "integer";
+        if (isSequenceTypingOp(arg)) {
+            return "\\list<" + acslSequenceElementType(BxmlDomUtils.firstNonAttrElementChild(arg), types) + ">";
         }
-        return "\\list<integer>";
+        if ("Id".equals(arg.getLocalName())) {
+            return types.acslElementTypeName(arg.getAttribute("value"));
+        }
+        return "integer";
     }
 
     private static String normalizeComparisonOp(String op) {

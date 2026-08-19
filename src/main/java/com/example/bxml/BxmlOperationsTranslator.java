@@ -403,6 +403,105 @@ public final class BxmlOperationsTranslator {
         return out;
     }
 
+    /**
+     * Traduz {@code LOCAL_OPERATIONS} de uma implementação B0 (ex. cv_struct_i's {@code lclear}) para
+     * contratos ACSL — funções auxiliares privadas, chamadas só por outras operações da MESMA
+     * implementação (nunca promovidas, sem contraparte na máquina abstrata/refinamento). Muito mais
+     * simples que {@link #translateOperations}: sem PRE próprio além do invariante da máquina, sem
+     * parâmetros de entrada/saída, sem abstração ghost (operam diretamente sobre as variáveis
+     * concretas já resolvidas desta mesma máquina — não há "abstrata" para ligar).
+     *
+     * <p>BXML duplica cada operação local: {@code <Local_Operations>} tem a declaração (que aqui só
+     * serve para descobrir OS NOMES), {@code <Operations>} tem o corpo "real" (mesmo texto B nos
+     * exemplos vistos até agora, mas é o segundo que os outros corpos de operação desta
+     * implementação realmente invocam — usa-se esse).
+     *
+     * @param implementationMachineEl elemento fundido {@code type="implementation"} com o
+     *        {@code <Local_Operations>} (ex. cv_struct_i)
+     * @param rootAbstractMachineName nome da máquina abstrata raiz do {@code .acsl} (ex.
+     *        {@code cv_struct}, NÃO {@code cv_struct_i}) — prefixo real dos globais/funções C
+     *        (mesma convenção de {@link #translateOperations}, ver {@code machineName + "__" + …}
+     *        abaixo); usar o nome da própria {@code implementationMachineEl} geraria
+     *        {@code cv_struct_i__lclear}/{@code assigns cv_struct_i__sv}, que não existem no C
+     *        gerado (o global real é {@code cv_struct__sv}).
+     * @param invariantPredicateNames nomes ACSL do(s) predicado(s) de invariante desta máquina,
+     *        repetidos em requires/ensures — mesma convenção de {@link #translateOperations}
+     */
+    public static List<OperationAcsl> translateLocalOperations(
+            Element implementationMachineEl,
+            String rootAbstractMachineName,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames) {
+        List<OperationAcsl> out = new ArrayList<>();
+        if (implementationMachineEl == null) return out;
+        Element localOpsEl = BxmlDomUtils.firstChildElement(implementationMachineEl, "Local_Operations");
+        Element operationsEl = BxmlDomUtils.firstChildElement(implementationMachineEl, "Operations");
+        if (localOpsEl == null || operationsEl == null) return out;
+        String machineName = rootAbstractMachineName;
+
+        for (String opName : listOperationNames(localOpsEl)) {
+            Element realOp = findOperationByName(operationsEl, opName);
+            Element body =
+                    BxmlDomUtils.firstChildElement(
+                            realOp != null ? realOp : findOperationByName(localOpsEl, opName), "Body");
+            if (body == null) continue;
+
+            List<String> ensures = new ArrayList<>();
+            BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
+
+            Set<String> assignedLhs = new LinkedHashSet<>();
+            BxmlInitialisationTranslator.collectAssignedLhsNames(
+                    BxmlDomUtils.firstSubChild(body), assignedLhs);
+            List<String> connectionConcreteAssigns = new ArrayList<>();
+            for (String v : assignedLhs) {
+                connectionConcreteAssigns.add(machineName + "__" + v);
+            }
+
+            List<String> requires = new ArrayList<>(invariantPredicateNames);
+            List<String> fullEnsures = new ArrayList<>(ensures);
+            fullEnsures.addAll(invariantPredicateNames);
+
+            out.add(
+                    new OperationAcsl(
+                            machineName + "__" + sanitize(opName),
+                            requires,
+                            fullEnsures,
+                            List.of(),
+                            null,
+                            List.of(),
+                            List.of(),
+                            connectionConcreteAssigns));
+        }
+        return out;
+    }
+
+    private static List<String> listOperationNames(Element operationsEl) {
+        List<String> names = new ArrayList<>();
+        NodeList children = operationsEl.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Operation".equals(e.getLocalName())) {
+                names.add(e.getAttribute("name"));
+            }
+        }
+        return names;
+    }
+
+    private static Element findOperationByName(Element operationsEl, String name) {
+        NodeList children = operationsEl.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Operation".equals(e.getLocalName()) && name.equals(e.getAttribute("name"))) {
+                return e;
+            }
+        }
+        return null;
+    }
+
     private record OperationRequiresResult(List<String> requires, Set<String> funcTypedOutputs) {}
 
     private record OperationEnsuresResult(List<String> ensures, List<String> bodyEnsuresOnly) {}
@@ -576,10 +675,21 @@ public final class BxmlOperationsTranslator {
             Map<String, String> varRhsOverrides,
             Path bxmlDirectory) {
         List<String> connectionConcreteAssigns = List.of();
+        // mergedRefinementChain vazio normalmente significa "nada a ligar" (sem refinamento nem
+        // implementação) — MAS uma máquina abstrata self-contained array-backed (ex.: cv_rel, sem
+        // _i.bxml separado) também tem cadeia vazia e MESMO ASSIM liga o seu próprio array C
+        // diretamente; sem esta exceção, uma operação que atribui essa variável (ex.:
+        // cv_rel__upd escrevendo cv_rel__fmap[ii]) nunca alcançava
+        // listLinkedConcreteAssignTargetsForOperation mais abaixo, ficando com "assigns \nothing"
+        // — contrato UNSOUND (mesma classe de bug já corrigida para a INITIALISATION).
+        boolean selfContainedArrayBacked =
+                machineEl != null
+                        && BxmlMachineVariables.abstractMachineIsSelfContainedArrayBacked(
+                                machineEl, mergedRefinementChain);
         if (rootAbstractMachineName == null
                 || rootAbstractMachineName.isBlank()
                 || mergedRefinementChain == null
-                || mergedRefinementChain.isEmpty()) {
+                || (mergedRefinementChain.isEmpty() && !selfContainedArrayBacked)) {
             return connectionConcreteAssigns;
         }
         Set<String> assignedAbs = new LinkedHashSet<>();
@@ -597,6 +707,18 @@ public final class BxmlOperationsTranslator {
             assignedAbs.addAll(
                     GhostContractPredicates.assignedAbstractVariablesInOperation(
                             child, collapsedVariableNames));
+        }
+        // Mesma lacuna do OR acima (selfContainedArrayBacked), um nível mais fundo: uma variável
+        // CONCRETE_VARIABLES declarada diretamente na máquina self-contained (ex.: cv_rel__fmap)
+        // nunca é "abstrata" nem "colapsada" (não há duas declarações, machine1/machine2, para
+        // colapsar) — é uma TERCEIRA categoria, nunca antes precisa porque só cv_rel a exercita.
+        // Sem isto, mesmo com o OR do guard acima a deixar chegar até aqui, assignedAbs continuava
+        // vazio (nem assignsAbstract nem collapsedVariableNames sabem de "fmap") e caía no mesmo
+        // "assigns \nothing" que se queria evitar.
+        if (selfContainedArrayBacked) {
+            assignedAbs.addAll(
+                    GhostContractPredicates.assignedAbstractVariablesInOperation(
+                            child, BxmlMachineVariables.declaredVariableNames(machineEl)));
         }
         if (assignedAbs.isEmpty()) {
             return connectionConcreteAssigns;

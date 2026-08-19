@@ -129,6 +129,47 @@ final class FramaCRunner {
     }
 
     /**
+     * Igual a {@link #renameReservedWordCollision}, mas restrito ao texto dentro de blocos {@code
+     * /*@ ... *&#47;} de {@code mergedCode} — nunca ao C "puro" fora deles. Necessário porque
+     * {@code badToken} pode coincidir com um tipo C legítimo já usado, sem relação com a colisão,
+     * nas partes não-ACSL do próprio {@code mergedCode} (ex.: {@code uint16_t} do {@code stdint.h}
+     * colidindo com um conjunto B do mesmo nome): um rename cego no ficheiro inteiro reescreveria
+     * também essas declarações C reais, quebrando a compilação. Ver {@link
+     * #renameReservedWordCollision} para o motivo de existir esta 2ª passada.
+     */
+    private static void renameReservedWordCollisionInAcslCommentsOnly(Path mergedCode, String badToken)
+            throws IOException {
+        if (mergedCode == null || !Files.isRegularFile(mergedCode)) {
+            return;
+        }
+        Pattern wordPattern =
+                Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(badToken) + "(?![A-Za-z0-9_])");
+        String replacement = badToken + "_b";
+        String text = Files.readString(mergedCode, StandardCharsets.UTF_8);
+        List<AcsCommentSpan> spans = AcslCommentSpanScanner.findAllAcsCommentSpans(text);
+        if (spans.isEmpty()) {
+            return;
+        }
+        StringBuilder rebuilt = new StringBuilder(text.length());
+        int last = 0;
+        boolean changed = false;
+        for (AcsCommentSpan span : spans) {
+            rebuilt.append(text, last, span.start);
+            String renamedSpan =
+                    wordPattern.matcher(span.text).replaceAll(Matcher.quoteReplacement(replacement));
+            if (!renamedSpan.equals(span.text)) {
+                changed = true;
+            }
+            rebuilt.append(renamedSpan);
+            last = span.end;
+        }
+        rebuilt.append(text, last, text.length());
+        if (changed) {
+            Files.writeString(mergedCode, rebuilt.toString(), StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
      * {@code .acsl} para {@code -acsl-import} numa única invocação Frama-C: raízes SEES quando
      * existem; senão união (ordem estável) dos ficheiros resolvidos por cada {@code .c}.
      */
@@ -342,7 +383,6 @@ final class FramaCRunner {
         }
 
         MergedCodeStructuralPlacement.stripLeadingFramaCNonCOutput(mergedCode);
-        MergedCodeStructuralPlacement.moveNewTypesAxiomaticBlockAfterPreamble(mergedCode);
         B2ACSLPipeline.removeGhostPatternAxiomaticBlocks(mergedCode);
         B2ACSLPipeline.stripDummyPrefixFromMergedCode(mergedCode);
         B2ACSLPipeline.insertGhostVariableDeclarationsFromGhostCi(mergedCode, ghostCi);
@@ -351,15 +391,27 @@ final class FramaCRunner {
         B2ACSLPipeline.addParenthesesToVoidGhostCalls(mergedCode);
         B2ACSLPipeline.placeGhostOperationSpecsAboveFunctions(mergedCode, ghostCi);
         B2ACSLPipeline.liftPureGhostEnsuresToOperationContracts(mergedCode);
-        LibAxiomaticBlockReorderer.reorderLibAxiomaticBlocksPerAcslLibIncludesOrder(mergedCode);
-        MergedCodeStructuralPlacement.moveTupleCodomainAxiomaticBlocksAfterNewTypes(mergedCode);
         LemmaLibraryFilter.appendLemmasAcslLibToMergedEnd(mergedCode, allowedLibSymbolsForLemmas);
+        // Fase A do plano de padronização de ordem de axiomáticas: reorganiza o conteúdo ACSL
+        // seguro de mover em 3 regiões contíguas (TIPO, ASSINATURA+MISTO, AXIOMA), substituindo
+        // por classificação de CONTEÚDO a heurística de NOME que os passes antigos usavam. Blocos
+        // ligados a memória (NOME{L}= ou "reads GLOBAL;") e tudo que os referencia
+        // transitivamente ficam de fora, exatamente onde já estão (ver
+        // AxiomaticTierSorter#computeTransitivelyAnchoredExclusions).
+        // Fase B do plano: os passes antigos que este passe único substitui —
+        // MergedCodeStructuralPlacement#moveNewTypesAxiomaticBlockAfterPreamble/
+        // #moveTupleCodomainAxiomaticBlocksAfterNewTypes, LibAxiomaticBlockReorderer#
+        // reorderLibAxiomaticBlocksPerAcslLibIncludesOrder (8 sub-passes) e LemmaLibraryFilter#
+        // ensureSequenceListToFunctionDeclBeforeFirstUse — foram retirados daqui após validação
+        // (suite completa de 17 exemplos sem regressão, ver plans/execute-o-projeto-cv-sets-
+        // squishy-patterson.md). MemoryDependentBlockReorderer mantém-se: ortogonal, trata blocos
+        // {L}= entre si e face aos seus globais C, fora do âmbito deste sort.
+        AxiomaticTierSorter.sortIntoThreeTiers(mergedCode);
         SpecificationAxiomaticInstantiator.monomorphizeGenericAcslBlocks(
                 mergedCode, specificationUsedTypes);
         SpecificationAxiomaticInstantiator.renameParameterizedTypesToConcrete(
                 mergedCode, specificationUsedTypes);
         SpecificationAxiomaticInstantiator.normalizeLegacyMachineTypeIdentifiers(mergedCode);
-        LemmaLibraryFilter.ensureSequenceListToFunctionDeclBeforeFirstUse(mergedCode);
         MemoryDependentBlockReorderer.moveMemoryDependentVariableBlocksAfterTheirGlobals(mergedCode);
         // Última etapa: várias transformações acima (ex. placeGhostOperationSpecsAboveFunctions)
         // fazem a SUA PRÓPRIA remoção do prefixo "dummy_" ao inserir texto lido diretamente de
@@ -367,7 +419,7 @@ final class FramaCRunner {
         // → "set") já curada mais cedo no .acsl fonte. Reaplica-se aqui, no fim, para cobrir
         // qualquer reintrodução independentemente de qual passo a causou.
         for (String healed : healedReservedWords) {
-            renameReservedWordCollision(List.of(mergedCode), null, healed);
+            renameReservedWordCollisionInAcslCommentsOnly(mergedCode, healed);
         }
 
         String cSourcesLabel =

@@ -98,11 +98,53 @@ public final class SpecificationAxiomaticInstantiator {
 
     // ── Contexto de instanciação ──────────────────────────────────────────────
 
-    /** Tipos concretos extraídos de {@code specification_types.txt}. */
+    /**
+     * Tipos concretos extraídos de {@code specification_types.txt}.
+     *
+     * @param setElemTypes fecho sob {@code pow_set} ({@link #closeSetElemUnderPowSet}): inclui um
+     *     {@code Set<T>} sintético a mais por tipo natural, disponível como TEXTO (2º argumento de
+     *     {@code belongs}, tipo de retorno de {@code pow_set}) — nunca deve ser usado como lista de
+     *     candidatos de instanciação (ver {@link #naturalSetElemTypes}).
+     * @param naturalSetElemTypes {@code setElemTypes} ANTES do fecho — só tipos com evidência
+     *     direta na especificação (declarados, ou par explícito). É esta lista (não {@code
+     *     setElemTypes}) que {@link SpecificationAxiomaticInstantiator#buildSubstitutions} deve
+     *     usar como candidatos de instanciação de blocos aridade-1 ({@code belongs<A>}, {@code
+     *     pow_set<A>}, {@code empty<A>}, …): instanciar TAMBÉM sobre o topo sintético do fecho (ex.
+     *     {@code Set<Set<T>>} quando só {@code Set<T>} é natural) exigiria {@code belongs} para o
+     *     nível SEGUINTE ({@code Set<Set<Set<T>>>}), que por sua vez pediria mais um — sem fim,
+     *     porque o topo do fecho anterior alimenta o próximo fecho. Cada nível sintético só serve
+     *     de tipo de RESULTADO para o nível abaixo, nunca precisa ser ele próprio um ponto de
+     *     instanciação. Com {@code POW} aninhado (B: {@code FAM : POW1(POW(ELEM))}), o natural já
+     *     alcança {@code Set<Set<T>>} (o próprio tipo de {@code FAM}) — o fecho de 1 nível dá
+     *     exatamente o {@code Set<Set<Set<T>>>} que falta como texto, sem cascata.
+     * @param pairTypes pares (A,B) NATURAIS (com evidência direta na especificação) mais
+     *     simétricos ({@link #symmetrizePairs}) — candidatos de instanciação para blocos
+     *     aridade-2 ({@link #buildSubstitutions}). NUNCA inclui os pares "envolvidos" de {@link
+     *     #addRelationCompositionAliasPairs} (ver {@code aliasPairTypes}): se incluísse, {@code
+     *     rel}/{@code fnc}/{@code prj1}/{@code prj2} seriam instanciados também SOBRE os seus
+     *     próprios pares envolvidos (ex. {@code (A, Set<B>)}), que por sua vez pedem mais um
+     *     nível de envolvimento ({@code Set<Set<B>>}) nunca derivado — cascata sem fim, mesma
+     *     classe de bug que {@code naturalSetElemTypes} evita para blocos aridade-1.
+     * @param aliasPairTypes {@code pairTypes} mais os pares envolvidos derivados por {@link
+     *     #addRelationCompositionAliasPairs} — usado APENAS por {@code buildTypeRenameMap} para
+     *     garantir que existe um alias concreto (ex. {@code Relation_Tuple_integer_integer_integer})
+     *     para os tipos que {@code rel}/{@code fnc}/{@code prj1}/{@code prj2} referenciam na
+     *     PRÓPRIA assinatura, sem alimentar a seleção de candidatos de instanciação (só
+     *     {@code pairTypes} faz isso).
+     * @param tripleTypes trios (A,B,C) NATURAIS — para cada dois pares (A,B) e (A,C) com o MESMO
+     *     primeiro componente A (ex.: {@code RA:Relation<integer,integer>} e
+     *     {@code RC:Relation<integer,integer>} do B {@code ><}, cv_rel) — únicos candidatos de
+     *     instanciação para {@code direct_product<A,B,C>(Relation<A,B>,Relation<A,C>):
+     *     Relation<A,Tuple<B,C>>} (arity 3; ver {@code buildSubstitutions}). Nenhum outro bloco
+     *     aridade-3 da lib usa este campo (mantêm-se sem instanciação automática, como antes).
+     */
     private record MonoContext(
             List<String> setElemTypes,
+            List<String> naturalSetElemTypes,
             List<String> listElemTypes,
-            List<List<String>> pairTypes) {
+            List<List<String>> pairTypes,
+            List<List<String>> aliasPairTypes,
+            List<List<String>> tripleTypes) {
 
         /**
          * Orquestrador: classifica cada entrada crua ({@link #classifyType}) e depois aplica os
@@ -113,7 +155,7 @@ public final class SpecificationAxiomaticInstantiator {
          * próprio.
          */
         static MonoContext from(List<String> specTypes) {
-            return from(specTypes, true);
+            return from(specTypes, true, true, true, true);
         }
 
         /**
@@ -124,8 +166,40 @@ public final class SpecificationAxiomaticInstantiator {
          *        overloads {@code Set<Set<T>>} de {@code belongs}/{@code empty}/{@code singleton}/
          *        {@code set_union}/{@code set_intersection}/{@code card}) que {@code pow_set} nunca
          *        vai precisar — só existiam "por prevenção" mesmo quando nada os referencia.
+         * @param needsPairSymmetrization {@code false} quando o operador de inversão relacional B
+         *        ({@code ~}, traduzido para {@code relation_inverse}) não é sequer usado nesta
+         *        especificação: salta {@link #symmetrizePairs}, evitando registar o par REVERSO
+         *        (B,A) para cada par (A,B) — só necessário para {@code relation_inverse<A,B>
+         *        (Relation<A,B>) : Relation<B,A>} ter o alias do RESULTADO disponível. Sem uso de
+         *        {@code ~}, o par reverso nunca é consultado por ninguém, só polui
+         *        setElemTypes/pairTypes com combinações nunca usadas (ex.: cv_rel regista
+         *        Relation_Set_integer_integer, nunca referenciado, ao lado do real
+         *        Relation_integer_Set_integer — mesma classe de "só existia por prevenção" que
+         *        {@code needsPowSetClosure} já trata para pow_set).
+         * @param needsRelFncPrjAliases {@code false} quando nem {@code rel}/{@code fnc}/{@code
+         *        prj1}/{@code prj2} são sequer usados nesta especificação: salta {@link
+         *        #addRelationCompositionAliasPairs}, que SENÃO gera, para TODO par natural (a,b)
+         *        — mesmo sem NENHUMA relação com rel/fnc/prj1/prj2 —, um par envolvido "fantasma"
+         *        (a, Set&lt;b&gt;) só numa direção (nunca simetrizado como os pares reais). Esse
+         *        par fantasma acaba instanciando OUTROS blocos aridade-2 genuínos (ex.
+         *        {@code relation_inverse}, {@code couple}/{@code first}/{@code second}) só numa
+         *        direção, deixando a direção simétrica em falta quando outro bloco a exige — bug
+         *        descoberto em Biblioteca (sem nenhum uso de rel/fnc/prj1/prj2): "no such
+         *        predicate or logic function second(Tuple&lt;Set&lt;ℤ&gt;, ℤ&gt;)" vindo do
+         *        axioma de {@code relation_inverse}, que simetriza esse par fantasma introduzido
+         *        só por existir OUTRA relação (a,b) natural qualquer na especificação.
+         * @param needsDirectProductTriples {@code false} quando {@code direct_product} (B:
+         *        {@code ><}) não é sequer usado nesta especificação: salta {@link
+         *        #deriveDirectProductTriples}/{@link #addDirectProductResultAliasPairs}, pela
+         *        mesma razão que {@code needsRelFncPrjAliases} — trios (A,B,C) derivados de TODO
+         *        par com A comum poluiriam aliasPairTypes mesmo sem nenhum uso de {@code ><}.
          */
-        static MonoContext from(List<String> specTypes, boolean needsPowSetClosure) {
+        static MonoContext from(
+                List<String> specTypes,
+                boolean needsPowSetClosure,
+                boolean needsPairSymmetrization,
+                boolean needsRelFncPrjAliases,
+                boolean needsDirectProductTriples) {
             Set<String> setElem = new LinkedHashSet<>();
             Set<String> listElem = new LinkedHashSet<>();
             Set<List<String>> pairs = new LinkedHashSet<>();
@@ -135,14 +209,88 @@ public final class SpecificationAxiomaticInstantiator {
             }
 
             derivePairsFromSetElemIfEmpty(setElem, pairs);
-            pairs = symmetrizePairs(pairs);
+            Set<List<String>> naturalPairsForDerivation = new LinkedHashSet<>(pairs);
+            Set<List<String>> triples =
+                    needsDirectProductTriples
+                            ? deriveDirectProductTriples(naturalPairsForDerivation)
+                            : Set.of();
+            if (needsPairSymmetrization) {
+                pairs = symmetrizePairs(pairs);
+            }
             pairs = renormalizePairWhitespace(pairs);
-            addPairComponentsToSetElem(pairs, setElem);
+            Set<List<String>> aliasPairs = new LinkedHashSet<>(pairs);
+            if (needsRelFncPrjAliases) {
+                addRelationCompositionAliasPairs(naturalPairsForDerivation, aliasPairs);
+            }
+            if (needsDirectProductTriples) {
+                addDirectProductResultAliasPairs(triples, aliasPairs);
+            }
+            aliasPairs = renormalizePairWhitespace(aliasPairs);
+            // aliasPairs (não pairs): prj1/prj2 quantificam o seu próprio axioma sobre
+            // Tuple<Tuple<A,B>,A>/Tuple<Tuple<A,B>,B> (o par envolvido (Tuple<A,B>,A/B) derivado
+            // por addRelationCompositionAliasPairs), exigindo belongs<A> (aridade 1) também nesse
+            // tipo aninhado como elemento de Set — sem isto, "no such predicate or logic function
+            // belongs(Tuple<Tuple<...>,...>, Set<Tuple<Tuple<...>,...>>)".
+            addPairComponentsToSetElem(aliasPairs, setElem);
+            addListElemTypesToSetElem(listElem, setElem);
+            List<String> natural = List.copyOf(setElem);
             if (needsPowSetClosure) {
                 closeSetElemUnderPowSet(setElem);
             }
 
-            return new MonoContext(List.copyOf(setElem), List.copyOf(listElem), List.copyOf(pairs));
+            return new MonoContext(
+                    List.copyOf(setElem),
+                    natural,
+                    List.copyOf(listElem),
+                    List.copyOf(pairs),
+                    List.copyOf(aliasPairs),
+                    List.copyOf(triples));
+        }
+
+        /**
+         * Para cada par NATURAL (A,B), deriva o trio (A,B,B) — único candidato de instanciação de
+         * {@code direct_product<A,B,C>} (arity 3, ver {@code tripleTypes}). B: {@code R1 >< R2}
+         * exige domínio comum (o A de ambos os operandos), mas B/C podem em teoria ser tipos
+         * DIFERENTES — uma versão anterior cruzava TODOS os pares naturais com o MESMO A entre si
+         * (ex.: RA:(integer,integer) × FF:(integer,Set<integer>) → também (integer,integer,
+         * Set<integer>) e (integer,Set<integer>,integer)), mesmo sem nenhum {@code RA >< FF} real
+         * na especificação — combinado com {@code addRelationCompositionAliasPairs}, isso inflava
+         * aliasPairTypes (dom/ran/function_apply/couple/cartesian_product/… todos instanciados
+         * nesses pares nunca usados) e, por tabela, {@code naturalSetElemTypes} (belongs/
+         * singleton/empty/… idem) — 270/318 tipos e dezenas de overloads nunca chamados por
+         * ninguém no cv_rel. Restringir ao par consigo mesmo (o único caso realmente evidenciado
+         * até hoje: {@code direct_product(RA,RC)}, ambos {@code Relation<integer,integer>}) é a
+         * leitura mais conservadora da evidência disponível — um exemplo futuro que precise de
+         * {@code ><} entre dois tipos GENUINAMENTE diferentes exigirá alargar isto de propósito,
+         * não por defeito.
+         */
+        private static Set<List<String>> deriveDirectProductTriples(Set<List<String>> naturalPairs) {
+            Set<List<String>> triples = new LinkedHashSet<>();
+            for (List<String> p : naturalPairs) {
+                triples.add(List.of(p.get(0), p.get(1), p.get(1)));
+            }
+            return triples;
+        }
+
+        /**
+         * Para cada trio (A,B,C), regista dois pares alias-only (ver {@code aliasPairTypes}) que o
+         * axioma {@code direct_product_def<A,B,C>} precisa mas nunca são pares NATURAIS por si só:
+         * {@code (A, Tuple<B,C>)} — o TIPO DE RETORNO {@code Relation<A,Tuple<B,C>>} de
+         * {@code direct_product<A,B,C>}, sem o qual {@code buildTypeRenameMap} nunca gera o alias
+         * concreto (ex. {@code Relation_integer_Tuple_integer_integer}); e {@code (B, C)} — o
+         * axioma constrói {@code couple(b, c)} (b:B, c:C) para formar o elemento
+         * {@code Tuple<B,C>} do resultado, exigindo {@code couple<B,C>} também instanciado nesse
+         * par, mesmo que (B,C) nunca apareça como relação natural na especificação.
+         */
+        private static void addDirectProductResultAliasPairs(
+                Set<List<String>> triples, Set<List<String>> aliasPairs) {
+            for (List<String> t : triples) {
+                String a = normalizeTypeWhitespace(t.get(0));
+                String b = normalizeTypeWhitespace(t.get(1));
+                String c = normalizeTypeWhitespace(t.get(2));
+                aliasPairs.add(List.of(a, normalizeTypeWhitespace("Tuple<" + b + "," + c + ">")));
+                aliasPairs.add(List.of(b, c));
+            }
         }
 
         /**
@@ -197,10 +345,17 @@ public final class SpecificationAxiomaticInstantiator {
         }
 
         /**
-         * {@code Set<X>}: X vira elemento de setElem. Se X for {@code Tuple<A,B>}, também expressa
-         * uma relação (A,B): sem registar o par aqui, blocos de aridade 2 (dom, ran,
-         * cartesian_product, is_total_function, …) nunca são instanciados para pares só vistos
-         * nesta forma "expandida" — como os aliases sempre presentes de types.acsl (ex.:
+         * {@code Set<X>}: X vira elemento de setElem — mas o tipo COMPLETO {@code t} (ex.
+         * {@code Set<Set<integer>>}, não só {@code Set<integer>}) TAMBÉM entra, senão uma
+         * declaração diretamente aninhada (B: {@code FAM : POW1(POW(ELEM))}, ACSL:
+         * {@code logic Set<Set<integer>> FAM;}) nunca contribui o SEU PRÓPRIO nível como
+         * candidato de instanciação — só o nível interior (via {@code inner} abaixo), deixando
+         * {@code belongs(FAM, pow_set(pow_set(ELEM)))} sem overload (o nível de {@code FAM}
+         * precisa ser {@code A} em {@code belongs<A>}, não só aparecer como {@code Set<A>} de
+         * outro nível). Se X for {@code Tuple<A,B>}, também expressa uma relação (A,B): sem
+         * registar o par aqui, blocos de aridade 2 (dom, ran, cartesian_product,
+         * is_total_function, …) nunca são instanciados para pares só vistos nesta forma
+         * "expandida" — como os aliases sempre presentes de types.acsl (ex.:
          * Relation_int_bool = Set<Tuple<integer,boolean> >), que hoje só alimentam setElemTypes
          * (via este mesmo ramo) e nunca pairTypes, deixando dom/ran inconsistentes com os tipos
          * listados em axiomatic new_types.
@@ -211,6 +366,7 @@ public final class SpecificationAxiomaticInstantiator {
             if (isTypeVariable(inner) || containsStatementChars(inner) || isLegacyDType(inner)) {
                 return;
             }
+            setElem.add(t);
             setElem.add(inner);
             if (inner.startsWith("Tuple<") && inner.endsWith(">")) {
                 List<String> tupleParts = splitTopComma(inner.substring(6, inner.length() - 1));
@@ -270,6 +426,12 @@ public final class SpecificationAxiomaticInstantiator {
             if (nestingCount != leaves.size() - 1) return;
             String codomain = leaves.get(0);
             for (int i = 1; i < leaves.size(); i++) {
+                // Cada nível de aninhamento intermédio (ex.: o par-base (leaf0, leaf1) que constrói
+                // Tuple<leaf0,leaf1> antes de aninhar leaf2) também precisa da sua própria declaração
+                // couple/first/second — sem isto só o par final (domain, codomainCompleto) é
+                // registado e o Frama-C rejeita "couple(leaf0, leaf1)" usado para CONSTRUIR o
+                // elemento intermédio com "no such predicate or logic function couple(...)".
+                pairs.add(List.of(codomain, leaves.get(i)));
                 codomain = "Tuple<" + codomain + "," + leaves.get(i) + ">";
             }
             pairs.add(List.of(domain, codomain));
@@ -296,6 +458,13 @@ public final class SpecificationAxiomaticInstantiator {
             if (nestingCount != domainLeaves.size() - 1) return;
             String domain = domainLeaves.get(0);
             for (int i = 1; i < domainLeaves.size(); i++) {
+                // Espelho do fix em classifyFlattenedTupleCodomainType: regista também cada par
+                // intermédio (ex.: o par-base (leaf0, leaf1) que constrói Tuple<leaf0,leaf1> antes de
+                // aninhar leaf2), não só o par final (domainCompleto, codomain) — sem isto,
+                // function_apply(f, couple(xx, yy)) usado para CONSTRUIR o elemento de domínio a
+                // partir dos argumentos escalares não tem overload de couple e o Frama-C rejeita com
+                // "no such predicate or logic function couple(...)".
+                pairs.add(List.of(domain, domainLeaves.get(i)));
                 domain = "Tuple<" + domain + "," + domainLeaves.get(i) + ">";
             }
             pairs.add(List.of(domain, codomain));
@@ -356,6 +525,39 @@ public final class SpecificationAxiomaticInstantiator {
         }
 
         /**
+         * Para cada par NATURAL (A,B) (capturado ANTES de {@link #symmetrizePairs} — nunca deriva a
+         * partir de um par sintético/invertido, só multiplicaria a sobregeração) regista também os
+         * pares "envolvidos" que blocos aridade-2 como {@code rel<A,B>(Relation<A,Set<B>> R)} /
+         * {@code fnc<A,B>(Relation<A,B> R) : Function<A,Set<B>>} / {@code prj1<A,B>(Set<A>,Set<B>) :
+         * Relation<Tuple<A,B>,A>} / {@code prj2<A,B>(...) : Relation<Tuple<A,B>,B>} referenciam na
+         * PRÓPRIA assinatura — um nível de aninhamento além do par base. Sem isto, instanciar estes
+         * blocos em (A,B) (via o candidato aridade-2 normal, {@code ctx.pairTypes()}, sem filtragem
+         * especial) pede um alias (ex. {@code Relation_Tuple_integer_integer_integer}) que nunca
+         * seria gerado por {@link #buildTypeRenameMap}, dando "no such type". Ao contrário de tentar
+         * RESTRINGIR os candidatos a pares cujo envolvido já esteja registado (tentativa anterior:
+         * falhava sempre para prj1/prj2, já que nada MAIS na especificação regista naturalmente um
+         * par com {@code Tuple<...>} como primeiro componente — só a própria assinatura de prj1/prj2
+         * o precisa), esta função GERA os pares envolvidos diretamente. Fecho de UM nível só (sem
+         * recursão): custo é só overloads extra não usados quando (A,B) não é realmente consumido por
+         * rel/fnc/prj1/prj2 — mesma filosofia de sobregeração tolerada já usada para pow_set/símbolos
+         * de biblioteca sempre presentes.
+         */
+        private static void addRelationCompositionAliasPairs(
+                Set<List<String>> naturalPairs, Set<List<String>> pairs) {
+            Set<List<String>> derived = new LinkedHashSet<>();
+            for (List<String> p : naturalPairs) {
+                if (p.size() != 2) continue;
+                String a = normalizeTypeWhitespace(p.get(0));
+                String b = normalizeTypeWhitespace(p.get(1));
+                derived.add(List.of(a, normalizeTypeWhitespace("Set<" + b + ">")));
+                String tuple = normalizeTypeWhitespace("Tuple<" + a + "," + b + ">");
+                derived.add(List.of(tuple, a));
+                derived.add(List.of(tuple, b));
+            }
+            pairs.addAll(derived);
+        }
+
+        /**
          * Renormaliza espaçamento de vírgula em cada elemento do par: normalizeTypeWhitespace
          * só é aplicada aos textos CRUS lidos de specTypes — pares construídos por
          * OUTROS caminhos (ex. registos de tipo dinâmicos por-máquina de BxmlTypeRegistry, como
@@ -411,6 +613,38 @@ public final class SpecificationAxiomaticInstantiator {
         }
 
         /**
+         * Cada tipo de elemento de lista (ex. {@code \list<integer>} → {@code integer} entra em
+         * listElem) também precisa de {@code belongs<A>} (aridade 1, candidatos vindos de
+         * naturalSetElemTypes, não listElemTypes — ver {@code buildSubstitutions}): axiomas
+         * {@code \list<A>}-genéricos como {@code is_seq_of<A>}/{@code is_sequence<A>} são
+         * instanciados para TODO A em listElemTypes ({@code buildSubstitutions}, ramo {@code
+         * hasList}), e o corpo do axioma indutivo {@code is_seq_of_cons<A>} chama {@code
+         * belongs(h, s)} com {@code h:A, s:Set<A>} — sem A também em setElem, essa chamada fica
+         * sem overload de belongs. Mesmo princípio de {@link #addPairComponentsToSetElem} (que
+         * resolve o caso análogo para prj1/prj2 sobre pares aninhados), aqui para sequências
+         * aninhadas (ex.: {@code \list<\list<integer>>}, sequência-de-sequências: A =
+         * {@code \list<integer>} precisa de belongs mesmo sem nenhum uso NATURAL de
+         * {@code Set<\list<integer>>} na especificação).
+         *
+         * <p>Também adiciona {@code \list<T>} (o tipo de LISTA inteiro, não só o elemento T) para
+         * cada T aqui: axiomas cujo corpo chama {@code belongs} sobre o valor de LISTA em si, não
+         * sobre o seu elemento — ex. {@code seq_def<A>: belongs(l, seq(d))} com
+         * {@code l : \list<A>} — precisam de {@code belongs<\list<A>>}, um nível acima do que o
+         * laço anterior cobre. Sem isto: {@code seq<A>} (sequence_functions/seq.acsl) instanciado
+         * em A = {@code \list<integer>} (sequência-de-sequências, mesmo cenário de
+         * {@code is_seq_of} acima) exige {@code belongs(\list<\list<integer>>,
+         * Set<\list<\list<integer>>>)}, que ainda faltava.
+         */
+        private static void addListElemTypesToSetElem(Set<String> listElem, Set<String> setElem) {
+            for (String t : listElem) {
+                if (!isTypeVariable(t)) {
+                    setElem.add(t);
+                    setElem.add("\\list<" + t + ">");
+                }
+            }
+        }
+
+        /**
          * pow_set (POW(X) em posição de valor) é um bloco genérico de UM parâmetro de tipo,
          * instanciado automaticamente para TODO tipo em setElem — incluindo tipos-base sempre
          * presentes como boolean, mesmo quando o único POW(...) da especificação é sobre outro
@@ -418,8 +652,14 @@ public final class SpecificationAxiomaticInstantiator {
          * s, universe : Set<T> — exige belongs(Set<T>, Set<Set<T>>), ou seja, Set<T> precisa
          * ele próprio estar em setElem. Sem este fecho, só o T literal do POW(...) da
          * especificação ganhava Set<T> (via o ramo de pairs acima) e as instanciações pow_set
-         * para os DEMAIS tipos-base (ex. boolean) ficavam com belongs em falta. Fecho de UM
-         * nível só (não recursivo): basta para o uso atual de pow_set, que não aninha POW(POW(X)).
+         * para os DEMAIS tipos-base (ex. boolean) ficavam com belongs em falta. Fecho de UM nível
+         * só (não recursivo) — mesmo com {@code POW} aninhado (B: {@code FAM : POW1(POW(ELEM))}),
+         * já basta: os níveis intermédios da especificação (ex. {@code Set<integer>},
+         * {@code Set<Set<integer>>}) já são NATURAIS (declarados, ver {@link
+         * MonoContext#naturalSetElemTypes}), só o nível seguinte ao maior deles precisa deste
+         * fecho como texto disponível. Ver {@link SpecificationAxiomaticInstantiator#buildSubstitutions}
+         * para o porquê de {@code naturalSetElemTypes} (não este {@code setElem} já fechado) ser a
+         * lista de candidatos de instanciação — usar o já-fechado geraria uma cascata sem fim.
          */
         private static void closeSetElemUnderPowSet(Set<String> setElem) {
             Set<String> setClosure = new LinkedHashSet<>();
@@ -436,6 +676,34 @@ public final class SpecificationAxiomaticInstantiator {
             Set<String> all = new LinkedHashSet<>(setElemTypes);
             all.addAll(listElemTypes);
             return List.copyOf(all);
+        }
+
+        /**
+         * Tipos T tais que (T,T) é um par NATURAL (pairTypes, não aliasPairTypes — nunca um par
+         * "envolvido" derivado, ver {@link #addRelationCompositionAliasPairs}/{@link
+         * #addDirectProductResultAliasPairs}): candidatos para blocos aridade-1 sobre
+         * {@code Relation<A,A>} (endorrelações homogéneas) como {@code id<A>}/{@code closure1<A>}/
+         * {@code closure<A>}/{@code iterate<A>}/{@code relation_composition<A>} — ver
+         * {@code buildSubstitutions}. Deliberadamente mais estreito que
+         * {@link #naturalSetElemTypes} (que inclui QUALQUER tipo alguma vez envolto em
+         * {@code Set<...>}, não só domínios de relação quadrada): usar naturalSetElemTypes aqui
+         * causava uma cascata — {@code id<A>} instanciado num T "de mais" (ex.
+         * {@code Set<integer>}, presente só porque ND é um conjunto de integers) exige
+         * {@code couple<T,T>}, que por sua vez é adicionado como novo par "natural" fantasma, que
+         * por sua vez instancia closure1/closure/iterate/relation_composition NESSE T também — e
+         * cada um desses introduz mais um nível de {@code Set<Tuple<T,T>>} aninhado, sem nunca
+         * convergir. Restringir a pares JÁ genuinamente naturais (ex.: RR:Relation&lt;integer,
+         * integer&gt; → (integer,integer) já está em pairTypes por si só) evita a cascata por
+         * construção: nenhum destes blocos consegue "criar" um novo T não visto na especificação.
+         */
+        List<String> squareRelationDomainTypes() {
+            Set<String> out = new LinkedHashSet<>();
+            for (List<String> pair : pairTypes) {
+                if (pair.size() == 2 && pair.get(0).equals(pair.get(1)) && !isTypeVariable(pair.get(0))) {
+                    out.add(pair.get(0));
+                }
+            }
+            return List.copyOf(out);
         }
     }
 
@@ -456,10 +724,39 @@ public final class SpecificationAxiomaticInstantiator {
         // Enriquece specTypes com tipos concretos já presentes no merge
         List<String> augmented = augmentWithConcreteTypesFromText(specTypes, content);
 
-        MonoContext ctx = MonoContext.from(augmented, content.contains("pow_set("));
+        MonoContext ctx = MonoContext.from(
+                augmented,
+                content.contains("pow_set("),
+                content.contains("relation_inverse("),
+                REL_FNC_PRJ_SELF_REFERENCE.matcher(content).find(),
+                content.contains("direct_product"));
         if (ctx.singleTypes().isEmpty() && ctx.pairTypes().isEmpty()) return;
 
-        content = processAllBlocks(content, ctx);
+        // Passe 1: aridade 2/3 (rel/fnc/prj1/prj2/direct_product/couple/dom/ran/…) — usa ctx,
+        // que inclui aliasPairTypes/tripleTypes (os pares "envolvidos" que as PRÓPRIAS
+        // assinaturas/corpos destes blocos referenciam, ex. Relation<A,Set<B>> em rel<A,B>).
+        content = processAllBlocks(content, ctx, false);
+
+        // Passe 2: aridade 1 (belongs/singleton/empty/set_union/…) — usa um contexto RECALCULADO
+        // por SCAN do texto já instanciado pelo passe 1 (bracket-depth-aware, ver
+        // augmentWithConcreteTypesFromText), não por DERIVAÇÃO (aliasPairTypes/tripleTypes
+        // desligados aqui: needsRelFncPrjAliases=false, needsDirectProductTriples=false). A esta
+        // altura, todo Set/Tuple "envolvido" que os blocos aridade 2/3 realmente precisaram já
+        // está escrito como texto literal nas suas assinaturas/corpos — dá para LER em vez de
+        // voltar a DERIVAR. Derivar aqui geraria overloads aridade-1 para toda combinação
+        // CRUZADA entre pares naturais da especificação (ex.: para cv_rel, com FF:(integer,
+        // Set<integer>) e RA:(integer,integer), tripleTypes cruza os dois mesmo nunca havendo
+        // direct_product(FF,RA) nenhum) — chegou a gerar 31 overloads de belongs no cv_rel, a
+        // maioria nunca chamada por ninguém, antes deste 2º passe existir.
+        List<String> augmented2 = augmentWithConcreteTypesFromText(specTypes, content);
+        MonoContext ctx2 = MonoContext.from(
+                augmented2,
+                content.contains("pow_set("),
+                content.contains("relation_inverse("),
+                false,
+                false);
+        content = processAllBlocks(content, ctx2, true);
+
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -468,15 +765,30 @@ public final class SpecificationAxiomaticInstantiator {
      * {@code Tuple<X,Y>} concretos (onde X, Y não são variáveis de tipo) e acrescenta-os
      * à lista de tipos da especificação para enriquecer o contexto de instanciação.
      */
+    private static final Pattern CONCRETE_TYPE_CONSTRUCTOR_START =
+            Pattern.compile("(?<![A-Za-z_])(Set|\\\\list|Tuple|Relation|Function)<");
+
     private static List<String> augmentWithConcreteTypesFromText(
             List<String> specTypes, String text) {
         Set<String> extra = new LinkedHashSet<>();
-        // Captura Set<...>, \list<...>, Tuple<...> com argumento concreto (um nível de nesting)
-        Matcher m = Pattern.compile(
-                "(?<![A-Za-z_])(?:Set|\\\\list|Tuple|Relation|Function)<([^<>;()=]+(?:<[^<>;()=]*>)?[^<>;()=]*)>")
-                .matcher(text);
+        // Captura Set<...>, \list<...>, Tuple<...>, Relation<...>, Function<...> com argumento
+        // concreto, em QUALQUER profundidade de aninhamento (bracket-depth-aware via
+        // findMatchingAngleBracket) — não só 1 nível. Um regex de 1 nível (versão anterior) corta
+        // cedo demais em tipos com 2+ níveis (ex. Relation<integer, Set<Set<integer> > >, do
+        // PRÓPRIO parâmetro de rel<A,B>(Relation<A,Set<B>> R) instanciado em B=Set<integer>),
+        // deixando esse par por classificar aqui — round 2 (renameParameterizedTypesToConcrete)
+        // dependia então de RE-DERIVAR o par via addRelationCompositionAliasPairs para compensar,
+        // mas re-derivar a partir de conteúdo JÁ instanciado (por definição, round 2 só corre
+        // DEPOIS de round 1 já ter escrito tudo) realimenta o próprio mecanismo de derivação e
+        // gerava 270 dos 318 aliases de tipo do cv_rel sem NENHUM uso no ficheiro. Ler o texto
+        // corretamente (este fix) elimina essa necessidade: o par já está lá, só faltava sabê-lo
+        // ler por inteiro.
+        Matcher m = CONCRETE_TYPE_CONSTRUCTOR_START.matcher(text);
         while (m.find()) {
-            String whole = normalizeTypeWhitespace(m.group(0).trim());
+            int openIdx = m.end() - 1;
+            int closeIdx = findMatchingAngleBracket(text, openIdx);
+            if (closeIdx < 0) continue;
+            String whole = normalizeTypeWhitespace(text.substring(m.start(), closeIdx + 1).trim());
             // Ignora entradas que ainda contêm variáveis de tipo (A, B, C)
             if (containsTypeVariables(whole)) continue;
             extra.add(whole);
@@ -488,6 +800,24 @@ public final class SpecificationAxiomaticInstantiator {
         return result;
     }
 
+    /** Índice do {@code '>'} que fecha o {@code '<'} em {@code openIdx}, contando profundidade
+     * (análogo a {@link AcslCommentSpanScanner#findMatchingBrace} mas para {@code <}/{@code >}). */
+    private static int findMatchingAngleBracket(String s, int openIdx) {
+        int depth = 0;
+        for (int i = openIdx; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '<') {
+                depth++;
+            } else if (c == '>') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
     /** Verifica se o tipo contém variáveis de tipo isoladas (A, B, C …). */
     private static boolean containsTypeVariables(String type) {
         return type != null && Pattern.compile("(?<![A-Za-z_0-9])[A-Z](?![A-Za-z_0-9])").matcher(type).find();
@@ -495,7 +825,13 @@ public final class SpecificationAxiomaticInstantiator {
 
     // ── Processamento de blocos ───────────────────────────────────────────────
 
-    private static String processAllBlocks(String content, MonoContext ctx) {
+    /**
+     * @param onlyArity1 {@code true}: processa SÓ declarações aridade 1 (belongs, singleton,
+     *        empty, set_union, …), deixando aridade 2/3 intactas (ainda genéricas); {@code
+     *        false}: o inverso. Ver {@link #monomorphizeGenericAcslBlocks} para o porquê dos 2
+     *        passes separados.
+     */
+    private static String processAllBlocks(String content, MonoContext ctx, boolean onlyArity1) {
         StringBuilder result = new StringBuilder();
         int pos = 0;
 
@@ -514,7 +850,7 @@ public final class SpecificationAxiomaticInstantiator {
             }
 
             String block = content.substring(blockStart, blockEnd);
-            result.append(processBlock(block, ctx));
+            result.append(processBlock(block, ctx, onlyArity1));
             pos = blockEnd;
         }
 
@@ -532,7 +868,7 @@ public final class SpecificationAxiomaticInstantiator {
         return -1;
     }
 
-    private static String processBlock(String block, MonoContext ctx) {
+    private static String processBlock(String block, MonoContext ctx, boolean onlyArity1) {
         // Mantém new_types polimórfico
         if (block.contains(NEW_TYPES_MARKER)) return block;
 
@@ -567,6 +903,12 @@ public final class SpecificationAxiomaticInstantiator {
             int arity = detectArityFromFullDecl(declContent);
 
             if (arity == 0) {
+                combinedBody.append(declContent).append("\n");
+                continue;
+            }
+            // Só processa a aridade deste passe (ver onlyArity1 em processAllBlocks); a outra
+            // fica intacta (ainda genérica) para o passe seguinte.
+            if (onlyArity1 != (arity == 1)) {
                 combinedBody.append(declContent).append("\n");
                 continue;
             }
@@ -676,6 +1018,45 @@ public final class SpecificationAxiomaticInstantiator {
                     "Function\\s*<\\s*integer\\s*,\\s*A\\s*>"
                             + "|Set\\s*<\\s*Tuple\\s*<\\s*integer\\s*,\\s*A\\s*>\\s*>");
 
+    /**
+     * Sinal de que {@code A} é o domínio de uma endorrelação homogénea {@code Relation<A,A>} —
+     * {@code id<A>}/{@code closure1<A>}/{@code closure<A>}/{@code iterate<A>}/{@code
+     * relation_composition<A>} usam todos esta forma na própria assinatura. Aceita a forma não
+     * expandida ({@code Relation<A,A>}, como escrita nos ficheiros-fonte da lib) e a forma
+     * canonicalizada pelo {@code frama-c -print} ({@code Set<Tuple<A,A>>}), mesmo padrão duplo de
+     * {@link #SEQUENCE_ENCODED_AS_FUNCTION_OF_A} acima e pela mesma razão (o sinónimo de tipo
+     * {@code Relation<A,B> = Set<Tuple<A,B>>} de {@code types.acsl} é canonicalizado cedo).
+     */
+    private static final Pattern SQUARE_RELATION_AA =
+            Pattern.compile(
+                    "Relation\\s*<\\s*A\\s*,\\s*A\\s*>"
+                            + "|Set\\s*<\\s*Tuple\\s*<\\s*A\\s*,\\s*A\\s*>\\s*>");
+
+    /**
+     * Chamada a {@code id}/{@code closure1}/{@code closure}/{@code iterate}/{@code
+     * relation_composition} — cobre os AXIOMAS de cada bloco (ex. {@code id_belongs<A>: \forall
+     * Set<A> s, A x; ... id(s) ...}), cujo texto NÃO repete a assinatura {@code Relation<A,A>} do
+     * {@code logic}/{@code predicate} irmão (cada declaração é classificada isoladamente, ver
+     * {@code processBlock}: "candidatos derivados apenas do CONTEÚDO DESSA declaração") — sem
+     * isto, só a declaração `logic` em si ficava restrita a squareRelationDomainTypes; os seus
+     * próprios axiomas continuavam a cair no ramo largo (naturalSetElemTypes), reintroduzindo a
+     * mesma cascata que {@link #SQUARE_RELATION_AA} evita. Mesmo padrão de lookbehind negativo de
+     * {@link #REL_FNC_PRJ_SELF_REFERENCE} (não casa "valid(" só por terminar em "id(").
+     */
+    private static final Pattern SQUARE_RELATION_FUNCTION_CALL =
+            Pattern.compile(
+                    "(?<![A-Za-z0-9_])(id|closure1|closure|iterate|relation_composition)\\(");
+
+    /**
+     * Casa a declaração/uso PRÓPRIO de {@code rel}/{@code fnc}/{@code prj1}/{@code prj2}
+     * (ex. {@code rel<A,B>(...)}, {@code rel(R)}) — nunca um nome que só termina nessas letras
+     * (ex. {@code dom_of_empty_rel<A,B>} em lemmas.acsl), graças ao lookbehind negativo que
+     * exige que "rel"/"fnc"/"prj1"/"prj2" não seja precedido de um caractere de identificador.
+     */
+    private static final Pattern REL_FNC_PRJ_SELF_REFERENCE =
+            Pattern.compile("(?<![A-Za-z0-9_])(rel|fnc|prj1|prj2)[(<]");
+
+
     private static List<List<String>> buildSubstitutions(
             int arity, String content, MonoContext ctx) {
         if (arity == 1) {
@@ -686,8 +1067,20 @@ public final class SpecificationAxiomaticInstantiator {
             boolean hasList = content.contains("\\list<A") || content.contains("[|");
             boolean hasSet  = content.contains("Set<A");
             boolean hasSequenceFunction = SEQUENCE_ENCODED_AS_FUNCTION_OF_A.matcher(content).find();
+            boolean hasSquareRelation =
+                    SQUARE_RELATION_AA.matcher(content).find()
+                            || SQUARE_RELATION_FUNCTION_CALL.matcher(content).find();
 
-            if (hasList || (!hasSet && hasSequenceFunction)) {
+            if (hasSquareRelation) {
+                // id<A>/closure1<A>/closure<A>/iterate<A>/relation_composition<A>: A é o domínio
+                // de uma endorrelação Relation<A,A>. Candidatos vêm de squareRelationDomainTypes
+                // (pares NATURAIS (T,T) já em pairTypes), não de naturalSetElemTypes — ver javadoc
+                // de MonoContext#squareRelationDomainTypes para o porquê (naturalSetElemTypes
+                // causava uma cascata: id instanciado num T "de mais" exige couple<T,T>, que vira
+                // par natural fantasma, que por sua vez re-instancia closure1/closure/iterate/
+                // relation_composition NESSE T também, sem nunca convergir).
+                candidates.addAll(ctx.squareRelationDomainTypes());
+            } else if (hasList || (!hasSet && hasSequenceFunction)) {
                 // Axiomas/lemas de sequência (\list<A>, ou Function<integer,A> como em
                 // is_sequence_def_B<A>): o parâmetro A é um tipo de elemento de lista. Usa
                 // apenas listElemTypes para não gerar instâncias para Tuple<...> ou boolean que
@@ -703,31 +1096,139 @@ public final class SpecificationAxiomaticInstantiator {
                 // catch-alls genuinamente genéricos sempre que a especificação usasse \list em
                 // QUALQUER outro ponto (ex.: só {@code integer}, mesmo quando o axioma também
                 // precisa de {@code boolean}/{@code Tuple<...>}).
-                candidates.addAll(ctx.setElemTypes());
+                //
+                // naturalSetElemTypes (não setElemTypes, o fecho pós-pow_set): instanciar TAMBÉM
+                // sobre o topo sintético do fecho (Set<T> um nível acima do maior tipo natural)
+                // exigiria belongs para MAIS um nível ainda (o topo do fecho vira, por si, um novo
+                // "maior tipo" a fechar) — cascata sem fim que só termina cortando o fecho na
+                // origem, nunca reagindo a ela depois de instanciada. Ver javadoc de
+                // MonoContext#naturalSetElemTypes.
+                candidates.addAll(ctx.naturalSetElemTypes());
+                // pow_set<A> instancia-se SEMPRE em tipos-base (mesmo quando Set<T> não é natural —
+                // ver comentário em closeSetElemUnderPowSet: "incluindo tipos-base sempre presentes
+                // como boolean"), por design desde antes desta sessão. belongs<A> (e os restantes
+                // blocos aridade-1 que partilham este candidates) precisa então do candidato Set<T>
+                // para cada tipo-base T também, senão o PRÓPRIO corpo de pow_set_def em T (que chama
+                // belongs(s, pow_set(universe)), s/universe:Set<T>, pow_set(universe):Set<Set<T>>)
+                // fica com belongs(Set<T>,Set<Set<T>>) em falta (ex.: boolean é sempre candidato de
+                // pow_set mesmo nunca aparecendo em POW(...) nenhum do B de origem — sem este
+                // acréscimo, belongs(Set<boolean>,Set<Set<boolean>>) nunca é gerado). Só tipos-base
+                // (sem "<"): envolver um tipo já composto reintroduziria a cascata que
+                // naturalSetElemTypes evita acima — e não precisa, pow_set nunca se auto-instancia em
+                // composto sem o próprio Set<T> já ser natural (guarda abaixo).
+                for (String t : ctx.naturalSetElemTypes()) {
+                    if (!t.contains("<")) {
+                        candidates.add(normalizeTypeWhitespace("Set<" + t + ">"));
+                    }
+                }
                 // pow_set<A> ("belongs(s, pow_set(universe))", s/universe : Set<A>) instancia sobre
-                // o MESMO setElemTypes que belongs — que agora inclui Set<T> sintéticos (ver fecho
-                // em MonoContext#from, necessário para belongs(Set<T>, Set<Set<T>>) quando pow_set É
-                // usado para T). Sem esta exclusão, pow_set também se auto-instancia para esses
-                // Set<T> sintéticos (pow_set_def_Set_boolean = POW(POW(boolean)), nunca usado por B
-                // aqui), cujo corpo por sua vez precisa de belongs(Set<Set<T>>, Set<Set<Set<T>>>) —
-                // lacuna em cascata, sem fim natural. B não usa POW(POW(X)) nesta base de exemplos;
-                // pow_set nunca precisa de um candidato já composto (Set<...>) como seu PRÓPRIO tipo
-                // de elemento.
-                if (content.contains("pow_set(")) {
-                    candidates.removeIf(t -> t.startsWith("Set<"));
+                // os MESMOS candidatos que belongs (naturalSetElemTypes) — mas só faz sentido
+                // instanciar pow_set num tipo COMPOSTO T (contém "<": Set<...>, Tuple<...>, ou
+                // qualquer outro construtor genérico) quando Set<T> (o RESULTADO de pow_set<T>) é
+                // ele próprio um tipo natural, i.e. algo na especificação realmente usa/compara um
+                // valor desse tipo (ex.: FAM : Set<Set<integer>>, comparado com
+                // pow_set(pow_set(ELEM)) : Set<Set<Set<integer>>> — instancia pow_set em T=integer e
+                // T=Set<integer>, mas NÃO em T=Set<Set<integer>>, já que Set<Set<Set<integer>>> não é
+                // natural). Sem esta condição, pow_set auto-instancia-se no topo do fecho
+                // (pow_set_def_Set_boolean = POW(POW(boolean)), nunca usado por B aqui), cujo corpo
+                // por sua vez precisaria de belongs(Set<Set<T>>, Set<Set<Set<T>>>) — mesma cascata
+                // sem fim que a mudança acima já evita para belongs, mas reintroduzida aqui se pow_set
+                // continuasse a aceitar QUALQUER composto presente em naturalSetElemTypes. Restringir
+                // a "Set<"-prefixados só (em vez de "contém '<'") deixava passar o par-base SEMPRE
+                // presente Tuple<integer,integer> (de types.acsl's Relation_integer_integer,
+                // adicionado a naturalSetElemTypes mesmo quando a especificação nunca usa relações)
+                // como candidato de pow_set, pedindo belongs(Set<Tuple<integer,integer>>,
+                // Set<Set<Tuple<integer,integer>>>) nunca gerado — mesma classe de erro.
+                //
+                // Gatilho declaresOrCalls (não só "pow_set(" cru): a PRÓPRIA declaração de pow_set
+                // ("logic Set<Set<A>> pow_set<A>(Set<A> universe);") contém "pow_set<A>(", não
+                // "pow_set(" — só o AXIOMA que a usa ("belongs(s, pow_set(universe))") contém a
+                // forma sem sufixo genérico. Sem cobrir também "pow_set<", esta guarda nunca disparava
+                // para a declaração da própria função, deixando-a instanciada sem esta restrição
+                // (inconsistente com o axioma correspondente, embora inofensivo por si só, já que uma
+                // função declarada sem axioma não gera obrigações de prova).
+                if (declaresOrCalls(content, "pow_set")) {
+                    candidates.removeIf(t -> t.contains("<") && !naturalContainsSetOf(ctx, t, 1));
+                }
+                // general_union<A>/general_inter<A>: Set<Set<A>> -> Set<A> (união/interseção
+                // generalizada de uma FAMÍLIA de conjuntos — B: union(ENS)/inter(ENS)). Corpo do
+                // axioma (\exists/\forall Set<A> yy; belongs(yy, ens) && belongs(xx, yy)) precisa de
+                // belongs em DOIS níveis a partir de A: (A,Set<A>) — já coberto por belongs<A> na
+                // mesma A — e (Set<A>,Set<Set<A>>), um nível MAIS FUNDO que pow_set's própria
+                // necessidade. Mesmo raciocínio da guarda de pow_set, mas testando Set<Set<T>> (não
+                // só Set<T>) contra naturalSetElemTypes: só instancia em T se a família de conjuntos
+                // Set<Set<T>> for ela própria um tipo natural (ex. FAM). Para cv_sets isto restringe
+                // a T=integer (o único general_union(FAM) real), descartando T=Set<integer> e
+                // T=Set<Set<integer>> que senão pediriam belongs um ou dois níveis além do disponível.
+                if (declaresOrCalls(content, "general_union") || declaresOrCalls(content, "general_inter")) {
+                    candidates.removeIf(t -> !naturalContainsSetOf(ctx, t, 2));
                 }
             }
             return candidates.stream().map(List::of).toList();
         }
         if (arity == 2) {
-            return ctx.pairTypes().stream().map(List::copyOf).toList();
+            // rel<A,B>/fnc<A,B>/prj1<A,B>/prj2<A,B> referenciam, na PRÓPRIA assinatura, um par
+            // "envolvido" um nível além do par base (A,B) — Relation<A,Set<B>> (rel/fnc),
+            // Relation<Tuple<A,B>,A/B> (prj1/prj2). O B pode aplicar QUALQUER operador de relação
+            // (function_apply, dom, ran, is_total_function, cartesian_product, couple, …)
+            // DIRETAMENTE ao resultado de um destes 4 — ex. cv_rel: "prj1(0..2,0..2)(1|->2)"
+            // traduz para function_apply(prj1(...), couple(1,2)), exigindo function_apply
+            // instanciado no par envolvido (Tuple<integer,integer>, integer). Por isso QUALQUER
+            // declaração/axioma REAL de operador (logic/predicate/axiom "core", não catch-all) usa
+            // ctx.aliasPairTypes() (pairTypes + pares envolvidos derivados por
+            // MonoContext#addRelationCompositionAliasPairs) por omissão — só 2 exceções ficam em
+            // ctx.pairTypes() (natural + simétrico, nunca envolvido):
+            //   (1) rel/fnc/prj1/prj2 eles próprios — candidato nos SEUS PRÓPRIOS pares envolvidos
+            //       pediria mais um nível de envolvimento, cascata sem fim;
+            //   (2) blocos "admit lemma" (lemmas.acsl) — nunca chamados DIRETAMENTE pela
+            //       especificação B, só fornecem factos extra ao prover; instanciá-los também nos
+            //       pares envolvidos (ex. dom_of_empty_rel_integer_Set_Set_integer, nunca chamado
+            //       por ninguém) gerava 270 dos 318 aliases de tipo do cv_rel sem NENHUM uso.
+            boolean isRelFncPrjSymbol = REL_FNC_PRJ_SELF_REFERENCE.matcher(content).find();
+            boolean isAdmitLemma = content.stripLeading().startsWith("admit");
+            List<List<String>> pool =
+                    (isRelFncPrjSymbol || isAdmitLemma) ? ctx.pairTypes() : ctx.aliasPairTypes();
+            return pool.stream().map(List::copyOf).toList();
         }
         if (arity == 3) {
+            // direct_product<A,B,C> (B: R1 >< R2) é o único bloco aridade-3 da lib com uso real
+            // hoje (cv_rel); os restantes (cartesian_product_def_nested, tuple triplos comentados)
+            // continuam SEM instanciação automática — mantêm o bloco genérico intacto, como antes.
+            // ctx.tripleTypes() já é o único candidato calculado (par a par com A comum, ver
+            // MonoContext#deriveDirectProductTriples); sem essa restrição por nome, qualquer outro
+            // bloco aridade-3 apanharia os mesmos trios sem ligação nenhuma ao seu próprio uso.
+            if (content.contains("direct_product")) {
+                return ctx.tripleTypes().stream().map(List::copyOf).toList();
+            }
             // Apenas instancia se o contexto tiver tripletos explícitos vindos da especificação.
             // Caso contrário, mantém o bloco genérico (não o remove).
             return List.of();
         }
         return List.of();
+    }
+
+    /** {@code name(} (chamada) ou {@code name<} (declaração/axioma genérico do próprio símbolo). */
+    private static boolean declaresOrCalls(String content, String name) {
+        return content.contains(name + "(") || content.contains(name + "<");
+    }
+
+    /**
+     * {@code true} se {@code Set<...Set<t>...>} (com {@code wrapCount} camadas {@code Set<>}) for,
+     * ele próprio, um tipo natural (evidência direta na especificação — ver {@link
+     * MonoContext#naturalSetElemTypes}), comparando via {@link #normalizeTypeWhitespace} para
+     * tolerar variações de espaçamento entre formas equivalentes do mesmo tipo (ex.
+     * {@code "Set<Set<integer> >"} vs {@code "Set<Set<integer>>"}).
+     */
+    private static boolean naturalContainsSetOf(MonoContext ctx, String t, int wrapCount) {
+        String wrapped = t;
+        for (int i = 0; i < wrapCount; i++) {
+            wrapped = "Set<" + wrapped + ">";
+        }
+        String target = normalizeTypeWhitespace(wrapped);
+        for (String n : ctx.naturalSetElemTypes()) {
+            if (normalizeTypeWhitespace(n).equals(target)) return true;
+        }
+        return false;
     }
 
     private static Map<String, String> buildSubstMap(
@@ -871,7 +1372,23 @@ public final class SpecificationAxiomaticInstantiator {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
 
         List<String> augmented = augmentWithConcreteTypesFromText(specTypes, content);
-        MonoContext ctx = MonoContext.from(augmented, content.contains("pow_set("));
+        // needsRelFncPrjAliases/needsDirectProductTriples SEMPRE false aqui (ao contrário de
+        // monomorphizeGenericAcslBlocks): por esta altura do pipeline, os pares "envolvidos" que
+        // rel/fnc/prj1/prj2/direct_product precisam já foram escritos como TEXTO literal nos
+        // corpos dos axiomas que monomorphizeGenericAcslBlocks acabou de gerar — o scan normal de
+        // augmentWithConcreteTypesFromText (via classifySetType/classifyGenericPairType) já os
+        // captura diretamente, sem precisar re-derivar. Reativar a derivação aqui cria um ciclo de
+        // realimentação: augmentWithConcreteTypesFromText lê o conteúdo JÁ instanciado (incluindo
+        // os pares envolvidos que a PRÓPRIA derivação escreveu antes), volta a tratá-los como
+        // "pares naturais", e deriva mais um nível de envolvimento a partir deles — cascata
+        // silenciosa (sem erro do Frama-C, os tipos extra são só nunca referenciados) que gerava
+        // 270 dos 318 aliases de tipo do cv_rel (85%) sem NENHUM uso em todo o ficheiro.
+        MonoContext ctx = MonoContext.from(
+                augmented,
+                content.contains("pow_set("),
+                content.contains("relation_inverse("),
+                false,
+                false);
 
         Map<String, String> renames = buildTypeRenameMap(ctx);
         if (renames.isEmpty()) return;
@@ -941,8 +1458,12 @@ public final class SpecificationAxiomaticInstantiator {
     private static Map<String, String> buildTypeRenameMap(MonoContext ctx) {
         Set<String> types = new LinkedHashSet<>();
 
-        // Pares explícitos da especificação
-        for (List<String> pair : ctx.pairTypes()) {
+        // Pares explícitos da especificação + pares "envolvidos" derivados (ver
+        // MonoContext#aliasPairTypes) — precisos aqui para que rel/fnc/prj1/prj2 tenham um alias
+        // concreto disponível para os tipos que referenciam na própria assinatura, sem que esses
+        // pares derivados alimentem também a seleção de candidatos de instanciação (buildSubstitutions
+        // usa só ctx.pairTypes(), não este campo).
+        for (List<String> pair : ctx.aliasPairTypes()) {
             String a = pair.get(0), b = pair.get(1);
             types.add("Relation<" + a + ", " + b + ">");
             types.add("Function<" + a + ", " + b + ">");

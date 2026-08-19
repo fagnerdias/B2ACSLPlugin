@@ -30,11 +30,11 @@ public final class SpecificationTypesCollector {
     private static final Pattern LOGIC_TYPE_DECL =
             Pattern.compile("\\blogic\\s+([^;={]+?)\\s+[A-Za-z_]\\w*");
 
-    private static final Pattern SET_INSTANTIATION =
-            Pattern.compile("(?<![A-Za-z_])Set<([^>]+)>");
+    private static final Pattern SET_INSTANTIATION_START =
+            Pattern.compile("(?<![A-Za-z_])Set<");
 
-    private static final Pattern LIST_INSTANTIATION =
-            Pattern.compile("\\\\list<([^>]+)>");
+    private static final Pattern LIST_INSTANTIATION_START =
+            Pattern.compile("\\\\list<");
 
     private static final Pattern RELATION_LEGACY =
             Pattern.compile("\\bRelation_([a-z][a-z0-9_]*)_([a-z][a-z0-9_]*)\\b");
@@ -47,8 +47,8 @@ public final class SpecificationTypesCollector {
     private static final Pattern FORALL_LOGIC_TYPE =
             Pattern.compile("\\\\forall\\s+(integer|boolean|real)\\s+");
 
-    private static final Pattern TUPLE_INSTANTIATION =
-            Pattern.compile("(?<![A-Za-z_])Tuple<([^>]+)>");
+    private static final Pattern TUPLE_INSTANTIATION_START =
+            Pattern.compile("(?<![A-Za-z_])Tuple<");
 
     private SpecificationTypesCollector() {}
 
@@ -108,18 +108,9 @@ public final class SpecificationTypesCollector {
         while (mLogic.find()) {
             addNormalizedType(out, mLogic.group(1));
         }
-        Matcher mSet = SET_INSTANTIATION.matcher(text);
-        while (mSet.find()) {
-            addNormalizedType(out, "Set<" + mSet.group(1).trim() + ">");
-        }
-        Matcher mList = LIST_INSTANTIATION.matcher(text);
-        while (mList.find()) {
-            addNormalizedType(out, "\\list<" + mList.group(1).trim() + ">");
-        }
-        Matcher mTuple = TUPLE_INSTANTIATION.matcher(text);
-        while (mTuple.find()) {
-            addNormalizedType(out, "Tuple<" + mTuple.group(1).trim() + ">");
-        }
+        collectBalancedGenericInstantiations(text, SET_INSTANTIATION_START, "Set<", out);
+        collectBalancedGenericInstantiations(text, LIST_INSTANTIATION_START, "\\list<", out);
+        collectBalancedGenericInstantiations(text, TUPLE_INSTANTIATION_START, "Tuple<", out);
         Matcher mRel = RELATION_LEGACY.matcher(text);
         while (mRel.find()) {
             addNormalizedType(
@@ -152,6 +143,42 @@ public final class SpecificationTypesCollector {
         }
     }
 
+    /**
+     * Encontra cada ocorrência de {@code startPattern} (ex. {@code Set<}, {@code Tuple<}) e extrai
+     * o argumento genérico até ao {@code >} de fecho CORRESPONDENTE, contando profundidade de
+     * {@code <}/{@code >} — não o primeiro {@code >} encontrado. Um tipo aninhado como
+     * {@code Set<Set<integer> >} tem um {@code >} interno ANTES do de fecho: a antiga extração via
+     * {@code [^>]+} (regex sem noção de aninhamento) parava no primeiro, produzindo o tipo truncado
+     * {@code Set<Set<integer>} (sem o {@code >} externo) — escrito tal-e-qual em {@code
+     * specification_types.txt} e propagado até {@code MonoContext}, gerando overloads de {@code
+     * belongs} malformados (ex. {@code predicate belongs(Set<integer xx, Set<Set<integer>  ss)})
+     * que o Frama-C rejeitava com "unexpected token" na fase de {@code -wp} (o {@code -acsl-import}
+     * tolerava-o, só o parser standalone do {@code -wp} sobre o {@code merged_code.c} reimportado
+     * acusava o erro).
+     */
+    private static void collectBalancedGenericInstantiations(
+            String text, Pattern startPattern, String outerPrefix, Set<String> out) {
+        Matcher m = startPattern.matcher(text);
+        int from = 0;
+        while (from <= text.length() && m.find(from)) {
+            int innerStart = m.end();
+            int depth = 1;
+            int i = innerStart;
+            while (i < text.length() && depth > 0) {
+                char c = text.charAt(i);
+                if (c == '<') depth++;
+                else if (c == '>') depth--;
+                i++;
+            }
+            if (depth != 0) {
+                break; // sem fecho correspondente até ao fim do texto — nada mais a extrair
+            }
+            String inner = text.substring(innerStart, i - 1).trim();
+            addNormalizedType(out, outerPrefix + inner + ">");
+            from = i;
+        }
+    }
+
     private static void collectFromMachine(
             Element machineEl, Set<String> acslTypes, Set<String> bxmlEntries) {
         BxmlTypeRegistry registry = BxmlTypeRegistry.fromMachine(machineEl);
@@ -162,6 +189,11 @@ public final class SpecificationTypesCollector {
         }
         for (String acsl :
                 BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, registry)
+                        .values()) {
+            addNormalizedType(acslTypes, acsl);
+        }
+        for (String acsl :
+                BxmlMachineVariables.inferAbstractConstantsLogicTypesFromProperties(machineEl, registry)
                         .values()) {
             addNormalizedType(acslTypes, acsl);
         }

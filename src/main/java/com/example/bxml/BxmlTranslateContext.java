@@ -337,6 +337,7 @@ public record BxmlTranslateContext(
                         Set.of(), Map.of(), setNames, null, null, Set.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
+        merged.putAll(BxmlMachineVariables.inferAbstractConstantsLogicTypesFromProperties(machineEl, types));
         merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
         Set<String> lambdaConstantNames =
                 BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet();
@@ -385,6 +386,7 @@ public record BxmlTranslateContext(
                         machineName, Set.of(), Map.of(), setNames, null, null, Set.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
+        merged.putAll(BxmlMachineVariables.inferAbstractConstantsLogicTypesFromProperties(machineEl, types));
         Set<String> lambdaConstantNames =
                 new java.util.LinkedHashSet<>(
                         BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet());

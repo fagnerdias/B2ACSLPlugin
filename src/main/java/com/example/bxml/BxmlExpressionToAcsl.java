@@ -211,8 +211,18 @@ public final class BxmlExpressionToAcsl {
             case "Id" -> isSetValuedId(exp, ctx);
             case "Unary_Exp" -> {
                 String op = exp.getAttribute("op");
+                // "rel"/"fnc" (B: transforma relação<->função, ver relation_functions/rel.acsl e
+                // fnc.acsl) caem no fallback genérico "opname(arg)" de translateUnary — nunca
+                // precisaram de um case próprio ali para GERAR o texto certo, mas isSetValued não
+                // tem fallback genérico (é uma lista fechada) e sem esta entrada
+                // translateEqualityComparison nunca reconhecia "rel(FF) == RC"/"fnc(RC) == FF"
+                // como comparação entre dois valores Set-valued, caindo no "==" nativo em vez de
+                // equals(...) — ambos Relation<A,B>/Function<A,B> (Set<Tuple<A,B>>), == não
+                // compara extensionalmente.
                 yield "ran".equals(op) || "dom".equals(op) || "id".equals(op)
-                        || "closure".equals(op) || "closure1".equals(op);
+                        || "closure".equals(op) || "closure1".equals(op)
+                        || "union".equals(op) || "inter".equals(op)
+                        || "rel".equals(op) || "fnc".equals(op);
             }
             case "EmptySet" -> true;
             case "Quantified_Set" -> true;
@@ -224,7 +234,11 @@ public final class BxmlExpressionToAcsl {
                         || isCartesianProduct(op)
                         || isDomainRestrictionOp(op)
                         || isRangeRestrictionOp(op)
+                        || isDomainSubtractionOp(op)
+                        || isRangeSubtractionOp(op)
                         || isIntervalBinaryExp(exp)
+                        || isDirectProductOp(op)
+                        || "prj1".equals(op) || "prj2".equals(op)
                         || "<+".equals(op);
             }
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
@@ -448,6 +462,50 @@ public final class BxmlExpressionToAcsl {
         return "-->>".equals(o) || "--&gt;&gt;".equals(o);
     }
 
+    /** Tipo conjunto de injeções parciais B {@code S >+> T} em {@code Binary_Exp}. */
+    public static boolean isPartialInjectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return ">+>".equals(o) || "&gt;+&gt;".equals(o);
+    }
+
+    /** Tipo conjunto de injeções totais B {@code S >-> T} em {@code Binary_Exp}. */
+    public static boolean isTotalInjectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return ">->".equals(o) || "&gt;-&gt;".equals(o);
+    }
+
+    /** Tipo conjunto de sobrejeções parciais B {@code S +->> T} em {@code Binary_Exp}. */
+    public static boolean isPartialSurjectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return "+->>".equals(o) || "+-&gt;&gt;".equals(o);
+    }
+
+    /** Tipo conjunto de bijeções totais B {@code S >->> T} em {@code Binary_Exp}. */
+    public static boolean isTotalBijectionArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        String o = e.getAttribute("op");
+        if (o == null) return false;
+        o = o.trim();
+        return ">->>".equals(o) || "&gt;-&gt;&gt;".equals(o);
+    }
+
     /** B maplet {@code cc |-> bb} → {@code couple(cc, bb)} (ACSL_Lib/tuple_functions/tuple_couple.acsl). */
     private static boolean isMapletOp(String op) {
         if (op == null) return false;
@@ -534,6 +592,48 @@ public final class BxmlExpressionToAcsl {
         }
         String o = op.trim();
         return "<|".equals(o) || "&lt;|".equals(o);
+    }
+
+    /** B subtração de domínio {@code S <<| r} → {@code domain_subtraction(r, S)} (ACSL_Lib/relation_functions/domain_subtraction.acsl). */
+    private static boolean isDomainSubtractionOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "<<|".equals(o) || "&lt;&lt;|".equals(o);
+    }
+
+    /** B subtração de imagem {@code r |>> S} → {@code range_subtraction(r, S)} (ACSL_Lib/relation_functions/range_subtraction.acsl). */
+    private static boolean isRangeSubtractionOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "|>>".equals(o) || "|&gt;&gt;".equals(o);
+    }
+
+    /** B tipo conjunto de relações {@code S <-> T} → conjunto de todas as relações de S para T. */
+    private static boolean isRelationArrowOp(String op) {
+        if (op == null) {
+            return false;
+        }
+        String o = op.trim();
+        return "<->".equals(o) || "&lt;-&gt;".equals(o);
+    }
+
+    /** Tipo conjunto de relações B {@code S <-> T} em {@code Binary_Exp}. */
+    public static boolean isRelationArrowType(Element e) {
+        if (e == null || !"Binary_Exp".equals(e.getLocalName())) {
+            return false;
+        }
+        return isRelationArrowOp(e.getAttribute("op"));
+    }
+
+    /** B produto direto {@code R1 >< R2} → {@code direct_product(R1, R2)} (ACSL_Lib/relation_functions/direct_product.acsl). */
+    private static boolean isDirectProductOp(String op) {
+        if (op == null) return false;
+        String o = op.trim();
+        return "><".equals(o) || "&gt;&lt;".equals(o);
     }
 
     /** B append à sequência {@code s <- x} → {@code \\concat(s, [| x |])} (E-ACSL / listas). */
@@ -817,6 +917,23 @@ public final class BxmlExpressionToAcsl {
             // "unbound logic function POW". set_functions/pow_set.acsl: novo primitivo genérico
             // pow_set<A>(Set<A> universe) : Set<Set<A>>, belongs(s,pow_set(u)) <==> inclusion(s,u).
             case "POW" -> "pow_set(" + a + ")";
+            // B seq(D) em posição de VALOR — mesmo padrão de POW acima, e também o caso GERAL
+            // usado agora por "X : seq(D)" (translateMembershipComparison traduz sempre para
+            // belongs(X, seq(D)), nunca mais is_seq_of diretamente — ver lá). Sem caso próprio,
+            // uma sequência-de-sequências ficava sem tradução alguma (nenhum Set<\list<A>>
+            // disponível). sequence_functions/seq.acsl: novo primitivo genérico seq<A>(Set<A> d) :
+            // Set<\list<A>>, belongs(l,seq(d)) <==> is_seq_of(l,d) (is_seq_of fica só como
+            // implementação interna do axioma-ponte, nunca mais emitido diretamente).
+            case "seq" -> "seq(" + a + ")";
+            // B: union(ENS)/inter(ENS) — união/interseção generalizadas de uma família de conjuntos
+            // (ENS : Set<Set<A>>), distinto do quantificador UNION(z).(D|E)/INTER(z).(D|E) (esse vai
+            // por GeneralizedQuantifierTranslator/UnionInterFunctionRegistry). "union" é palavra
+            // reservada do léxico ACSL (mesmo keyword de "union" de C); sem caso próprio caía no
+            // default abaixo, produzindo "union(FAM)" cru — símbolo não declarado, rejeitado pelo
+            // Frama-C. set_functions/generalized_union_intersection.acsl: general_union<A>/
+            // general_inter<A>(Set<Set<A>>) : Set<A>.
+            case "union" -> "general_union(" + a + ")";
+            case "inter" -> "general_inter(" + a + ")";
             default -> opTrim + "(" + a + ")";
         };
     }
@@ -834,6 +951,16 @@ public final class BxmlExpressionToAcsl {
             String rel = translate(pair[0], ctx);
             String setRef = intervalOrSetComprehensionRef(pair[1], ctx);
             return "range_restriction(" + rel + ", " + setRef + ")";
+        }
+        if (isDomainSubtractionOp(op)) {
+            String setRef = intervalOrSetComprehensionRef(pair[0], ctx);
+            String rel = translate(pair[1], ctx);
+            return "domain_subtraction(" + rel + ", " + setRef + ")";
+        }
+        if (isRangeSubtractionOp(op)) {
+            String rel = translate(pair[0], ctx);
+            String setRef = intervalOrSetComprehensionRef(pair[1], ctx);
+            return "range_subtraction(" + rel + ", " + setRef + ")";
         }
         if (isMapletOp(op)) {
             String left = castBareIntegerIdForTuple(pair[0], translate(pair[0], ctx));
@@ -912,6 +1039,31 @@ public final class BxmlExpressionToAcsl {
         if ("**i".equals(op == null ? "" : op.trim())) {
             return "integer_pow(" + left + ", " + right + ")";
         }
+        String opTrimmed = op == null ? "" : op.trim();
+        // B: prj1(E,F)/prj2(E,F) — relações de projeção de E*F (ACSL_Lib/relation_functions/
+        // prj1.acsl,prj2.acsl). Binary_Exp com dois filhos diretos (E, F), não chamada função —
+        // sem caso próprio caía no infixo cru "(E prj1 F)" (default abaixo), inválido em ACSL.
+        if ("prj1".equals(opTrimmed)) {
+            return "prj1(" + left + ", " + right + ")";
+        }
+        if ("prj2".equals(opTrimmed)) {
+            return "prj2(" + left + ", " + right + ")";
+        }
+        // B: R1 >< R2 — produto direto (ACSL_Lib/relation_functions/direct_product.acsl).
+        if (isDirectProductOp(opTrimmed)) {
+            return "direct_product(" + left + ", " + right + ")";
+        }
+        // B: iterate(r,n) — r composta consigo própria n vezes (ACSL_Lib/relation_functions/
+        // iterate.acsl). Binary_Exp com dois filhos diretos (r, n), mesma forma AST de prj1/prj2
+        // acima (chamada de função com 2 argumentos, não operador infixo B) — sem caso próprio
+        // caía no infixo cru "(r iterate n)" (default abaixo), inválido em ACSL: o -acsl-import
+        // rejeitava-o como erro de SINTAXE (não "unbound function"), e o mecanismo de auto-cura de
+        // colisão de palavra reservada (FramaCRunner) ficava a renomear "iterate" -> "iterate_b" ->
+        // "iterate_b_b" -> ... para sempre, sem nunca convergir (o problema nunca foi o NOME, era a
+        // FORMA da expressão).
+        if ("iterate".equals(opTrimmed)) {
+            return "iterate(" + left + ", " + right + ")";
+        }
         String infix = integerBinaryOpToAcsl(op);
         return "(" + left + " " + infix + " " + right + ")";
     }
@@ -959,6 +1111,25 @@ public final class BxmlExpressionToAcsl {
                 acc = "set_union(" + acc + ", singleton(" + parts.get(k) + "))";
             }
             return acc;
+        }
+        if ("[".equals(op)) {
+            // B: sequência em extensão [e1, e2, ..., en] (5.7/5.17 B Language Manual) → literal de
+            // lista ACSL nativa [| e1, e2, ..., en |] — mesma sintaxe já usada por \concat/insert
+            // (ver isSequenceAppendOp etc. acima). O caso de 0 elementos não ocorre aqui: B trata a
+            // sequência vazia "[]" como um nó BXML próprio (EmptySeq -> \Nil), nunca Nary_Exp "[".
+            // Recursivo por construção (translate(e, ctx) em cada filho): cobre sequência de
+            // sequências (ex. CC = [[3],[1,2]] -> [| [|3|], [|1,2|] |]), tal como o \list<\list<...>>
+            // inferido para CC em BxmlMachineVariables#inferAbstractConstantsLogicTypesFromProperties.
+            java.util.List<String> parts = new java.util.ArrayList<>();
+            NodeList children = n.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                Node node = children.item(i);
+                if (node.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element e = (Element) node;
+                if ("Attr".equals(e.getLocalName())) continue;
+                parts.add(translate(e, ctx));
+            }
+            return "[| " + String.join(", ", parts) + " |]";
         }
         return "/* nary " + op + " */";
     }

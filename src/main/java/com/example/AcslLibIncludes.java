@@ -74,6 +74,24 @@ public final class AcslLibIncludes {
     private static final Pattern GLOBAL_SET_CONSTANT_ID =
             Pattern.compile("(?<![A-Za-z0-9_])(?:NAT1|NAT|INT|BOOL)(?![A-Za-z0-9_])");
 
+    /** Relação predefinida do B {@code succ} ({@code Function<integer,integer>}, {@code x |-> x+1}). */
+    private static final String SUCC_LIB_REL = "relation_functions/succ.acsl";
+
+    /** Relação predefinida do B {@code pred} ({@code Function<integer,integer>}, {@code x |-> x-1}). */
+    private static final String PRED_LIB_REL = "relation_functions/pred.acsl";
+
+    /**
+     * {@code succ}/{@code pred} do B usados como identificador solto (ex.: {@code (nn|->nn+1):succ}
+     * → {@code belongs(couple(nn, nn+1), succ)}) — mesmo esquema de deteção por identificador bare
+     * usado para {@link #GLOBAL_SET_CONSTANT_ID}, já que nenhum dos dois aparece em forma de chamada
+     * {@code succ(...)}/{@code pred(...)} no texto ACSL gerado.
+     */
+    private static final Pattern SUCC_ID =
+            Pattern.compile("(?<![A-Za-z0-9_])succ(?![A-Za-z0-9_])");
+
+    private static final Pattern PRED_ID =
+            Pattern.compile("(?<![A-Za-z0-9_])pred(?![A-Za-z0-9_])");
+
     /**
      * Ordem preferida dos {@code include} para o {@code .acsl} gerado: dependências lógicas
      * da {@code B2ACSLLib} (tuple → set → relation → function → sequence).
@@ -86,6 +104,7 @@ public final class AcslLibIncludes {
             "tuple_functions/equals.acsl",
             "set_functions/belongs.acsl",
             "set_functions/variables.acsl",
+            "set_functions/interval_set.acsl",
             "set_functions/empty.acsl",
             "set_functions/singleton.acsl",
             "set_functions/union.acsl",
@@ -101,6 +120,7 @@ public final class AcslLibIncludes {
             "set_functions/max.acsl",
             "set_functions/cartesian_product.acsl",
             "set_functions/pow_set.acsl",
+            "set_functions/generalized_union_intersection.acsl",
             "set_functions/disjoint.acsl",
             "relation_functions/singleton.acsl",
             "relation_functions/domain.acsl",
@@ -109,13 +129,30 @@ public final class AcslLibIncludes {
             "relation_functions/apply.acsl",
             "relation_functions/domain_restriction.acsl",
             "relation_functions/range_restriction.acsl",
+            "relation_functions/domain_subtraction.acsl",
+            "relation_functions/range_subtraction.acsl",
             "relation_functions/overwrite.acsl",
+            "relation_functions/rel.acsl",
+            "relation_functions/fnc.acsl",
+            "relation_functions/prj1.acsl",
+            "relation_functions/prj2.acsl",
+            "relation_functions/direct_product.acsl",
+            "relation_functions/composition.acsl",
+            "relation_functions/closure1.acsl",
+            "relation_functions/succ.acsl",
+            "relation_functions/pred.acsl",
             "function_functions/is_function.acsl",
             "function_functions/is_function_of.acsl",
             "function_functions/is_partial.acsl",
             "function_functions/is_total.acsl",
             "function_functions/apply.acsl",
             "function_functions/id.acsl",
+            // closure/iterate dependem de id() (identidade) — precisam de vir DEPOIS de
+            // function_functions/id.acsl na lista de includes (a ordem de FILE_ORDER é a ordem
+            // textual de "include" no .acsl gerado; sem isto, "unbound logic function id" em
+            // relation_axioms/relation_closure.acsl, id() referenciado antes de declarado).
+            "relation_functions/closure.acsl",
+            "relation_functions/iterate.acsl",
             "function_functions/is_injective.acsl",
             "function_functions/is_surjective.acsl",
             "function_functions/is_bijective.acsl",
@@ -126,11 +163,14 @@ public final class AcslLibIncludes {
             "function_functions/array2d_to_relation_bool.acsl",
             "sequence_functions/first.acsl",
             "sequence_functions/front.acsl",
+            "sequence_functions/conc.acsl",
+            "sequence_functions/rev.acsl",
             "sequence_functions/is_sequence.acsl",
             "sequence_functions/length.acsl",
             "sequence_functions/function_to_list.acsl",
             "sequence_functions/get.acsl",
             "sequence_functions/is_seq_of.acsl",
+            "sequence_functions/seq.acsl",
             "sequence_functions/range.acsl",
             "sequence_functions/iseq.acsl",
             "sequence_functions/last.acsl",
@@ -641,6 +681,12 @@ public final class AcslLibIncludes {
 
         if (GLOBAL_SET_CONSTANT_ID.matcher(acslText).find()) {
             files.add(VARIABLES_LIB_REL);
+        }
+        if (SUCC_ID.matcher(acslText).find()) {
+            files.add(SUCC_LIB_REL);
+        }
+        if (PRED_ID.matcher(acslText).find()) {
+            files.add(PRED_LIB_REL);
         }
         if (containsSymbolCall(acslText, "integer_pow")) {
             files.add(MATH_LIB_REL);

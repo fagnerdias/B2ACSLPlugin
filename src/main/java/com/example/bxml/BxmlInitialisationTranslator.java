@@ -259,6 +259,8 @@ public final class BxmlInitialisationTranslator {
                 } else if ("||".equals(op)) {
                     // simultâneo: um ensures conjuntivo
                     parseSimultaneous(sub, ensures, ctx, oldNames);
+                } else if ("CHOICE".equals(op)) {
+                    parseChoiceAsDisjunctiveEnsures(sub, ensures, ctx, oldNames);
                 } else {
                     walkSubstitution(BxmlDomUtils.firstSubChild(sub), ensures, ctx, oldNames);
                 }
@@ -627,13 +629,54 @@ public final class BxmlInitialisationTranslator {
     }
 
     /**
+     * B {@code CHOICE S1 OR ... OR Sn END} (6.6 B Language Reference Manual):
+     * {@code [CHOICE S1 OR...OR Sn END]P ⇔ [S1]P ∧...∧[Sn]P}. Ao contrário de {@code If_Sub}/
+     * {@code Select} (guardados por uma condição B observável, logo cada ramo pode virar uma
+     * implicação separada — ver {@link #parseIfSubAsConditionalEnsures}), CHOICE não tem
+     * nenhuma condição: a implementação é livre de escolher QUALQUER ramo, e nada no contrato
+     * distingue qual foi. Múltiplas cláusulas {@code ensures} separadas seriam conjuntivas
+     * (afirmariam TODOS os ramos simultaneamente — falso, só um corre), por isso aqui é sempre
+     * UMA única cláusula: a DISJUNÇÃO do que cada ramo estabelece (cada ramo traduzido
+     * recursivamente via {@link #walkSubstitution}, as suas próprias cláusulas juntas em "&&" —
+     * tudo o que esse ramo por si só garante — e os ramos juntos em "||").
+     */
+    private static void parseChoiceAsDisjunctiveEnsures(
+            Element narySub, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
+        NodeList children = narySub.getChildNodes();
+        List<String> branchClauses = new ArrayList<>();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element ch = (Element) n;
+            if ("Attr".equals(ch.getLocalName())) continue;
+            List<String> branchEnsures = new ArrayList<>();
+            walkSubstitution(ch, branchEnsures, ctx, oldNames);
+            if (branchEnsures.isEmpty()) continue;
+            branchClauses.add(
+                    branchEnsures.size() == 1
+                            ? branchEnsures.get(0)
+                            : "(" + String.join(" && ", branchEnsures) + ")");
+        }
+        if (branchClauses.isEmpty()) return;
+        ensures.add(
+                branchClauses.size() == 1
+                        ? branchClauses.get(0)
+                        : "(" + String.join(" || ", branchClauses) + ")");
+    }
+
+    /**
      * Recolhe recursivamente os nomes de variáveis atribuídas em toda a árvore de substituição
      * (LHS de {@code Assignement_Sub}, {@code Variables} de {@code Becomes_Such_That}/{@code
      * Becomes_In}), incluindo dentro de ramos {@code Then}/{@code Else}/{@code When} — para que uma
      * {@code ||} que engloba um {@code If_Sub}/{@code Select} saiba de TODAS as variáveis
      * simultaneamente atribuídas, mesmo as só atribuídas num dos ramos condicionais.
+     *
+     * <p>Pacote-visível (não {@code private}): também reusado por
+     * {@link BxmlOperationsTranslator#translateLocalOperations} para o {@code assigns} de
+     * LOCAL_OPERATIONS (ex. cv_struct's {@code lclear}) — mesma derivação de nomes atribuídos, sem
+     * duplicar a lógica.
      */
-    private static void collectAssignedLhsNames(Element sub, Set<String> out) {
+    static void collectAssignedLhsNames(Element sub, Set<String> out) {
         if (sub == null) return;
         switch (sub.getLocalName()) {
             case "Assignement_Sub", "Becomes_Such_That", "Becomes_In" ->
