@@ -828,10 +828,32 @@ public final class AcslGenerator {
         BxmlTranslateContext ctx = state.ctx;
         StringBuilder sb = state.sb;
 
-        // Constantes e propriedades das máquinas fundidas — depois das variáveis, antes das
-        // compreensões, para que constantes como MAX_COPY estejam declaradas quando necessário.
+        // Nomes de constantes já declaradas (abstract_constants da raiz, menos as que
+        // ciDeclaredAbstractConsts omitiu porque vão para ghost_operations.ci — ver
+        // appendPreambleAndConstantsBlocks). Um refinamento/implementação pode reusar o MESMO nome
+        // em CONCRETE_CONSTANTS ao refinar uma constante abstrata (namespaces B são por máquina,
+        // e.g. "defaultprice" tanto em Rooms quanto em Rooms_i) — é a mesma constante sendo
+        // concretizada, não uma segunda entidade, então não deve ser redeclarada (Frama-C rejeitaria
+        // com "already declared with the same profile").
+        Set<String> ciDeclaredAbstractConsts =
+                GhostOperationsCiGenerator.machineHasAnySubOperations(state.machineEl)
+                        ? BxmlConstantsAndProperties.collectLambdaDefsFromProperties(state.machineEl)
+                                .keySet()
+                        : Set.of();
+        Set<String> declaredConstantNames =
+                new LinkedHashSet<>(BxmlConstantsAndProperties.abstractConstantNames(state.machineEl));
+        declaredConstantNames.removeAll(ciDeclaredAbstractConsts);
+
+        // Constantes das máquinas fundidas — depois das variáveis, antes das compreensões, para que
+        // constantes como MAX_COPY estejam declaradas quando necessário. As properties são
+        // traduzidas já aqui (podem registar comprehensions, ex. Rooms_i's "small = {nn|nn:ROOM &
+        // nn mod 2=1}") mas só anexadas a 'sb' DEPOIS do bloco de compreensões abaixo — do
+        // contrário, uma property que acabou de criar Rooms__set_comprehension_2 referenciaria a
+        // constante antes dela estar declarada ("unbound logic variable").
+        List<String> mergedPropertiesBlocks = new ArrayList<>();
         for (Element mel : mergedMachineElements) {
-            appendMergedConstantsAndPropertiesForElement(state, mel);
+            mergedPropertiesBlocks.add(
+                    appendMergedConstantsAndBufferPropertiesForElement(state, mel, declaredConstantNames));
         }
 
         // Compreensões: todas as variáveis e constantes já estão declaradas.
@@ -840,21 +862,28 @@ public final class AcslGenerator {
             sb.append(ctx.comprehensions().formatAxiomaticBlock(state.baseName, ctx));
             sb.append("\n");
         }
+        for (String propsMerged : mergedPropertiesBlocks) {
+            appendBlockWithSpacing(sb, propsMerged);
+        }
         // Values das máquinas fundidas (podem referenciar compreensões).
         for (Element mel : mergedMachineElements) {
             appendMergedValuesForElement(state, mel);
         }
     }
 
-    private static void appendMergedConstantsAndPropertiesForElement(AcslGenerationState state, Element mel) {
+    private static String appendMergedConstantsAndBufferPropertiesForElement(
+            AcslGenerationState state, Element mel, Set<String> declaredConstantNames) {
         BxmlTranslateContext mctx =
                 buildMergedElementContext(
                         mel, state.ctx, state.gluing, state.machineEl, state.refinementChainVariableLogicTypes);
         StringBuilder sb = state.sb;
-        String constsMerged = BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx);
+        String constsMerged =
+                BxmlConstantsAndProperties.formatConcreteConstantsBlock(mel, mctx, declaredConstantNames);
         appendBlockWithSpacing(sb, constsMerged);
-        String propsMerged = BxmlConstantsAndProperties.formatPropertiesBlock(mel, mctx);
-        appendBlockWithSpacing(sb, propsMerged);
+        // Semeia para a próxima camada de refinamento antes de processar (cadeias r -> i podem
+        // reusar o mesmo nome mais de uma vez).
+        declaredConstantNames.addAll(BxmlConstantsAndProperties.concreteConstantNames(mel));
+        return BxmlConstantsAndProperties.formatPropertiesBlock(mel, mctx);
     }
 
     private static void appendMergedValuesForElement(AcslGenerationState state, Element mel) {

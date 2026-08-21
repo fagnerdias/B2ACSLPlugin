@@ -619,8 +619,13 @@ final class DummyGhostAxiomaticBuilder {
 
     /**
      * Para cada constante concreta das máquinas em {@code SEES} que apareça como identificador bare
-     * (sem prefixo {@code dummy_}) no texto ghost, emite {@code logic integer <NAME>;} no bloco
-     * axiomatic.  Estas constantes são declaradas nos ficheiros {@code .acsl} das máquinas vistas
+     * (sem prefixo {@code dummy_}) no texto ghost, emite {@code logic <tipo> dummy_<NAME>;} no bloco
+     * axiomatic — o tipo vem do PRÓPRIO {@code typref} da máquina vista (ver {@link
+     * BxmlSetsTranslator#listSeenMachineConcreteConstantLogicTypes}), não hardcoded a {@code
+     * integer}: uma constante Set-tipada (ex. {@code Context}'s {@code SEAT = 0..MAX_SEAT}) precisa
+     * de {@code DSet<integer>}, senão o front-end isolado rejeita com "incompatible types" quando
+     * comparada a outro {@code DSet<integer>} num ensures ghost (ex. {@code dummy_equals(dummy_v,
+     * dummy_SEAT)}). Estas constantes são declaradas nos ficheiros {@code .acsl} das máquinas vistas
      * (carregados via {@code -acsl-import}), pelo que não são abstraídas com {@code dummy_}.
      */
     private static void appendSeenConcreteConstantDeclarations(
@@ -628,15 +633,20 @@ final class DummyGhostAxiomaticBuilder {
         if (ghostText == null || ghostText.isBlank() || machineEl == null || bxmlDirectory == null) {
             return;
         }
-        List<String> seenConstants =
-                BxmlSetsTranslator.listSeenMachineConcreteConstantNames(machineEl, bxmlDirectory);
-        for (String name : seenConstants) {
+        Map<String, String> seenConstantLogicTypes =
+                BxmlSetsTranslator.listSeenMachineConcreteConstantLogicTypes(machineEl, bxmlDirectory);
+        for (Map.Entry<String, String> entry : seenConstantLogicTypes.entrySet()) {
+            String name = entry.getKey();
             // ghostDummyConcreteRefs already replaced bare <NAME> with dummy_<NAME>
             Pattern pat =
                     Pattern.compile(
                             "(?<![A-Za-z0-9_])dummy_" + Pattern.quote(name) + "(?![A-Za-z0-9_])");
             if (pat.matcher(ghostText).find()) {
-                sb.append("        logic integer dummy_").append(name).append(";\n\n");
+                sb.append("        logic ")
+                        .append(dummyAxiomaticLogicType(entry.getValue()))
+                        .append(" dummy_")
+                        .append(name)
+                        .append(";\n\n");
             }
         }
         // Conjuntos diferidos vistos (ex. Goods_GOODS, declarado em SETS na máquina vista) — o

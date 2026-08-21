@@ -24,11 +24,29 @@ public final class BxmlConstantsAndProperties {
      * {@code Id} com {@code typref}).
      */
     public static String formatConcreteConstantsBlock(Element machineEl, BxmlTranslateContext ctx) {
+        return formatConcreteConstantsBlock(machineEl, ctx, Set.of());
+    }
+
+    /**
+     * Como {@link #formatConcreteConstantsBlock(Element, BxmlTranslateContext)}, mas omite as
+     * constantes cujos nomes estejam em {@code excludeNames}. Usado quando um refinamento/
+     * implementação declara em {@code CONCRETE_CONSTANTS} o MESMO nome já declarado como
+     * {@code ABSTRACT_CONSTANTS} (ou já concretizado por uma camada de refinamento anterior) — em B
+     * isso é apenas a mesma constante sendo refinada (não uma segunda entidade), então redeclará-la
+     * causaria "already declared with the same profile" no Frama-C. Ao contrário de variáveis (ver
+     * {@code BxmlMachineVariables#collapsedIntoImplementationVariableNames}), constantes nunca
+     * precisam de dupla representação ghost/array — omitir a redeclaração é sempre correto, não uma
+     * opção sujeita a trade-off de prova.
+     */
+    public static String formatConcreteConstantsBlock(
+            Element machineEl, BxmlTranslateContext ctx, Set<String> excludeNames) {
         Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");
         if (block == null) return "";
 
         String machineName = machineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return "";
+
+        Set<String> excluded = excludeNames == null ? Set.of() : excludeNames;
 
         List<String> decls = new ArrayList<>();
         NodeList ch = block.getChildNodes();
@@ -40,6 +58,7 @@ public final class BxmlConstantsAndProperties {
             if (!"Id".equals(e.getLocalName())) continue;
             String name = e.getAttribute("value");
             if (name == null || name.isBlank()) continue;
+            if (excluded.contains(name)) continue;
             String tr = e.getAttribute("typref");
             int typref = tr.isBlank() ? -1 : Integer.parseInt(tr.trim());
             String logicType = ctx.types().acslVariableLogicTypeFromTypref(typref);
@@ -54,6 +73,31 @@ public final class BxmlConstantsAndProperties {
         }
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /** Nomes declarados em {@code <Abstract_Constants>} (ordem de declaração no BXML). */
+    public static Set<String> abstractConstantNames(Element machineEl) {
+        return idChildNames(BxmlDomUtils.firstChildElement(machineEl, "Abstract_Constants"));
+    }
+
+    /** Nomes declarados em {@code <Concrete_Constants>} (ordem de declaração no BXML). */
+    public static Set<String> concreteConstantNames(Element machineEl) {
+        return idChildNames(BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants"));
+    }
+
+    private static Set<String> idChildNames(Element block) {
+        Set<String> out = new LinkedHashSet<>();
+        if (block == null) return out;
+        NodeList ch = block.getChildNodes();
+        for (int i = 0; i < ch.getLength(); i++) {
+            Node n = ch.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element e = (Element) n;
+            if ("Attr".equals(e.getLocalName()) || !"Id".equals(e.getLocalName())) continue;
+            String name = e.getAttribute("value");
+            if (name != null && !name.isBlank()) out.add(name.trim());
+        }
+        return out;
     }
 
     /**
