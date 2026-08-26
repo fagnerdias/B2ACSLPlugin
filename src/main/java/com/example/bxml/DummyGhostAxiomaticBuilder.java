@@ -88,13 +88,39 @@ final class DummyGhostAxiomaticBuilder {
             BxmlTranslateContext ctx,
             Path bxmlDirectory,
             Map<String, String> abstractConstDecls) {
+        return format(
+                ghostEnsureLines, abstractVarNames, varTypes, maxSetComprehensionIndex,
+                machineEl, ctx, bxmlDirectory, abstractConstDecls, List.of(), null, null);
+    }
+
+    /**
+     * @param mergedMachineElements refinamentos/implementações fundidos na abstrata
+     * @param seesGraph/importsGraph grafos do projeto inteiro, para resolver constantes concretas e
+     *     conjuntos diferidos vistos transitivamente (SEES∪IMPORTS) em {@link
+     *     #appendSeenConcreteConstantDeclarations} — sem isto, uma constante só alcançável via
+     *     IMPORTS ou via um segundo salto de SEES não gera {@code logic ... dummy_<NAME>;} e o
+     *     front-end isolado do {@code .ci} rejeita com "unbound logic variable".
+     */
+    String format(
+            List<String> ghostEnsureLines,
+            List<String> abstractVarNames,
+            Map<String, String> varTypes,
+            int maxSetComprehensionIndex,
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            Path bxmlDirectory,
+            Map<String, String> abstractConstDecls,
+            List<Element> mergedMachineElements,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph) {
         String ghostText = joinLines(ghostEnsureLines);
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSets =
                 machineEl == null
                         ? List.of()
                         : bxmlDirectory != null
                                 ? BxmlSetsTranslator.listEnumeratedSetsWithSees(
-                                        machineEl, bxmlDirectory)
+                                        machineEl, mergedMachineElements, bxmlDirectory,
+                                        seesGraph, importsGraph)
                                 : BxmlSetsTranslator.listEnumeratedSets(machineEl);
         Set<String> reservedNames =
                 reservedDummyNames(abstractVarNames, machineEl, maxSetComprehensionIndex, enumeratedSets);
@@ -140,7 +166,8 @@ final class DummyGhostAxiomaticBuilder {
 
         appendDummyConcreteConstantDeclarations(sb, machineEl, ctx);
 
-        appendSeenConcreteConstantDeclarations(sb, ghostText, machineEl, bxmlDirectory);
+        appendSeenConcreteConstantDeclarations(
+                sb, ghostText, machineEl, bxmlDirectory, mergedMachineElements, seesGraph, importsGraph);
 
         if (maxSetComprehensionIndex > 0) {
             String machineName = machineEl == null ? "" : machineEl.getAttribute("name");
@@ -629,12 +656,15 @@ final class DummyGhostAxiomaticBuilder {
      * (carregados via {@code -acsl-import}), pelo que não são abstraídas com {@code dummy_}.
      */
     private static void appendSeenConcreteConstantDeclarations(
-            StringBuilder sb, String ghostText, Element machineEl, Path bxmlDirectory) {
+            StringBuilder sb, String ghostText, Element machineEl, Path bxmlDirectory,
+            List<Element> mergedMachineElements, BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph) {
         if (ghostText == null || ghostText.isBlank() || machineEl == null || bxmlDirectory == null) {
             return;
         }
         Map<String, String> seenConstantLogicTypes =
-                BxmlSetsTranslator.listSeenMachineConcreteConstantLogicTypes(machineEl, bxmlDirectory);
+                BxmlSetsTranslator.listSeenMachineConcreteConstantLogicTypes(
+                        machineEl, mergedMachineElements, bxmlDirectory, seesGraph, importsGraph);
         for (Map.Entry<String, String> entry : seenConstantLogicTypes.entrySet()) {
             String name = entry.getKey();
             // ghostDummyConcreteRefs already replaced bare <NAME> with dummy_<NAME>
@@ -652,7 +682,8 @@ final class DummyGhostAxiomaticBuilder {
         // Conjuntos diferidos vistos (ex. Goods_GOODS, declarado em SETS na máquina vista) — o
         // mesmo tratamento acima, mas com o tipo lógico DSet<integer> (não escalar).
         List<String> seenDeferredSets =
-                BxmlSetsTranslator.listSeenMachineDeferredSetQualifiedNames(machineEl, bxmlDirectory);
+                BxmlSetsTranslator.listSeenMachineDeferredSetQualifiedNames(
+                        machineEl, mergedMachineElements, bxmlDirectory, seesGraph, importsGraph);
         for (String name : seenDeferredSets) {
             Pattern pat =
                     Pattern.compile(

@@ -129,6 +129,7 @@ public final class AcslLibIncludes {
             "relation_functions/apply.acsl",
             "relation_functions/domain_restriction.acsl",
             "relation_functions/range_restriction.acsl",
+            "relation_functions/is_relation.acsl",
             "relation_functions/domain_subtraction.acsl",
             "relation_functions/range_subtraction.acsl",
             "relation_functions/overwrite.acsl",
@@ -659,9 +660,26 @@ public final class AcslLibIncludes {
      * Usa exclusivamente o {@link AcslLibSymbolDependencyMap} (gerado a partir da análise da
      * {@code B2ACSLLib}); não contém casos especiais por símbolo.
      */
+    private static boolean warnedUnloadedSymbolDependencyMap = false;
+
     private static List<String> orderedLibRelativePaths(String acslText) {
         AcslLibSymbolDependencyMap m = AcslLibSymbolDependencyMap.instance();
         LinkedHashSet<String> files = new LinkedHashSet<>();
+
+        if (!m.isLoaded() && !warnedUnloadedSymbolDependencyMap) {
+            // Sem este mapa, TODO include baseado em símbolo da lib (belongs, couple,
+            // function_apply, …) é omitido em silêncio — só os 4 casos hardcoded abaixo
+            // (NAT/succ/pred/integer_pow) sobrevivem. O sintoma real só aparece bem mais tarde,
+            // como "unbound logic function"/"unbound logic variable" no -acsl-import, sem
+            // qualquer pista de que a causa é este recurso em falta — avisar aqui, uma vez por
+            // execução, poupa esse desvio de diagnóstico.
+            warnedUnloadedSymbolDependencyMap = true;
+            System.err.println(
+                    "[B2ACSL] AVISO: b2acsl/symbol_dependency_map.json não carregou (recurso "
+                            + "ausente/inválido no classpath) — includes da lib baseados em símbolo "
+                            + "ficam TODOS omitidos; regenerar com "
+                            + "scripts/generate_acsl_symbol_dependency_map.py e recompilar.");
+        }
 
         if (m.isLoaded()) {
             LinkedHashSet<String> foundSymbols = new LinkedHashSet<>();

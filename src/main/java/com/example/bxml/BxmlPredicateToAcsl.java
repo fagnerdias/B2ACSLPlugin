@@ -378,17 +378,18 @@ public final class BxmlPredicateToAcsl {
         }
         // r : (S <-> T) — relação (conjunto de TODOS os pares (x,y), x:S, y:T, sem exigir
         // funcionalidade/totalidade): r é QUALQUER subconjunto de S*T. equivale a
-        // belongs(r, pow_set(cartesian_product(S,T))), mas inclusion(r, cartesian_product(S,T))
-        // evita instanciar belongs num nível de Set<Set<...>> extra (mesma cascata de
-        // monomorphização já vista para POW aninhado) para um caso que não precisa dela — pow_set_def
-        // já reduz a exatamente isto (belongs(s,pow_set(u)) <==> inclusion(s,u)).
+        // belongs(r, pow_set(cartesian_product(S,T))), mas is_relation(r, S, T) — que encapsula
+        // inclusion(r, cartesian_product(S,T)), ver relation_functions/is_relation.acsl — evita
+        // instanciar belongs num nível de Set<Set<...>> extra (mesma cascata de monomorphização já
+        // vista para POW aninhado) para um caso que não precisa dela — pow_set_def já reduz a
+        // exatamente isto (belongs(s,pow_set(u)) <==> inclusion(s,u)).
         if (BxmlExpressionToAcsl.isRelationArrowType(rightEl)) {
             Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(rightEl);
             if (domRng[0] == null || domRng[1] == null) return "";
             String rel = BxmlExpressionToAcsl.translate(leftEl, ctx);
             String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
             String rangeSet = functionArrowRangeSet(domRng[1], ctx);
-            return "inclusion(" + rel + ", cartesian_product(" + domainSet + ", " + rangeSet + "))";
+            return "is_relation(" + rel + ", " + domainSet + ", " + rangeSet + ")";
         }
         // f : (S --> T) com S intervalo/compreensão — função total (ACSL_Lib function_functions/is_total.acsl)
         if (BxmlExpressionToAcsl.isFunctionArrowType(rightEl)) {

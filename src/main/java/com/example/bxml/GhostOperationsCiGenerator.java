@@ -73,6 +73,25 @@ public final class GhostOperationsCiGenerator {
             Path bxmlDirectory,
             List<Element> mergedMachineElements)
             throws IOException {
+        write(cDir, abstractMachineEl, gluing, bxmlDirectory, mergedMachineElements, null, null);
+    }
+
+    /**
+     * @param seesGraph/importsGraph grafos do projeto inteiro; permitem resolver constantes
+     *     concretas e conjuntos diferidos vistos transitivamente (SEES∪IMPORTS, não só um salto de
+     *     SEES) para o {@code dummy_ghost} axiomático — ver {@link
+     *     BxmlSetsTranslator#listSeenMachineConcreteConstantNames(Element, List, Path,
+     *     BxmlSeesGraph, BxmlImportsGraph)}.
+     */
+    public static void write(
+            Path cDir,
+            Element abstractMachineEl,
+            Map<String, String> gluing,
+            Path bxmlDirectory,
+            List<Element> mergedMachineElements,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph)
+            throws IOException {
         if (cDir == null || abstractMachineEl == null) return;
         Path target = cDir.resolve(GHOST_FILE);
         boolean needsGhost = BxmlMachineVariables.needsGhostAbstraction(
@@ -96,10 +115,12 @@ public final class GhostOperationsCiGenerator {
                         .withUnionInterRegistry(new UnionInterFunctionRegistry())
                         .withEnumRenames(
                                 BxmlSetsTranslator.buildEnumRenamesWithSees(
-                                        abstractMachineEl, mergedMachineElements, bxmlDirectory))
+                                        abstractMachineEl, mergedMachineElements, bxmlDirectory,
+                                        seesGraph, importsGraph))
                         .withEnumeratedSetRenames(
                                 BxmlSetsTranslator.buildEnumeratedSetRenamesWithSees(
-                                        abstractMachineEl, mergedMachineElements, bxmlDirectory))
+                                        abstractMachineEl, mergedMachineElements, bxmlDirectory,
+                                        seesGraph, importsGraph))
                         .withEnumeratedSetNames(
                                 BxmlSetsTranslator.buildEnumeratedSetNames(abstractMachineEl));
         // Variáveis colapsadas na implementação (mesmo nome abstrata/concreta, array-backed — ver
@@ -120,13 +141,16 @@ public final class GhostOperationsCiGenerator {
                 BxmlMachineVariables.inferVariableLogicTypes(abstractMachineEl, ctx);
         Set<String> concreteConstants = new LinkedHashSet<>(concreteConstantNames(abstractMachineEl));
         concreteConstants.addAll(
-                BxmlSetsTranslator.listSeenMachineConcreteConstantNames(abstractMachineEl, bxmlDirectory));
+                BxmlSetsTranslator.listSeenMachineConcreteConstantNames(
+                        abstractMachineEl, mergedMachineElements, bxmlDirectory,
+                        seesGraph, importsGraph));
         // Conjuntos diferidos vistos (ex. Goods_GOODS) também são globais partilhados só
         // disponíveis via -acsl-import; tratam-se como as constantes concretas vistas acima
         // (renomeados para dummy_<nome> no texto ghost por ghostDummyConcreteRefs).
         concreteConstants.addAll(
                 BxmlSetsTranslator.listSeenMachineDeferredSetQualifiedNames(
-                        abstractMachineEl, bxmlDirectory));
+                        abstractMachineEl, mergedMachineElements, bxmlDirectory,
+                        seesGraph, importsGraph));
         // Conjuntos diferidos da PRÓPRIA máquina (ex. RulerOfTheSeas_ISLAND, já renomeados de ISLAND
         // para o nome qualificado por ctx.enumeratedSetRenames() — ver buildEnumeratedSetRenamesWithSees,
         // que apesar do nome também funde buildDeferredSetRenames): sem isto ficam sem dummy_,
@@ -136,7 +160,8 @@ public final class GhostOperationsCiGenerator {
 
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
                 BxmlSetsTranslator.listEnumeratedSetsWithSees(
-                        abstractMachineEl, mergedMachineElements, bxmlDirectory);
+                        abstractMachineEl, mergedMachineElements, bxmlDirectory,
+                        seesGraph, importsGraph);
         Map<String, List<String>> abstractConstParams =
                 BxmlConstantsAndProperties.collectLambdaDefsFromProperties(abstractMachineEl);
         Map<String, String> abstractConstDecls =
@@ -223,7 +248,10 @@ public final class GhostOperationsCiGenerator {
                                 abstractMachineEl,
                                 ctx,
                                 bxmlDirectory,
-                                abstractConstDecls);
+                                abstractConstDecls,
+                                mergedMachineElements,
+                                seesGraph,
+                                importsGraph);
         if (!axiomaticBlock.isBlank()) sb.append(axiomaticBlock);
 
         // Como o bloco "axiomatic dummy_ghost" acima: cada um precisa do wrapper /*@ ... */ — .ci é

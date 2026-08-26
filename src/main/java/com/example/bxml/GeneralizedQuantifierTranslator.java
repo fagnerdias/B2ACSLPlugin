@@ -684,6 +684,18 @@ final class GeneralizedQuantifierTranslator {
             congrType = idx >= 0 && idx < freeVarTypes.size() ? freeVarTypes.get(idx) : "integer";
         }
 
+        // INTER sem universo tipado E com filtro: UnionInterFunctionRegistry#appendIntervalEntry
+        // (chamado bem mais tarde, ao formatar o bloco axiomático a partir dos Entry acumulados) não
+        // gera declaração nenhuma para este caso — só um comentário TODO (ver §3b). Se
+        // registerInterval fosse chamado mesmo assim, o nome alocado (ex. interNN) já ficaria
+        // embutido AQUI na expressão ACSL antes dessa decisão, produzindo uma referência pendurada
+        // a um símbolo nunca declarado ("unbound logic function" no -acsl-import, sem pista da causa
+        // real). Verificar a MESMA condição aqui, antes de alocar o nome, evita o símbolo pendurado —
+        // troca por um TODO visível, igual ao resto deste ficheiro para formas não suportadas.
+        if (op == UnionInterFunctionRegistry.Op.INTER && !hasUniverse && filterForLo != null) {
+            return "/* TODO(b2acsl): INTER com filtro e sem universo tipado — não suportado (ver "
+                    + "UnionInterFunctionRegistry#appendIntervalEntry §3b) */";
+        }
         String name = registry.registerInterval(
                 op, freeVarNames, freeVarTypes, sourceComment, elementType, bodyForLo, bodyForHi,
                 filterForLo, filterForHi, hasUniverse, universeExpr, congrVar, congrType);

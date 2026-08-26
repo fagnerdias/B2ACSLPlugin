@@ -1073,8 +1073,25 @@ public final class BxmlExpressionToAcsl {
         if ("iterate".equals(opTrimmed)) {
             return "iterate(" + left + ", " + right + ")";
         }
+        if (!isKnownIntegerBinaryOp(opTrimmed)) {
+            // Nenhum dos casos acima reconheceu opTrimmed: repassá-lo cru como infixo ACSL
+            // ("(" + left + " " + opTrimmed + " " + right + ")") produz sintaxe inválida — já
+            // aconteceu 2x no histórico (prj1/prj2, iterate, ambos agora com caso próprio acima),
+            // o 2º disparando ainda um bug secundário de renomeação por colisão de palavra
+            // reservada em FramaCRunner tentando "curar" o que era, na verdade, um problema de
+            // FORMA da expressão, não de nome. TODO visível em vez de infixo cru: a PRÓXIMA
+            // ocorrência fica achável por grep, não por essa mesma investigação outra vez.
+            return "/* TODO: Binary_Exp op='" + opTrimmed + "' não reconhecido */";
+        }
         String infix = integerBinaryOpToAcsl(op);
         return "(" + left + " " + infix + " " + right + ")";
+    }
+
+    private static boolean isKnownIntegerBinaryOp(String opTrimmed) {
+        return switch (opTrimmed) {
+            case "+i", "-i", "*i", "/i" -> true;
+            default -> false;
+        };
     }
 
     /**

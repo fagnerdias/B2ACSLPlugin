@@ -264,7 +264,10 @@ public final class AcslGenerator {
         Set<String> collapsedVariableNames;
         Set<String> abstractVariableNamesForGhost;
         Path bxmlDirectory;
+        BxmlSeesGraph seesGraph;
+        BxmlImportsGraph importsGraph;
         List<String> transitiveImportedMachineNames;
+        List<String> transitiveSeenMachineNames;
         Set<String> invariantSourceMachineNames;
         Map<String, String> refinementChainVariableLogicTypes;
         BxmlTranslateContext ctx;
@@ -387,6 +390,8 @@ public final class AcslGenerator {
 
         Path bxmlDirectory = bxmlPath.getParent();
         state.bxmlDirectory = bxmlDirectory;
+        state.seesGraph = seesGraph;
+        state.importsGraph = importsGraph;
         // IMPORTS é transitivo em B: se esta máquina importa X e X importa Y, esta máquina também
         // depende do invariante e do assigns de Y (X's próprias operações já a chamam
         // internamente). listImportedMachineNamesFromChain só olha um nível — usado aqui só para
@@ -405,6 +410,7 @@ public final class AcslGenerator {
         List<String> transitiveSeenMachineNames =
                 com.example.bxml.BxmlSetsTranslator.listSeenMachineNamesTransitive(
                         machineEl, mergedMachineElements, seesGraph);
+        state.transitiveSeenMachineNames = transitiveSeenMachineNames;
         LinkedHashSet<String> invariantSourceMachineNames =
                 new LinkedHashSet<>(transitiveImportedMachineNames);
         invariantSourceMachineNames.addAll(transitiveSeenMachineNames);
@@ -427,10 +433,12 @@ public final class AcslGenerator {
                         .withUnionInterRegistry(new UnionInterFunctionRegistry())
                         .withEnumRenames(
                                 BxmlSetsTranslator.buildEnumRenamesWithSees(
-                                        machineEl, mergedMachineElements, bxmlDirectory))
+                                        machineEl, mergedMachineElements, bxmlDirectory,
+                                        seesGraph, importsGraph))
                         .withEnumeratedSetRenames(
                                 BxmlSetsTranslator.buildEnumeratedSetRenamesWithSees(
-                                        machineEl, mergedMachineElements, bxmlDirectory))
+                                        machineEl, mergedMachineElements, bxmlDirectory,
+                                        seesGraph, importsGraph))
                         .withEnumeratedSetNames(enumeratedSetNamesForCtx)
                         .withCrossMachineVariableNames(
                                 BxmlMachineVariables.transitiveCrossMachineVariableNames(
@@ -457,6 +465,7 @@ public final class AcslGenerator {
         Set<String> collapsedVariableNames = state.collapsedVariableNames;
         Set<String> abstractVariableNamesForGhost = state.abstractVariableNamesForGhost;
         List<String> transitiveImportedMachineNames = state.transitiveImportedMachineNames;
+        List<String> transitiveSeenMachineNames = state.transitiveSeenMachineNames;
         Set<String> invariantSourceMachineNames = state.invariantSourceMachineNames;
 
         List<String> allInvariantPredicateNames =
@@ -478,12 +487,9 @@ public final class AcslGenerator {
         implementationAssignTargets.addAll(
                 BxmlMachineVariables.listImportedMachineConcreteAssigns(
                         transitiveImportedMachineNames, bxmlDirectory));
-        List<String> seenMachineNames =
-                com.example.bxml.BxmlSetsTranslator.listSeenMachineNamesFromChain(
-                        machineEl, mergedMachineElements);
         Map<String, List<String>> importedOpAssigns =
                 BxmlMachineVariables.buildImportedOperationAssignsMap(
-                        transitiveImportedMachineNames, seenMachineNames, bxmlDirectory);
+                        transitiveImportedMachineNames, transitiveSeenMachineNames, bxmlDirectory);
         boolean useGhostAbstraction =
                 BxmlMachineVariables.needsGhostAbstraction(machineEl, mergedMachineElements);
         state.useGhostAbstraction = useGhostAbstraction;
@@ -610,6 +616,8 @@ public final class AcslGenerator {
         BxmlTranslateContext ctx = state.ctx;
         boolean useGhostAbstraction = state.useGhostAbstraction;
         StringBuilder libScanRemovedBodies = state.libScanRemovedBodies;
+        BxmlSeesGraph seesGraph = state.seesGraph;
+        BxmlImportsGraph importsGraph = state.importsGraph;
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* ACSL gerado a partir de ").append(baseName).append(".bxml (BXML 1.0) */\n");
@@ -621,7 +629,8 @@ public final class AcslGenerator {
         state.headerLen = headerLen;
 
         // 0) Conjuntos deferred (Sets) — posicionados logo após os includes
-        String setsBlock = BxmlSetsTranslator.formatSetsBlock(machineEl, mergedMachineElements, bxmlDirectory);
+        String setsBlock = BxmlSetsTranslator.formatSetsBlock(
+                machineEl, mergedMachineElements, bxmlDirectory, seesGraph, importsGraph);
         if (!setsBlock.isBlank()) {
             sb.append(setsBlock);
             sb.append("\n");

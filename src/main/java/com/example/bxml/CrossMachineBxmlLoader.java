@@ -32,10 +32,14 @@ final class CrossMachineBxmlLoader {
         Element implEl = BxmlSetsTranslator.findImplementationMachineElement(machineName, bxmlDirectory);
         if (implEl == null) return Set.of();
 
-        // Operações rand das máquinas importadas pela implementação
+        // Operações rand das máquinas importadas pela implementação, IMPORTS transitivo: se X importa
+        // Y e só Y (não X) tem Becomes_In direto, uma operação de X que só chama Y (sem Becomes_In
+        // próprio) precisa entrar em randOpNames também — mesmo padrão recursivo com "visited" (contra
+        // ciclos) já usado por loadConcreteAssignsForImportedMachine, nesta mesma classe.
         Set<String> randOpNames = new LinkedHashSet<>();
+        Set<String> visited = new LinkedHashSet<>();
         for (String imported : BxmlSetsTranslator.listImportedMachineNames(implEl)) {
-            randOpNames.addAll(loadOperationNamesWithBecomesIn(imported, bxmlDirectory));
+            collectRandOpNamesTransitively(imported, bxmlDirectory, randOpNames, visited);
         }
         if (randOpNames.isEmpty()) return Set.of();
 
@@ -66,6 +70,27 @@ final class CrossMachineBxmlLoader {
             return result;
         } catch (Exception ignored) {
             return Set.of();
+        }
+    }
+
+    /**
+     * Acrescenta a {@code randOpNames} as operações com {@code Becomes_In} de {@code machineName} e
+     * recursa nos IMPORTS da SUA PRÓPRIA implementação — {@code visited} evita repetir/ciclar (B não
+     * permite ciclos de IMPORTS, mas não custa proteger).
+     */
+    private static void collectRandOpNamesTransitively(
+            String machineName, Path bxmlDirectory, Set<String> randOpNames, Set<String> visited) {
+        if (machineName == null || machineName.isBlank() || !visited.add(machineName.trim())) {
+            return;
+        }
+        randOpNames.addAll(loadOperationNamesWithBecomesIn(machineName, bxmlDirectory));
+        Element importedImplEl =
+                BxmlSetsTranslator.findImplementationMachineElement(machineName, bxmlDirectory);
+        if (importedImplEl == null) {
+            return;
+        }
+        for (String next : BxmlSetsTranslator.listImportedMachineNames(importedImplEl)) {
+            collectRandOpNamesTransitively(next, bxmlDirectory, randOpNames, visited);
         }
     }
 
