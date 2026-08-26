@@ -211,6 +211,16 @@ public final class B2ACSLPipeline {
         Path cDir = langPath.resolve("c");
         // Staging dos ficheiros da lib sob cDir (elimina cópias redundantes em target/)
         System.setProperty("b2acsl.targetAcslDir", cDir.toAbsolutePath().normalize().toString());
+        // Um projeto pode ter MAIS DE UMA IMPLEMENTATION alternativa da mesma máquina abstrata
+        // (ex.: Seats_i e Seats_i_2, ambas "REFINES Seats" — duas estratégias de refinamento
+        // diferentes guardadas lado a lado). mergePathsByRootAbstract (acima) inclui TODAS sem
+        // filtrar, o que faz o .acsl gerado declarar variáveis/invariantes das DUAS (ex.
+        // Seats_i_variables E Seats_i_2_variables) mesmo quando só uma delas tem código C
+        // efetivamente gerado em cDir — a outra referencia globais C inexistentes ("unbound logic
+        // variable Seats__available_i"). Filtra para a(s) implementação(ões) cujo .c já existe em
+        // cDir, quando isso reduz a lista sem a esvaziar (nunca filtra o caso normal de uma só
+        // implementação, nem o modo mock sem nenhum .c ainda gerado).
+        filterMergePathsToAvailableImplementations(mergePathsByRootAbstract, cDir);
         // Limpa antes do loop: GhostOperationsCiGenerator.write() ACRESCENTA (não sobrescreve) a
         // cada chamada — ver comentário abaixo — por isso o ficheiro precisa de começar vazio a
         // cada execução, senão conteúdo de uma run anterior ficaria duplicado.
@@ -485,6 +495,63 @@ public final class B2ACSLPipeline {
                     .filter(p -> !MERGED_CODE_FILE_NAME.equalsIgnoreCase(p.getFileName().toString()))
                     .sorted(Comparator.comparing(Path::toString))
                     .toList();
+        }
+    }
+
+    /**
+     * Filtra {@code mergePathsByRootAbstract} (mutado in-place) para remover IMPLEMENTATIONs
+     * alternativas (mesma máquina abstrata, {@code type='implementation'} em ambas) sem {@code .c}
+     * gerado em {@code cDir} — ver comentário no ponto de chamada. Só age quando há 2+
+     * implementações concorrentes para a mesma raiz E pelo menos uma delas tem {@code .c}; nunca
+     * esvazia a lista por completo (se nenhuma bater, mantém tudo como estava).
+     */
+    private static void filterMergePathsToAvailableImplementations(
+            Map<String, List<Path>> mergePathsByRootAbstract, Path cDir) {
+        for (Map.Entry<String, List<Path>> entry : mergePathsByRootAbstract.entrySet()) {
+            List<Path> paths = entry.getValue();
+            List<Path> implementationPaths = new ArrayList<>();
+            for (Path p : paths) {
+                try {
+                    Element el = AcslGenerator.parseMachineElement(p);
+                    if ("implementation".equalsIgnoreCase(el.getAttribute("type"))) {
+                        implementationPaths.add(p);
+                    }
+                } catch (Exception ignored) {
+                    // ficheiro inválido; ignorado aqui, já reportado noutro ponto do pipeline
+                }
+            }
+            if (implementationPaths.size() < 2) {
+                continue;
+            }
+            List<Path> withGeneratedC = new ArrayList<>();
+            for (Path p : implementationPaths) {
+                try {
+                    String machineName = AcslGenerator.parseMachineElement(p).getAttribute("name");
+                    if (machineName != null && !machineName.isBlank() && hasGeneratedCFile(cDir, machineName.trim())) {
+                        withGeneratedC.add(p);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            if (!withGeneratedC.isEmpty() && withGeneratedC.size() < implementationPaths.size()) {
+                List<Path> filtered = new ArrayList<>(paths);
+                filtered.removeIf(p -> implementationPaths.contains(p) && !withGeneratedC.contains(p));
+                entry.setValue(filtered);
+            }
+        }
+    }
+
+    private static boolean hasGeneratedCFile(Path cDir, String machineName) {
+        if (!Files.isDirectory(cDir)) {
+            return false;
+        }
+        String target = machineName + ".c";
+        try (var stream = Files.walk(cDir)) {
+            return stream
+                    .filter(Files::isRegularFile)
+                    .anyMatch(p -> p.getFileName().toString().equalsIgnoreCase(target));
+        } catch (IOException e) {
+            return false;
         }
     }
 

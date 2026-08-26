@@ -715,6 +715,60 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Tipo lógico ACSL (ex. {@code integer}, {@code Set<integer>}) de cada constante concreta
+     * listada por {@link #listSeenMachineConcreteConstantNames}, resolvido a partir do PRÓPRIO
+     * {@code typref} da máquina vista — {@code typref} é um índice local à tabela {@code
+     * <TypeInfos>} de cada {@code .bxml} (ver {@link BxmlTypeRegistry#fromMachine}), nunca
+     * partilhado entre máquinas, por isso não pode ser resolvido com o {@code BxmlTypeRegistry} da
+     * máquina abstrata que vê {@code machineEl}. Sem isto, uma constante concreta Set-tipada numa
+     * máquina SEES (ex. {@code Context}'s {@code SEAT = 0..MAX_SEAT}) ficava sempre com {@code
+     * integer} hardcoded no {@code ghost_operations.ci} — "incompatible types Set<integer> and
+     * integer" quando comparada com outro {@code Set<integer>} num ensures ghost.
+     */
+    public static Map<String, String> listSeenMachineConcreteConstantLogicTypes(
+            Element machineEl, Path bxmlDirectory) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (machineEl == null || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return result;
+        }
+        List<String> seenNames = listReferencedMachineNames(machineEl);
+        for (String seenName : seenNames) {
+            Path p = bxmlDirectory.resolve(seenName + ".bxml");
+            if (!Files.isRegularFile(p)) {
+                continue;
+            }
+            try {
+                Element seenEl = parseMachineElement(p);
+                Element block = BxmlDomUtils.firstChildElement(seenEl, "Concrete_Constants");
+                if (block == null) {
+                    continue;
+                }
+                BxmlTypeRegistry seenTypes = BxmlTypeRegistry.fromMachine(seenEl);
+                NodeList ch = block.getChildNodes();
+                for (int i = 0; i < ch.getLength(); i++) {
+                    Node n = ch.item(i);
+                    if (n.getNodeType() != Node.ELEMENT_NODE) {
+                        continue;
+                    }
+                    Element e = (Element) n;
+                    if (!"Id".equals(e.getLocalName())) {
+                        continue;
+                    }
+                    String name = e.getAttribute("value");
+                    if (name == null || name.isBlank()) {
+                        continue;
+                    }
+                    String tr = e.getAttribute("typref");
+                    int typref = tr.isBlank() ? -1 : Integer.parseInt(tr.trim());
+                    result.put(name.trim(), seenTypes.acslVariableLogicTypeFromTypref(typref));
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return result;
+    }
+
+    /**
      * Nomes ACSL qualificados (ex. {@code Goods_GOODS}) de conjuntos diferidos (sem
      * {@code Enumerated_Values}) declarados nas máquinas em {@code SEES} de {@code machineEl}.
      * Espelha {@link #listSeenMachineConcreteConstantNames}: tal como as constantes concretas

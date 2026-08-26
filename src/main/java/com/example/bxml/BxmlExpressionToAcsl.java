@@ -985,11 +985,20 @@ public final class BxmlExpressionToAcsl {
             String right = translate(pair[1], ctx);
             return "function_apply(" + left + ", " + right + ")";
         }
-        // r[{x}] → apply(r, x)  (ACSL_Lib/relation_functions/apply.acsl)
+        // B imagem relacional r[E]: r[{x}] (E singleton em extensão) → apply(r, x) — apply<A,B> só
+        // aceita um elemento A, não um Set<A> (ACSL_Lib/relation_functions/apply.acsl). Para E
+        // genérico (variável/comprehension/intervalo tipados Set<A>) usa-se a equivalência
+        // r[E] = ran(E <| r) já suportada pela lib: relation_ran(domain_restriction(r, E))
+        // (ACSL_Lib/relation_functions/{domain_restriction,range}.acsl) — passar E direto a apply
+        // como se fosse um elemento causa "incompatible types Set<integer> and integer" no Frama-C.
         if ("[".equals(op == null ? "" : op.trim())) {
             String rel = translate(pair[0], ctx);
-            String arg = unwrapSingletonOrTranslate(pair[1], ctx);
-            return "apply(" + rel + ", " + arg + ")";
+            Element singletonElem = singletonElementOrNull(pair[1]);
+            if (singletonElem != null) {
+                return "apply(" + rel + ", " + translate(singletonElem, ctx) + ")";
+            }
+            String setRef = intervalOrSetComprehensionRef(pair[1], ctx);
+            return "relation_ran(domain_restriction(" + rel + ", " + setRef + "))";
         }
         String left = translate(pair[0], ctx);
         String right = translate(pair[1], ctx);
@@ -1215,10 +1224,11 @@ public final class BxmlExpressionToAcsl {
 
     /**
      * Para a imagem relacional {@code r[{x}]}: se {@code e} for um {@code Nary_Exp op='{'} com
-     * exactamente um elemento, retorna a tradução desse elemento (descarta a envolvente singleton);
-     * caso contrário traduz normalmente.
+     * exactamente um elemento, retorna esse elemento (não traduzido, descarta a envolvente
+     * singleton); caso contrário retorna {@code null} ({@code e} é um {@code Set<A>} genérico, não
+     * um elemento isolado).
      */
-    private static String unwrapSingletonOrTranslate(Element e, BxmlTranslateContext ctx) {
+    private static Element singletonElementOrNull(Element e) {
         if (e != null
                 && "Nary_Exp".equals(e.getLocalName())
                 && "{".equals(e.getAttribute("op"))) {
@@ -1230,8 +1240,8 @@ public final class BxmlExpressionToAcsl {
                 Element ch = (Element) n;
                 if (!"Attr".equals(ch.getLocalName())) elems.add(ch);
             }
-            if (elems.size() == 1) return translate(elems.get(0), ctx);
+            if (elems.size() == 1) return elems.get(0);
         }
-        return translate(e, ctx);
+        return null;
     }
 }
