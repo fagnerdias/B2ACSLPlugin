@@ -250,7 +250,7 @@ public final class B2ACSLPipeline {
             // nome/boilerplate genérico em toda chamada) que cada write() acrescenta é fundido num
             // só logo a seguir ao loop, para não duplicar "type DSet<A>;" etc.
             GhostOperationsCiGenerator.write(
-                    cDir, mr, invariantGluingSubstitutions, bdp, mergedEls);
+                    cDir, mr, invariantGluingSubstitutions, bdp, mergedEls, seesGraph, importsGraph);
         }
         if (!anyNeedsGhost) {
             Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));

@@ -351,13 +351,28 @@ public final class BxmlSetsTranslator {
 
     /**
      * Máquinas em {@code SEES} (abstrata) e {@code IMPORTS} (abstrata + cadeia fundida) cujos tipos
-     * enumerados entram na tradução.
+     * enumerados entram na tradução. Sem grafo (versão de 2 parâmetros), cai no comportamento de um
+     * nível só, como antes.
      */
     private static List<String> dependencyMachineNamesForTranslation(
             Element machineEl, List<Element> mergedMachineElements) {
-        LinkedHashSet<String> names = new LinkedHashSet<>();
-        names.addAll(listReferencedMachineNames(machineEl));
-        names.addAll(listImportedMachineNamesFromChain(machineEl, mergedMachineElements));
+        return dependencyMachineNamesForTranslation(machineEl, mergedMachineElements, null, null);
+    }
+
+    /**
+     * Como {@link #dependencyMachineNamesForTranslation(Element, List)}, mas fecha SEES e IMPORTS
+     * transitivamente quando os grafos do projeto são fornecidos (via {@link
+     * #listSeenMachineNamesTransitive}/{@link #listImportedMachineNamesTransitive}) — sem isto, um
+     * tipo enumerado/conjunto diferido só alcançável por um segundo salto de SEES (ex. {@code A} vê
+     * {@code B}, {@code B} vê {@code C}) ou só por IMPORTS nunca entrava na tradução de {@code A}.
+     */
+    private static List<String> dependencyMachineNamesForTranslation(
+            Element machineEl, List<Element> mergedMachineElements,
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        LinkedHashSet<String> names = new LinkedHashSet<>(
+                listSeenMachineNamesTransitive(machineEl, mergedMachineElements, seesGraph));
+        names.addAll(
+                listImportedMachineNamesTransitive(machineEl, mergedMachineElements, importsGraph));
         return List.copyOf(names);
     }
 
@@ -374,11 +389,19 @@ public final class BxmlSetsTranslator {
      */
     public static List<EnumeratedSetInfo> listEnumeratedSetsWithSees(
             Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory) {
+        return listEnumeratedSetsWithSees(machineEl, mergedMachineElements, bxmlDirectory, null, null);
+    }
+
+    /** Como acima, mas fecha SEES/IMPORTS transitivamente quando os grafos são fornecidos. */
+    public static List<EnumeratedSetInfo> listEnumeratedSetsWithSees(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory,
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
         List<EnumeratedSetInfo> merged = new ArrayList<>(listEnumeratedSets(machineEl));
         if (bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
             return merged;
         }
-        for (String dep : dependencyMachineNamesForTranslation(machineEl, mergedMachineElements)) {
+        for (String dep : dependencyMachineNamesForTranslation(
+                machineEl, mergedMachineElements, seesGraph, importsGraph)) {
             Path p = bxmlDirectory.resolve(dep + ".bxml");
             if (!Files.isRegularFile(p)) {
                 continue;
@@ -406,12 +429,20 @@ public final class BxmlSetsTranslator {
      */
     public static Map<String, String> buildEnumRenamesWithSees(
             Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory) {
+        return buildEnumRenamesWithSees(machineEl, mergedMachineElements, bxmlDirectory, null, null);
+    }
+
+    /** Como acima, mas fecha SEES/IMPORTS transitivamente quando os grafos são fornecidos. */
+    public static Map<String, String> buildEnumRenamesWithSees(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory,
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
         LinkedHashMap<String, String> merged =
                 new LinkedHashMap<>(buildEnumRenames(machineEl));
         if (bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
             return merged;
         }
-        for (String dep : dependencyMachineNamesForTranslation(machineEl, mergedMachineElements)) {
+        for (String dep : dependencyMachineNamesForTranslation(
+                machineEl, mergedMachineElements, seesGraph, importsGraph)) {
             Path p = bxmlDirectory.resolve(dep + ".bxml");
             if (!Files.isRegularFile(p)) {
                 continue;
@@ -489,9 +520,18 @@ public final class BxmlSetsTranslator {
 
     public static Map<String, String> buildEnumeratedSetRenamesWithSees(
             Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory) {
+        return buildEnumeratedSetRenamesWithSees(
+                machineEl, mergedMachineElements, bxmlDirectory, null, null);
+    }
+
+    /** Como acima, mas fecha SEES/IMPORTS transitivamente quando os grafos são fornecidos. */
+    public static Map<String, String> buildEnumeratedSetRenamesWithSees(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory,
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         if (bxmlDirectory != null && Files.isDirectory(bxmlDirectory)) {
-            for (String dep : dependencyMachineNamesForTranslation(machineEl, mergedMachineElements)) {
+            for (String dep : dependencyMachineNamesForTranslation(
+                    machineEl, mergedMachineElements, seesGraph, importsGraph)) {
                 Path p = bxmlDirectory.resolve(dep + ".bxml");
                 if (!Files.isRegularFile(p)) {
                     continue;
@@ -677,10 +717,22 @@ public final class BxmlSetsTranslator {
      */
     public static List<String> listSeenMachineConcreteConstantNames(
             Element machineEl, Path bxmlDirectory) {
+        return listSeenMachineConcreteConstantNames(machineEl, List.of(), bxmlDirectory, null, null);
+    }
+
+    /**
+     * Como acima, mas busca na união transitiva SEES∪IMPORTS (via {@link
+     * #dependencyMachineNamesForTranslation}) em vez de só SEES de um nível — uma constante concreta
+     * só alcançável via IMPORTS, ou via um segundo salto de SEES, ficava fora antes.
+     */
+    public static List<String> listSeenMachineConcreteConstantNames(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory,
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
         if (machineEl == null || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
             return List.of();
         }
-        List<String> seenNames = listReferencedMachineNames(machineEl);
+        List<String> seenNames = dependencyMachineNamesForTranslation(
+                machineEl, mergedMachineElements, seesGraph, importsGraph);
         List<String> result = new ArrayList<>();
         for (String seenName : seenNames) {
             Path p = bxmlDirectory.resolve(seenName + ".bxml");
@@ -727,11 +779,23 @@ public final class BxmlSetsTranslator {
      */
     public static Map<String, String> listSeenMachineConcreteConstantLogicTypes(
             Element machineEl, Path bxmlDirectory) {
+        return listSeenMachineConcreteConstantLogicTypes(
+                machineEl, List.of(), bxmlDirectory, null, null);
+    }
+
+    /**
+     * Como acima, mas busca na união transitiva SEES∪IMPORTS (via {@link
+     * #dependencyMachineNamesForTranslation}) em vez de só SEES de um nível.
+     */
+    public static Map<String, String> listSeenMachineConcreteConstantLogicTypes(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory,
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
         Map<String, String> result = new LinkedHashMap<>();
         if (machineEl == null || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
             return result;
         }
-        List<String> seenNames = listReferencedMachineNames(machineEl);
+        List<String> seenNames = dependencyMachineNamesForTranslation(
+                machineEl, mergedMachineElements, seesGraph, importsGraph);
         for (String seenName : seenNames) {
             Path p = bxmlDirectory.resolve(seenName + ".bxml");
             if (!Files.isRegularFile(p)) {
@@ -779,10 +843,21 @@ public final class BxmlSetsTranslator {
      */
     public static List<String> listSeenMachineDeferredSetQualifiedNames(
             Element machineEl, Path bxmlDirectory) {
+        return listSeenMachineDeferredSetQualifiedNames(machineEl, List.of(), bxmlDirectory, null, null);
+    }
+
+    /**
+     * Como acima, mas busca na união transitiva SEES∪IMPORTS (via {@link
+     * #dependencyMachineNamesForTranslation}) em vez de só SEES de um nível.
+     */
+    public static List<String> listSeenMachineDeferredSetQualifiedNames(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory,
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
         if (machineEl == null || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
             return List.of();
         }
-        List<String> seenNames = listReferencedMachineNames(machineEl);
+        List<String> seenNames = dependencyMachineNamesForTranslation(
+                machineEl, mergedMachineElements, seesGraph, importsGraph);
         List<String> result = new ArrayList<>();
         for (String seenName : seenNames) {
             Path p = bxmlDirectory.resolve(seenName + ".bxml");
@@ -936,9 +1011,17 @@ public final class BxmlSetsTranslator {
      */
     public static String formatSetsBlock(
             Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory) {
+        return formatSetsBlock(machineEl, mergedMachineElements, bxmlDirectory, null, null);
+    }
+
+    /** Como acima, mas fecha SEES/IMPORTS transitivamente quando os grafos são fornecidos. */
+    public static String formatSetsBlock(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory,
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
         List<Element> depMachineEls = new ArrayList<>();
         if (bxmlDirectory != null && Files.isDirectory(bxmlDirectory)) {
-            for (String dep : dependencyMachineNamesForTranslation(machineEl, mergedMachineElements)) {
+            for (String dep : dependencyMachineNamesForTranslation(
+                    machineEl, mergedMachineElements, seesGraph, importsGraph)) {
                 Path p = bxmlDirectory.resolve(dep + ".bxml");
                 if (!Files.isRegularFile(p)) continue;
                 try {

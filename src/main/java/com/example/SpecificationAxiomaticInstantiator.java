@@ -1056,6 +1056,37 @@ public final class SpecificationAxiomaticInstantiator {
     private static final Pattern REL_FNC_PRJ_SELF_REFERENCE =
             Pattern.compile("(?<![A-Za-z0-9_])(rel|fnc|prj1|prj2)[(<]");
 
+    /**
+     * Casa {@code Tuple<Tuple<A,B>,C>} com A/B/C simples (sem "&lt;" aninhado) — leitura
+     * conservadora, como {@link MonoContext#deriveDirectProductTriples}: um exemplo futuro com
+     * componente composto (ex. {@code Tuple<Tuple<Set<integer>,integer>,integer>}) exigirá alargar
+     * isto de propósito, não por defeito.
+     */
+    private static final Pattern NESTED_TUPLE_TRIPLE =
+            Pattern.compile(
+                    "Tuple\\s*<\\s*Tuple\\s*<\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*,\\s*"
+                            + "([A-Za-z_][A-Za-z0-9_]*)\\s*>\\s*,\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*>");
+
+    /**
+     * Deriva trios (A,B,C) a partir de tipos {@code Tuple<Tuple<A,B>,C>} já NATURAIS na
+     * especificação (ex.: {@code Tuple<Tuple<integer,integer>,integer>} de um B {@code SET1*SET2*
+     * SET3} com os 3 conjuntos diferidos/enumerados — sempre {@code integer} ao nível ACSL, ver
+     * {@code acslTypeParamName}) — únicos candidatos de instanciação para
+     * {@code cartesian_product_*_nested<A,B,C>}, cuja conclusão é sempre sobre esse formato de
+     * tipo. Ver {@link #NESTED_TUPLE_TRIPLE}.
+     */
+    private static List<List<String>> nestedCartesianProductTripleTypes(
+            List<String> naturalSetElemTypes) {
+        LinkedHashSet<List<String>> triples = new LinkedHashSet<>();
+        for (String t : naturalSetElemTypes) {
+            Matcher m = NESTED_TUPLE_TRIPLE.matcher(t);
+            if (m.find()) {
+                triples.add(List.of(m.group(1), m.group(2), m.group(3)));
+            }
+        }
+        return List.copyOf(triples);
+    }
+
 
     private static List<List<String>> buildSubstitutions(
             int arity, String content, MonoContext ctx) {
@@ -1191,17 +1222,30 @@ public final class SpecificationAxiomaticInstantiator {
             return pool.stream().map(List::copyOf).toList();
         }
         if (arity == 3) {
-            // direct_product<A,B,C> (B: R1 >< R2) é o único bloco aridade-3 da lib com uso real
-            // hoje (cv_rel); os restantes (cartesian_product_def_nested, tuple triplos comentados)
-            // continuam SEM instanciação automática — mantêm o bloco genérico intacto, como antes.
-            // ctx.tripleTypes() já é o único candidato calculado (par a par com A comum, ver
-            // MonoContext#deriveDirectProductTriples); sem essa restrição por nome, qualquer outro
-            // bloco aridade-3 apanharia os mesmos trios sem ligação nenhuma ao seu próprio uso.
+            // direct_product<A,B,C> (B: R1 >< R2): candidatos SÓ de ctx.tripleTypes() (par natural
+            // (A,B) -> trio (A,B,B), ver MonoContext#deriveDirectProductTriples) — papel de
+            // parâmetro específico de direct_product (domínio A partilhado por duas relações), não
+            // generalizável aos outros blocos aridade-3 da lib.
             if (content.contains("direct_product")) {
                 return ctx.tripleTypes().stream().map(List::copyOf).toList();
             }
-            // Apenas instancia se o contexto tiver tripletos explícitos vindos da especificação.
-            // Caso contrário, mantém o bloco genérico (não o remove).
+            // cartesian_product_*_nested<A,B,C> (cartesian_product_def_nested, _empty_*_nested,
+            // _distrib_union_left_nested): conclusão sempre sobre Tuple<Tuple<A,B>,C> — produto de
+            // DOIS cartesian_product encadeados (B: SET1*SET2*SET3, ex. PERSON +-> (DAY*MONTH*YEAR)
+            // em BirthdayRegister). ctx.tripleTypes() não serve aqui (é (A,B,B) de direct_product,
+            // semântica de parâmetro diferente, e fica vazio quando a spec não usa ></direct_product
+            // nenhum — como BirthdayRegister); candidatos vêm de ler Tuple<Tuple<A,B>,C> já NATURAL
+            // no texto (mesmo raciocínio de squareRelationDomainTypes: o tipo já existe porque a
+            // spec o usa, não recombinar pares às cegas).
+            if (content.contains("cartesian_product")) {
+                List<List<String>> nested =
+                        nestedCartesianProductTripleTypes(ctx.naturalSetElemTypes());
+                if (!nested.isEmpty()) {
+                    return nested;
+                }
+            }
+            // Nenhum candidato: mantém o bloco genérico fora do output (ver o "continue" no
+            // chamador) em vez de o deixar como texto <A,B,C> inválido em ACSL puro.
             return List.of();
         }
         return List.of();
