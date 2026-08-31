@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -757,10 +758,13 @@ public final class B2ACSLPipeline {
     static void stripDummyPrefixFromMergedCode(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
         content = content.replaceAll("\\bdummy_", "");
-        // DSet<A>/DTuple<A,B> foram introduzidos no ghost_operations.ci; no merged_code.c
-        // os tipos reais Set<A>/Tuple<A,B> já estão disponíveis via ACSL imports.
+        // DSet<A>/DTuple<A,B>/DRelation<A,B> foram introduzidos no ghost_operations.ci; no
+        // merged_code.c os tipos reais Set<A>/Tuple<A,B>/Relation<A,B> já estão disponíveis via
+        // ACSL imports (o bloco axiomatic dummy_ghost que declarava os D-prefixados já foi
+        // removido — ver removeGhostPatternAxiomaticBlocks).
         content = content.replaceAll("\\bDSet<", "Set<");
         content = content.replaceAll("\\bDTuple<", "Tuple<");
+        content = content.replaceAll("\\bDRelation<", "Relation<");
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
     }
 
@@ -775,7 +779,52 @@ public final class B2ACSLPipeline {
     static void replaceEnsuresGhostVarWithAssignsInMerged(Path mergedC) throws IOException {
         String content = Files.readString(mergedC, StandardCharsets.UTF_8);
         content = ENSURES_GHOST_VAR.matcher(content).replaceAll("assigns $1;");
+        content = dropRedundantAssignsNothingWhenRealLocationPresent(content);
         Files.writeString(mergedC, content, StandardCharsets.UTF_8);
+    }
+
+    private static final Pattern ASSIGNS_NOTHING_CLAUSE =
+            Pattern.compile("\\bassigns\\s+\\\\nothing\\s*;\\s*");
+    private static final Pattern ASSIGNS_ANY_CLAUSE = Pattern.compile("\\bassigns\\s+([^;]+);");
+
+    /**
+     * O acréscimo acima ({@code ensures ghost_v} → {@code assigns ghost_v;}) pode produzir DUAS
+     * cláusulas {@code assigns} no mesmo contrato quando a operação já tinha
+     * {@code assigns \nothing;} do lado real (ex.: {@code examples/Register}'s {@code add}, cuja
+     * variável abstrata {@code myset} não corresponde a nenhuma localização C concreta própria) —
+     * ACSL/WP rejeita {@code assigns \nothing;} misturado com uma localização real ("Mixing
+     * \nothing and a real location"). Remove {@code assigns \nothing;} quando o MESMO bloco {@code
+     * /*@ ... *&#47;} também tem outra cláusula {@code assigns} com uma localização real — a mais
+     * específica prevalece.
+     */
+    private static String dropRedundantAssignsNothingWhenRealLocationPresent(String content) {
+        List<AcsCommentSpan> spans = AcslCommentSpanScanner.findAllAcsCommentSpans(content);
+        if (spans.isEmpty()) {
+            return content;
+        }
+        StringBuilder out = new StringBuilder();
+        int cursor = 0;
+        for (AcsCommentSpan span : spans) {
+            out.append(content, cursor, span.start);
+            String text = span.text;
+            if (ASSIGNS_NOTHING_CLAUSE.matcher(text).find() && hasRealLocationAssigns(text)) {
+                text = ASSIGNS_NOTHING_CLAUSE.matcher(text).replaceFirst("");
+            }
+            out.append(text);
+            cursor = span.end;
+        }
+        out.append(content.substring(cursor));
+        return out.toString();
+    }
+
+    private static boolean hasRealLocationAssigns(String annotationText) {
+        Matcher m = ASSIGNS_ANY_CLAUSE.matcher(annotationText);
+        while (m.find()) {
+            if (!"\\nothing".equals(m.group(1).trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -950,6 +999,75 @@ public final class B2ACSLPipeline {
         Files.writeString(mergedC, merged, StandardCharsets.UTF_8);
     }
 
+    // Grupo 1 usa [^*]*(?:\*(?!/)[^*]*)* (mesmo truque "desenrolado" que
+    // ghostThenNormalBeforeDefinition já usa) em vez de "(.*?)" com DOTALL: "(.*?)" não tem
+    // barreira nenhuma contra atravessar o "*/" de FECHO deste bloco — se "void any_sub_spec__X("
+    // não for a PRIMEIRA ocorrência no ficheiro após ALGUM "/*@ ghost" anterior (ex.: o bloco
+    // ghost NORMAL de uma operação diferente, processado antes deste no mesmo ghost_operations.ci),
+    // o grupo "engolia" todos os blocos ghost intermédios (INITIALISATION/add/remove/…) — cada um
+    // dos SEUS ensures entrava depois em specsByOp, juntados com " && " (ver GHOST_BLOCK_ENSURES_LINE
+    // abaixo), corrompendo o marcador com o ensures de operações completamente alheias.
+    private static final Pattern GHOST_TWIN_MARKER_BLOCK =
+            Pattern.compile(
+                    "/\\*@\\s*ghost\\b([^*]*(?:\\*(?!/)[^*]*)*)\\bvoid\\s+"
+                            + Pattern.quote(AnySubMarkerSpec.MARKER_PREFIX)
+                            + "([A-Za-z_]\\w*)\\s*\\([^;{}]*\\)\\s*;\\s*\\*/");
+    private static final Pattern GHOST_BLOCK_ENSURES_LINE =
+            Pattern.compile("(?m)^\\s*@\\s*ensures\\s+(.+?)\\s*;\\s*$");
+
+    /**
+     * Troca cada chamada ao predicado nulário marcador (ver {@link AnySubMarkerSpec}) em {@code
+     * merged_code.c} pelo {@code ensures} da função ghost gêmea correspondente (ver {@code
+     * GhostOperationsCiGenerator}, que a regista logo a seguir à função ghost normal da operação
+     * sempre que o lado real precisa de um marcador) — lida diretamente de {@code
+     * ghost_operations.ci}, AINDA com {@code dummy_}/{@code DRelation<A,B>}. Passo novo pré-{@code
+     * -wp}, chamado ANTES de {@link #stripDummyPrefixFromMergedCode} (ver ordem em {@code
+     * FramaCRunner}): a MESMA limpeza global que já trata o resto do ficheiro processa esta cópia
+     * recém-inserida no mesmo passo, sem duplicar aqui a tradução {@code dummy_ -> real}. O
+     * mini-DSL {@code function X: contract:} do {@code .acsl} raiz rejeita esse tipo de cláusula
+     * diretamente (ver {@link AnySubMarkerSpec}), daí o marcador; o texto real (mesmo ainda
+     * dummy_-prefixado neste ponto) usa sintaxe ACSL padrão, aceite em {@code merged_code.c} já
+     * não no mini-DSL depois do {@code -acsl-import} ter reimpresso o ficheiro (ver {@code
+     * -print}) — por isso a troca só pode acontecer AQUI.
+     */
+    static void spliceAnySubMarkerSpecsFromGhostCi(Path mergedC, Path ghostCi) throws IOException {
+        if (!Files.isRegularFile(ghostCi)) {
+            return;
+        }
+        String ghostText = Files.readString(ghostCi, StandardCharsets.UTF_8);
+        Matcher bm = GHOST_TWIN_MARKER_BLOCK.matcher(ghostText);
+        Map<String, String> specsByOp = new LinkedHashMap<>();
+        while (bm.find()) {
+            String opSlug = bm.group(2);
+            List<String> ensuresLines = new ArrayList<>();
+            Matcher em = GHOST_BLOCK_ENSURES_LINE.matcher(bm.group(1));
+            while (em.find()) {
+                ensuresLines.add(em.group(1).trim());
+            }
+            if (!ensuresLines.isEmpty()) {
+                specsByOp.put(opSlug, String.join(" && ", ensuresLines));
+            }
+        }
+        if (specsByOp.isEmpty()) {
+            return;
+        }
+        String merged = Files.readString(mergedC, StandardCharsets.UTF_8);
+        boolean changed = false;
+        for (Map.Entry<String, String> e : specsByOp.entrySet()) {
+            String markerName = AnySubMarkerSpec.markerPredicateName(e.getKey());
+            Pattern ensuresMarker =
+                    Pattern.compile("ensures\\s+" + Pattern.quote(markerName) + "\\s*;");
+            Matcher m = ensuresMarker.matcher(merged);
+            if (m.find()) {
+                merged = m.replaceFirst(Matcher.quoteReplacement("ensures " + e.getValue() + ";"));
+                changed = true;
+            }
+        }
+        if (changed) {
+            Files.writeString(mergedC, merged, StandardCharsets.UTF_8);
+        }
+    }
+
     /**
      * Tratamento especial para {@code initialisation}: o Frama-C costuma colocar o contrato de
      * {@code Deck__INITIALISATION} no topo do ficheiro, separado da sua definição. Este método
@@ -1101,6 +1219,18 @@ public final class B2ACSLPipeline {
             String opSuffix = m.group(4);
 
             if (!pureGhostAssignsNothing.matcher(ghostBlock).find()) {
+                m.appendReplacement(sb, Matcher.quoteReplacement(m.group()));
+                continue;
+            }
+            // Cláusula \exists/\forall sobre tipo não-escalar (ex.: Registro__elements): já foi
+            // colocada no contrato normal por uma função ghost gêmea (ver
+            // com.example.AnySubMarkerSpec / GhostOperationsCiGenerator), trocada pelo marcador em
+            // B2ACSLPipeline#spliceAnySubMarkerSpecsFromGhostCi ANTES deste passo correr (ver ordem
+            // em FramaCRunner). Levantar este bloco TAMBÉM duplicaria a mesma especificação —
+            // mantém-se o bloco ghost como está (ainda necessário para a ponte "ghost <op>();" na
+            // definição da função), só sem o levantamento.
+            if (ghostEnsureLine.matcher(ghostBlock).results().anyMatch(
+                    r -> AnySubMarkerSpec.isNonScalarQuantifiedClause(r.group(1)))) {
                 m.appendReplacement(sb, Matcher.quoteReplacement(m.group()));
                 continue;
             }

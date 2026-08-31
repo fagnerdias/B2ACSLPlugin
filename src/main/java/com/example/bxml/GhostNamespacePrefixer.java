@@ -122,9 +122,11 @@ final class GhostNamespacePrefixer {
             "domain_restriction",
             "dummy_domain_restriction",
             "dummy_list_to_function",
-            "dummy_array_to_function",
+            "dummy_array_to_function_int",
+            "dummy_array_to_function_bool",
             "list_to_function",
-            "array_to_function");
+            "array_to_function_int",
+            "array_to_function_bool");
 
     /**
      * Reescreve {@code <relCall> == <relCall>} para {@code equals(<relCall>, <relCall>)} (set/relation
@@ -624,7 +626,12 @@ final class GhostNamespacePrefixer {
             if (len == null || len.isBlank()) continue;
             for (String out : outputs) {
                 if (!outputParamIsFunctionTyped(operation, out)) continue;
-                String wrapped = "dummy_array_to_function(" + out + ", " + len + ")";
+                // Sem prefixo dummy_ aqui: a 2ª chamada a prefixAcslLibFunctionsForGhost no fim
+                // de rewriteAnySubEnsureForGhost já prefixa QUALQUER símbolo conhecido da lib
+                // (incl. array_to_function_int/_bool) genericamente — adicioná-lo aqui também
+                // seria redundante.
+                String fnName = GhostDomainRestrictionRewriter.arrayToFunctionNameForDomain(domain);
+                String wrapped = fnName + "(" + out + ", " + len + ")";
                 String escOut = Pattern.quote(out);
                 String escQ = Pattern.quote(qName);
                 result =

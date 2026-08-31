@@ -379,7 +379,8 @@ public final class BxmlOperationsTranslator {
             // "loop variant (MAX_COPY - ii) + 1"), derivado ANTES da reescrita do assigns do
             // laço para funcTypedOutputs (que já consome este mesmo padrão por laço).
             FunctionTypedOutputHandling functionTypedHandling =
-                    finalizeFunctionTypedOutputHandling(requires, loops, funcTypedOutputs, outputParams);
+                    finalizeFunctionTypedOutputHandling(
+                            child, opCtx, requires, loops, funcTypedOutputs, outputParams);
             Map<String, String> functionTypedOutputBounds = functionTypedHandling.functionTypedOutputBounds();
             loops = functionTypedHandling.loops();
 
@@ -620,11 +621,45 @@ public final class BxmlOperationsTranslator {
                             ensures.get(ei), scalarCastParams));
         }
         removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
+        // Captura ANTES da substituição por marcador (abaixo): bodyEnsuresOnly alimenta a
+        // varredura de símbolos da lib para o lado ghost (appendLibScanGhostOperationBodies) — o
+        // ghost já reconstrói a sua própria versão (dummy_-prefixada) desta mesma cláusula a
+        // partir do MESMO nó AST, então perder os símbolos crus aqui não afeta a resolução ghost,
+        // mas preservar o texto original evita qualquer regressão nessa varredura auxiliar.
         List<String> bodyEnsuresOnly = new ArrayList<>(ensures);
+        replaceNonScalarQuantifiedClausesWithMarkers(ensures, child);
         for (String inv : invariantPredicateNames) {
             ensures.add(inv);
         }
         return new OperationEnsuresResult(ensures, bodyEnsuresOnly);
+    }
+
+    /**
+     * O mini-DSL {@code function X: contract:} do {@code .acsl} raiz não aceita um tipo definido
+     * pelo utilizador (ex.: {@code Function<A,B>}) como binder de {@code \exists}/{@code \forall}
+     * — só {@code integer}/{@code boolean}/{@code real} (confirmado empiricamente; ver {@link
+     * com.example.AnySubMarkerSpec}). Uma cláusula {@code ensures} assim (produzida por um {@code
+     * ANY_Sub} quantificando sobre uma variável função/relação, ex. {@code examples/Register}'s
+     * {@code elements}) é substituída por uma chamada a um predicado nulário marcador; o texto
+     * real é transportado via {@code ghost_operations.ci} (ver {@code
+     * GhostOperationsCiGenerator}'s {@code GhostOp.realAnySubSpecForMarker}) e trocado de volta em
+     * {@code merged_code.c} por {@code B2ACSLPipeline#resolveAnySubSpecMarkers}, ANTES do {@code
+     * -wp}. A declaração trivial do marcador é emitida por {@code
+     * AcslGenerator#appendPreambleAndConstantsBlocks} (varre {@code state.operations}/{@code
+     * state.init} por ocorrências do padrão, sem precisar de nenhum registo partilhado novo).
+     */
+    private static void replaceNonScalarQuantifiedClausesWithMarkers(
+            List<String> ensures, Element operation) {
+        if (ensures.isEmpty() || operation == null) {
+            return;
+        }
+        String opSlug = GhostContractPredicates.ghostOperationSlug(operation.getAttribute("name"));
+        for (int i = 0; i < ensures.size(); i++) {
+            String e = ensures.get(i);
+            if (com.example.AnySubMarkerSpec.isNonScalarQuantifiedClause(e)) {
+                ensures.set(i, com.example.AnySubMarkerSpec.markerCall(opSlug));
+            }
+        }
     }
 
     private static GhostSlugInfo computeGhostSlugInfo(
@@ -820,12 +855,25 @@ public final class BxmlOperationsTranslator {
     }
 
     private static FunctionTypedOutputHandling finalizeFunctionTypedOutputHandling(
+            Element operation,
+            BxmlTranslateContext ctx,
             List<String> requires,
             List<BxmlLoopTranslator.LoopContract> loops,
             Set<String> funcTypedOutputs,
             List<String> outputParams) {
         Map<String, String> functionTypedOutputBounds =
-                extractFunctionTypedOutputBounds(loops, funcTypedOutputs);
+                new LinkedHashMap<>(extractFunctionTypedOutputBounds(loops, funcTypedOutputs));
+        // Saída array-backed atribuída via ANY_Sub direto (ex.: "ee <-- elements = ANY xx WHERE
+        // xx:(0..maximum) --> NAT & ... THEN ee := xx END", examples/Register) — sem laço na
+        // implementação (o corpo é uma atribuição/memmove de bloco inteiro), o caminho acima
+        // nunca preenche o limite, e o requires/assigns cai no "p[..]" genérico (\valid(p) só
+        // cobre *p; assigns p[..] é "faixa não especificada", não 0..bound — bem menos preciso do
+        // que o WP consegue usar). Reaproveita a MESMA resolução de domínio/comprimento já usada
+        // do lado ghost (ver GhostNamespacePrefixer#wrapOutputArraysInEquals).
+        for (Map.Entry<String, String> e :
+                resolveAnySubFunctionTypedOutputBounds(operation, ctx, funcTypedOutputs).entrySet()) {
+            functionTypedOutputBounds.putIfAbsent(e.getKey(), e.getValue());
+        }
         for (String p : outputParams) {
             if (!funcTypedOutputs.contains(p)) {
                 continue;
@@ -840,6 +888,64 @@ public final class BxmlOperationsTranslator {
             loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
         }
         return new FunctionTypedOutputHandling(functionTypedOutputBounds, loops);
+    }
+
+    /**
+     * Limite (comprimento do array C) para cada saída array-backed atribuída diretamente por um
+     * {@code ANY_Sub} de topo (ex.: {@code THEN ee := xx END}, sem laço na implementação): {@code
+     * xx} tem de estar tipado no {@code WHERE} como função/relação total sobre um intervalo (ou
+     * produto cartesiano de intervalos — ver {@link
+     * GhostDomainRestrictionRewriter#arrayLengthAcslFromDomain}, já generalizado para domínios
+     * compostos/N-dimensionais), e {@code ee} tem de aparecer comparado a {@code xx} via {@code
+     * equals(ee, xx)}/{@code equals(xx, ee)} no texto {@code \exists} já traduzido — mesmo par
+     * (domínio, saída) que {@code GhostNamespacePrefixer#wrapOutputArraysInEquals} já identifica
+     * do lado ghost (aqui reaproveitado para o lado real, sem prefixo {@code dummy_}).
+     */
+    private static Map<String, String> resolveAnySubFunctionTypedOutputBounds(
+            Element operation, BxmlTranslateContext ctx, Set<String> funcTypedOutputs) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (operation == null || ctx == null || funcTypedOutputs.isEmpty()) {
+            return out;
+        }
+        Element body = BxmlDomUtils.firstChildElement(operation, "Body");
+        Element anySub = body == null ? null : BxmlInitialisationTranslator.findTopLevelAnySub(body);
+        if (anySub == null) {
+            return out;
+        }
+        Element vars = BxmlDomUtils.firstChildElement(anySub, "Variables");
+        Element predWrapper = BxmlDomUtils.firstChildElement(anySub, "Pred");
+        Element predRoot = predWrapper != null ? BxmlDomUtils.firstSubChild(predWrapper) : null;
+        if (vars == null || predRoot == null) {
+            return out;
+        }
+        String existsForm = BxmlInitialisationTranslator.translateAnySubAsExists(anySub, ctx);
+        if (existsForm == null || existsForm.isBlank()) {
+            return out;
+        }
+        for (Element v : BxmlDomUtils.directExpChildren(vars)) {
+            if (!"Id".equals(v.getLocalName())) continue;
+            String qName = v.getAttribute("value");
+            if (qName == null || qName.isBlank()) continue;
+            qName = qName.trim();
+            Element domain =
+                    GhostDomainRestrictionRewriter.partialFunctionDomainFromPreconditionInPred(
+                            predRoot, qName);
+            if (domain == null) continue;
+            String len = GhostDomainRestrictionRewriter.arrayLengthAcslFromDomain(domain, ctx, Set.of());
+            if (len == null || len.isBlank()) continue;
+            for (String p : funcTypedOutputs) {
+                if (out.containsKey(p)) continue;
+                if (existsForm.matches(
+                                "(?s).*\\bequals\\(\\s*" + Pattern.quote(p) + "\\s*,\\s*" + Pattern.quote(qName)
+                                        + "\\s*\\).*")
+                        || existsForm.matches(
+                                "(?s).*\\bequals\\(\\s*" + Pattern.quote(qName) + "\\s*,\\s*" + Pattern.quote(p)
+                                        + "\\s*\\).*")) {
+                    out.put(p, len);
+                }
+            }
+        }
+        return out;
     }
 
     private static boolean resolveSkipBody(Element body, Element implOp) {

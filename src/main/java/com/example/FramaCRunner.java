@@ -80,15 +80,24 @@ final class FramaCRunner {
     /**
      * Palavras que o próprio B2ACSL usa estruturalmente no formato intermédio {@code function X:
      * contract: requires …; ensures …;} passado ao {@code -acsl-import} (e nos blocos {@code
-     * axiomatic}/{@code ghost} gerados). Se o token reportado como erro de sintaxe for uma delas, a
-     * colisão não é curável por renomeação simples — renomear quebraria o próprio formato.
+     * axiomatic}/{@code ghost} gerados), MAIS os tipos genéricos fundamentais da B2ACSLLib
+     * ({@code Set}/{@code Tuple}/{@code Relation}/{@code Function} de {@code types.acsl} e os
+     * equivalentes {@code D}-prefixados do universo ghost isolado). Se o token reportado como erro
+     * de sintaxe for um destes, a colisão não é curável por renomeação simples: renomear uma
+     * palavra estrutural quebraria o próprio formato intermédio, e renomear um tipo da lib nunca
+     * corrige nada (o erro real é outro — ex. a gramática restrita de {@code \exists}/{@code
+     * \forall} dentro do bloco {@code function X: contract:} só aceita tipos escalares embutidos,
+     * nunca um identificador de tipo definido pelo utilizador, genérico ou não) — só produz
+     * ficheiros corrompidos após as 5 tentativas (ex.: {@code Function_b_b_b_b_b}), mascarando a
+     * mensagem de erro original do Frama-C que apontava a causa real.
      */
     private static final Set<String> PROTECTED_ACSL_STRUCTURAL_WORDS =
             Set.of(
                     "requires", "ensures", "assigns", "contract", "function", "at", "assert",
                     "ghost", "loop", "invariant", "variant", "axiom", "axiomatic", "predicate",
                     "logic", "type", "include", "behavior", "reads", "admit", "lemma", "assumes",
-                    "return");
+                    "return",
+                    "Set", "Tuple", "Relation", "Function", "DSet", "DTuple", "DRelation");
 
     /** Casa {@code [acsl-import] ficheiro:linha: User Error: [Syntax error] <token>.} no output do Frama-C. */
     private static final Pattern ACSL_IMPORT_SYNTAX_ERROR_TOKEN =
@@ -382,6 +391,12 @@ final class FramaCRunner {
             return importExitCode;
         }
 
+        // Troca marcadores \exists/\forall não-escalares (ver AnySubMarkerSpec) pelo ensures da
+        // função ghost gêmea correspondente, lido diretamente de ghost_operations.ci — ANTES de
+        // stripDummyPrefixFromMergedCode (abaixo), para que a MESMA limpeza global (dummy_ ->
+        // real, incl. DRelation<A,B> -> Relation<A,B>) trate esta cópia recém-inserida no mesmo
+        // passo, sem duplicar aqui a tradução.
+        B2ACSLPipeline.spliceAnySubMarkerSpecsFromGhostCi(mergedCode, ghostCi);
         MergedCodeStructuralPlacement.stripLeadingFramaCNonCOutput(mergedCode);
         B2ACSLPipeline.removeGhostPatternAxiomaticBlocks(mergedCode);
         B2ACSLPipeline.stripDummyPrefixFromMergedCode(mergedCode);
