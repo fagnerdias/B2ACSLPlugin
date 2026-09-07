@@ -14,7 +14,6 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-import com.example.bxml.CartesianProductLoopSpecDetector.CartesianProductLoopSpec;
 
 /**
  * Traduz a cláusula {@code <Initialisation>} (BXML 1.0) para contratos ACSL, usando funções da
@@ -85,7 +84,7 @@ public final class BxmlInitialisationTranslator {
         if (src.initSource() != null) {
             walkSubstitution(BxmlDomUtils.firstSubChild(src.initSource()), ensures, ctx);
         }
-        List<CartesianProductLoopSpec> loopSpecs = (src.initSource() != null)
+        List<CartesianProductLoopSpecDetector.LoopInitSpec> loopSpecs = (src.initSource() != null)
                 ? CartesianProductLoopSpecDetector.detectAllLoopSpecs(
                         BxmlDomUtils.firstSubChild(src.initSource()), src.initOwnerMachine(), ctx, bxmlDirectory)
                 : List.of();
