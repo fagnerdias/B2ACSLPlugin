@@ -416,6 +416,16 @@ public final class GhostOperationsCiGenerator {
                 if (anySub != null) {
                     String existsForm = BxmlInitialisationTranslator.translateAnySubAsExists(anySub, ctx);
                     if (existsForm == null || existsForm.isBlank()) continue;
+                    // Antes da reescrita abaixo (que só troca dummy_/DRelation, a FORMA continua
+                    // "\exists <Tipo> v; ..."): se o lado REAL (não-ghost) precisar de um marcador
+                    // para esta cláusula (binder não-escalar, rejeitado pelo mini-DSL "function X:
+                    // contract:" do .acsl raiz — ver com.example.AnySubMarkerSpec), regista-se
+                    // abaixo uma SEGUNDA função ghost "gêmea" (mesmo ensures, nome diferente) só
+                    // para a carregar — B2ACSLPipeline#spliceAnySubMarkerSpecsFromGhostCi troca o
+                    // marcador por ela ANTES da remoção do prefixo dummy_, para o mesmo passo
+                    // global de limpeza (stripDummyPrefixFromMergedCode) tratar as duas cópias
+                    // (a original e a gêmea) de uma só vez.
+                    boolean needsMarker = com.example.AnySubMarkerSpec.isNonScalarQuantifiedClause(existsForm);
                     List<Param> params =
                             GhostParamTypeResolver.appendOutputParametersAsPointers(GhostParamTypeResolver.listInputParameters(op), op, false);
                     existsForm =
@@ -424,12 +434,16 @@ public final class GhostOperationsCiGenerator {
                                     abstractConstParams);
                     existsForm = rewriteBoolOutputPredicateTernary(existsForm);
                     existsForm = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(existsForm, params);
-                    ops.add(
-                            new GhostOp(
-                                    GhostParamTypeResolver.sanitizeGhostFunctionName(opName),
-                                    params,
-                                    assigned,
-                                    List.of(existsForm)));
+                    String opSlug = GhostParamTypeResolver.sanitizeGhostFunctionName(opName);
+                    ops.add(new GhostOp(opSlug, params, assigned, List.of(existsForm)));
+                    if (needsMarker) {
+                        ops.add(
+                                new GhostOp(
+                                        com.example.AnySubMarkerSpec.markerPredicateName(opSlug),
+                                        params,
+                                        Set.of(),
+                                        List.of(existsForm)));
+                    }
                     continue;
                 }
 
@@ -1180,9 +1194,13 @@ public final class GhostOperationsCiGenerator {
             out = out.replace(dummySet, stripped.contains("set_comprehension") ? rest : stripped);
         }
         out = out.replace("dummy_", "");
-        // DSet<A>/DTuple<A,B> → Set<A>/Tuple<A,B> no contexto do merged_code.c
+        // DSet<A>/DTuple<A,B>/DRelation<A,B> → Set<A>/Tuple<A,B>/Relation<A,B> no contexto do
+        // merged_code.c: o bloco "axiomatic dummy_ghost" que declara os D-prefixados já foi
+        // removido (ver B2ACSLPipeline#removeGhostPatternAxiomaticBlocks); os equivalentes reais
+        // (Set/Tuple/Relation) continuam declarados via types.acsl.
         out = out.replaceAll("\\bDSet<", "Set<");
         out = out.replaceAll("\\bDTuple<", "Tuple<");
+        out = out.replaceAll("\\bDRelation<", "Relation<");
         return out;
     }
 

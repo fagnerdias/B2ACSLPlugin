@@ -213,7 +213,10 @@ final class GhostDomainRestrictionRewriter {
         if (len == null || len.isBlank()) {
             return null;
         }
-        return "domain_restriction(dummy_array_to_function("
+        String fnName =
+                arrayToFunctionNameForDomain(
+                        partialFunctionDomainFromPrecondition(operation, relationParam));
+        return "domain_restriction(dummy_" + fnName + "("
                 + relationParam
                 + ", "
                 + len
@@ -265,8 +268,10 @@ final class GhostDomainRestrictionRewriter {
         if (!isPointerGhostParam(params, firstArg)) return null;
         String len = inferPartialFunctionDomainLengthAcsl(operation, firstArg, ctx, concreteConstantNames);
         if (len == null || len.isBlank()) return null;
+        String fnName =
+                arrayToFunctionNameForDomain(partialFunctionDomainFromPrecondition(operation, firstArg));
         String domainArg = t.substring(comma1 + 1, close).trim();
-        return "domain_restriction(dummy_array_to_function("
+        return "domain_restriction(dummy_" + fnName + "("
                 + firstArg + ", " + len + "), "
                 + domainArg
                 + ") == dummy_list_to_function(\\old(dummy_" + seqVar + "))";
@@ -283,6 +288,29 @@ final class GhostDomainRestrictionRewriter {
             }
         }
         return false;
+    }
+
+    /**
+     * Nome da função {@code array_to_function_*} correto para o codomínio da seta B pai de
+     * {@code domain} (elemento retornado por {@link #partialFunctionDomainFromPrecondition}):
+     * {@code array_to_function_bool} para codomínio {@code BOOL}, senão {@code array_to_function_int}
+     * — mesmo critério do lado real ({@code BxmlOperationsTranslator#arrowCodomainIsBool} /
+     * {@code BxmlMachineVariables#arrowCodomainIsBool}). Sem isto o lado ghost emitia sempre o nome
+     * sem sufixo {@code array_to_function}, que não existe na B2ACSLLib (só {@code
+     * array_to_function_int}/{@code array_to_function_bool}), e o front-end isolado do {@code .ci}
+     * rejeitava com "unbound logic function".
+     */
+    static String arrayToFunctionNameForDomain(Element domain) {
+        Node parent = domain == null ? null : domain.getParentNode();
+        if (parent instanceof Element arrow) {
+            Element codomain = BxmlExpressionToAcsl.twoDirectExpChildren(arrow)[1];
+            if (codomain != null
+                    && "Id".equals(codomain.getLocalName())
+                    && "BOOL".equals(codomain.getAttribute("value"))) {
+                return "array_to_function_bool";
+            }
+        }
+        return "array_to_function_int";
     }
 
     /**
@@ -376,8 +404,23 @@ final class GhostDomainRestrictionRewriter {
         return null;
     }
 
+    /**
+     * Comprimento ACSL do array C que representa {@code domain} (domínio de uma função/relação B
+     * total sobre um intervalo, ex. {@code array_to_function_int(p, len)}). {@code domain} pode ser
+     * um domínio COMPOSTO (produto cartesiano de N&gt;=2 intervalos, ex. {@code (0..maximum)*(0..
+     * outro)} — uma "matriz" B, sem tipo array nativo) — o array C continua achatado em UMA única
+     * dimensão (mesma convenção já usada por {@link #arrayToFunctionNameForDomain} e pelo caminho
+     * baseado em laço, ver {@code BxmlOperationsTranslator#extractFunctionTypedOutputBounds}), então
+     * o comprimento total é o PRODUTO das cardinalidades de cada fator, recursivamente (associa à
+     * esquerda, como o próprio B), não colchetes aninhados {@code p[0..N][0..M]}.
+     */
     static String arrayLengthAcslFromDomain(
             Element domain, BxmlTranslateContext ctx, Set<String> concreteConstantNames) {
+        String raw = rawArrayLengthExprFromDomain(domain, ctx);
+        return raw == null ? null : GhostOperationsCiGenerator.ghostDummyConcreteRefs(raw, concreteConstantNames);
+    }
+
+    private static String rawArrayLengthExprFromDomain(Element domain, BxmlTranslateContext ctx) {
         if (domain == null || ctx == null) {
             return null;
         }
@@ -388,13 +431,20 @@ final class GhostDomainRestrictionRewriter {
             }
             String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
             String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
-            String raw;
             if ("0".equals(low)) {
-                raw = high;
-            } else {
-                raw = "(" + high + " - (" + low + ") + 1)";
+                return high;
             }
-            return GhostOperationsCiGenerator.ghostDummyConcreteRefs(raw, concreteConstantNames);
+            return "(" + high + " - (" + low + ") + 1)";
+        }
+        if ("Binary_Exp".equals(domain.getLocalName())
+                && BxmlExpressionToAcsl.isCartesianProduct(domain.getAttribute("op"))) {
+            Element[] factors = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
+            String left = rawArrayLengthExprFromDomain(factors[0], ctx);
+            String right = rawArrayLengthExprFromDomain(factors[1], ctx);
+            if (left == null || right == null) {
+                return null;
+            }
+            return "(" + left + ") * (" + right + ")";
         }
         return null;
     }

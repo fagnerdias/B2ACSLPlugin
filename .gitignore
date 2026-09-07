@@ -28,3 +28,11 @@ replay_pid*
 
 # Arquivo de plugin (Atelier B / ETool)
 plugin.etool
+
+# SonarQube (análise local via "mvn sonar:sonar")
+.scannerwork/
+.sonar/
+
+docs/*
+
+examples/

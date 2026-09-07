@@ -502,66 +502,56 @@ public final class ConcreteAssignTargetResolver {
             // Domínio composto (matriz característica 2D, ex. player_islands_i : PLAYER*ISLAND -->
             // BOOL, ver implementationRhsTotalFunctionFromArray) — "assigns X[..];" é sintaxe de UMA
             // dimensão só; para um array C genuinamente 2D o kernel rejeita com "not an assignable
-            // left value" (não infere a segunda dimensão implicitamente). "[..][..]" (ambas as
-            // dimensões por extenso) é o análogo direto do "[..]" de 1D já usado abaixo — mesma
-            // equivalência WP já confirmada para arrays de tamanho fixo (ver
-            // project_assigns_range_seen_machine), só precisa de UM "[..]" por dimensão.
-            return baseTarget + "[..][..]";
+            // left value" (não infere a segunda dimensão implicitamente). Resolve a faixa de CADA
+            // fator separadamente (mesmo resolvedor 1D abaixo, reaproveitado por dimensão) — só cai
+            // para "[..][..]" (faixa não especificada, correto mas menos preciso para o WP) quando
+            // algum dos dois fatores não tem faixa conhecida (ex. conjunto diferido sem valoração
+            // alcançável).
+            Element[] factors = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
+            String range1 = rangeForDomainElement(factors[0], implMachineEl, ctx, bxmlDirectory);
+            String range2 = rangeForDomainElement(factors[1], implMachineEl, ctx, bxmlDirectory);
+            if (range1 == null || range1.isBlank() || range2 == null || range2.isBlank()) {
+                return baseTarget + "[..][..]";
+            }
+            return baseTarget + "[" + range1 + "][" + range2 + "]";
         }
-        String range = arrayDomainRangeAcsl(arrow, ctx);
-        if (range == null || range.isBlank()) {
-            // Domínio é um conjunto nomeado (Id) — tenta resolver via <Values> da implementação
-            // (ou, se ausente, das máquinas VISTAS — ver resolveNamedSetDomainRange).
-            range = resolveNamedSetDomainRange(arrow, implMachineEl, ctx, bxmlDirectory);
-        }
+        String range = rangeForDomainElement(domain, implMachineEl, ctx, bxmlDirectory);
         if (range == null || range.isBlank()) {
             return baseTarget + "[..]";
         }
         return baseTarget + "[" + range + "]";
     }
 
-    /** Intervalo do domínio de {@code -->} (ex. {@code 0..maximum} -> {@code 0 .. maximum}). */
-    private static String arrayDomainRangeAcsl(Element arrowEl, BxmlTranslateContext ctx) {
-        if (arrowEl == null || ctx == null) {
-            return null;
-        }
-        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
-        if (domRng[0] == null) {
-            return null;
-        }
-        Element domain = domRng[0];
-        if (!BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
-            return null;
-        }
-        Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
-        if (lr[0] == null || lr[1] == null) {
-            return null;
-        }
-        String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
-        String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
-        if (low.isBlank() || high.isBlank()) {
-            return null;
-        }
-        return low + " .. " + high;
-    }
-
     /**
-     * Quando o domínio da seta {@code -->} é um conjunto nomeado (elemento {@code Id}),
-     * procura a sua valoração na secção {@code <Values>} da máquina de implementação e,
-     * se for um intervalo literal ({@code Binary_Exp op='..'}), retorna {@code "low .. high"}.
-     * Quando o conjunto nomeado não está valorado na própria {@code implMachineEl} (ex.
-     * {@code GOODS} visto por {@code Price}/{@code Price_i} mas valorado em {@code Goods_i}),
-     * procura também nas máquinas VISTAS (SEES) — mesmo problema e mesma solução de
-     * {@link #lookupSetCardinalityFromValues(String, Element, BxmlTranslateContext, Path)}, mas
-     * devolvendo o intervalo {@code "low .. high"} em vez da cardinalidade.
+     * Faixa ACSL ({@code "low .. high"}) de UM domínio de array — intervalo literal ({@code
+     * Binary_Exp op='..'}), ou conjunto nomeado ({@code Id}) resolvido via {@code <Values>} da
+     * implementação (ou, se ausente, das máquinas VISTAS — {@code GOODS} valorado em {@code
+     * Goods_i} mas visto por {@code Price_i}, mesmo problema/solução de {@link
+     * BxmlMachineVariables#lookupSetCardinalityFromValues}). Reaproveitado tanto para o domínio
+     * INTEIRO de um {@code -->} escalar quanto para CADA fator, separadamente, de um domínio
+     * composto {@code A*B --> C} (matriz característica 2D, ver {@link
+     * #implementationAssignTargetWithRange}).
      */
-    private static String resolveNamedSetDomainRange(
-            Element arrowEl, Element implMachineEl, BxmlTranslateContext ctx, Path bxmlDirectory) {
-        if (arrowEl == null || implMachineEl == null || ctx == null) return null;
-        Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(arrowEl);
-        if (domRng[0] == null) return null;
-        Element domain = domRng[0];
-        if (!"Id".equals(domain.getLocalName())) return null;
+    private static String rangeForDomainElement(
+            Element domain, Element implMachineEl, BxmlTranslateContext ctx, Path bxmlDirectory) {
+        if (domain == null || ctx == null) {
+            return null;
+        }
+        if (BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
+            Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
+            if (lr[0] == null || lr[1] == null) {
+                return null;
+            }
+            String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
+            String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
+            if (low.isBlank() || high.isBlank()) {
+                return null;
+            }
+            return low + " .. " + high;
+        }
+        if (!"Id".equals(domain.getLocalName()) || implMachineEl == null) {
+            return null;
+        }
         String setName = domain.getAttribute("value");
         if (setName == null || setName.isBlank()) return null;
 

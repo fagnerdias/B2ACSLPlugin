@@ -2,7 +2,7 @@
   "_meta": {
     "generator": "scripts/generate_acsl_symbol_dependency_map.py",
     "root": "src/main/resources/lib/B2ACSLLib",
-    "symbol_count": 80
+    "symbol_count": 81
   },
   "symbols": [
     "apply",
@@ -46,6 +46,7 @@
     "is_injective",
     "is_partial_function",
     "is_pow_of",
+    "is_relation",
     "is_seq_of",
     "is_sequence",
     "is_surjective",
@@ -128,6 +129,7 @@
     "is_injective": "function_functions/is_injective.acsl",
     "is_partial_function": "function_functions/is_partial.acsl",
     "is_pow_of": "set_functions/pow.acsl",
+    "is_relation": "relation_functions/is_relation.acsl",
     "is_seq_of": "sequence_functions/is_seq_of.acsl",
     "is_sequence": "sequence_functions/is_sequence.acsl",
     "is_surjective": "function_functions/is_surjective.acsl",
@@ -294,6 +296,9 @@
     ],
     "is_pow_of": [
       "set_functions/pow.acsl"
+    ],
+    "is_relation": [
+      "relation_functions/is_relation.acsl"
     ],
     "is_seq_of": [
       "sequence_functions/is_seq_of.acsl"
@@ -714,6 +719,20 @@
       "inclusion",
       "not_belongs"
     ],
+    "is_relation": [
+      "belongs",
+      "card",
+      "cartesian_product",
+      "couple",
+      "empty",
+      "equals",
+      "inclusion",
+      "is_finite",
+      "not_belongs",
+      "set_intersection",
+      "set_union",
+      "singleton"
+    ],
     "is_seq_of": [
       "belongs"
     ],
@@ -1123,6 +1142,7 @@
       "relation_functions/domain.acsl",
       "relation_functions/domain_restriction.acsl",
       "relation_functions/inverse.acsl",
+      "relation_functions/is_relation.acsl",
       "relation_functions/range.acsl",
       "relation_functions/range_restriction.acsl",
       "relation_functions/singleton.acsl",
@@ -1267,6 +1287,10 @@
     ],
     "relation_functions/inverse.acsl": [
       "relation_axioms/relation_inverse.acsl"
+    ],
+    "relation_functions/is_relation.acsl": [
+      "set_functions/cartesian_product.acsl",
+      "set_functions/inclusion.acsl"
     ],
     "relation_functions/iterate.acsl": [
       "relation_axioms/relation_iterate.acsl"

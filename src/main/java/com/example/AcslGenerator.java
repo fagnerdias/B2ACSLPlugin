@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -691,6 +693,53 @@ public final class AcslGenerator {
                                 machineEl, baseName, ctx.variableLogicTypes())
                         : "";
         appendBlockWithSpacing(sb, ghostPatternsBlock);
+        appendAnySubMarkerDeclarations(state);
+    }
+
+    private static final Pattern ANY_SUB_MARKER_CALL = Pattern.compile("\\bany_sub_spec__\\w+\\b");
+
+    /**
+     * Declara os predicados nulários marcadores (ver {@link AnySubMarkerSpec}) já embutidos nas
+     * cláusulas ensures de {@code state.operations}/{@code state.init} por {@code
+     * BxmlOperationsTranslator#replaceNonScalarQuantifiedClausesWithMarkers} — varre o texto JÁ
+     * GERADO por padrão de nome (nenhum registo partilhado novo é necessário, ao contrário de
+     * {@code SigmaFunctionRegistry}/{@code UnionInterFunctionRegistry}: {@code state.operations}/
+     * {@code state.init} já estão totalmente construídos nesta altura, ver {@code
+     * prepareGenerationState} vs. {@code appendAcslBody}). {@code B2ACSLPipeline
+     * #resolveAnySubSpecMarkers} troca cada chamada pelo texto real, lido de {@code
+     * ghost_operations.ci}, em {@code merged_code.c} — ANTES do {@code -wp} — pelo que esta
+     * declaração trivial (sem corpo) nunca chega a ser verificada como tal.
+     */
+    private static void appendAnySubMarkerDeclarations(AcslGenerationState state) {
+        LinkedHashSet<String> markers = new LinkedHashSet<>();
+        if (state.init != null) {
+            collectAnySubMarkers(state.init.ensures(), markers);
+        }
+        for (OperationAcsl op : state.operations) {
+            collectAnySubMarkers(op.ensures(), markers);
+        }
+        if (markers.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = state.sb;
+        sb.append("axiomatic ").append(state.baseName).append("_any_sub_markers {\n\n");
+        for (String marker : markers) {
+            sb.append("    predicate ").append(marker).append(";\n\n");
+        }
+        sb.append("}\n\n");
+    }
+
+    private static void collectAnySubMarkers(List<String> clauses, Set<String> out) {
+        if (clauses == null) {
+            return;
+        }
+        for (String c : clauses) {
+            if (c == null) continue;
+            Matcher m = ANY_SUB_MARKER_CALL.matcher(c);
+            while (m.find()) {
+                out.add(m.group());
+            }
+        }
     }
 
     /**
