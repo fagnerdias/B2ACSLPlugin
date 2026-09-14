@@ -91,15 +91,125 @@ final class GeneralizedQuantifierTranslator {
         Element bodyExp = BxmlExpressionToAcsl.firstExpChild(bodyEl);
         if (bodyExp == null) return "/* TODO: lambda body */";
 
-        // 4. Classificação: sequência (caso a/b) vs mapa (caso c) — ver javadoc.
+        // 4. Classificação: sequência (caso a/b) vs mapa (caso c) — ver javadoc. Domínio-intervalo
+        // por si só não basta: se o alvo (Id do lado esquerdo de "Id = %...") tiver uma tipagem B
+        // EXPLÍCITA não-sequência (ex. "-->"/"+->", não "seq"/"iseq"/"perm") em Properties/Invariant,
+        // não é uma sequência B — usa-se o modelo de mapa mesmo assim (ver targetIsExplicitlySequenceTyped).
         String[] intervalBounds = boundVarNames.size() == 1
                 ? intervalDomainBounds(guardPred, boundVarNames.get(0), ctx)
                 : null;
-        if (intervalBounds != null) {
+        if (intervalBounds != null && !Boolean.FALSE.equals(targetIsExplicitlySequenceTyped(qe))) {
             return translateSequenceBuilderLambda(
                     boundVarNames.get(0), intervalBounds[0], intervalBounds[1], bodyExp, guardPred, ctx);
         }
         return translateMapLambda(boundVarNames, guardPred, bodyExp, ctx);
+    }
+
+    /**
+     * Nomes das variáveis ligadas de {@code quantifiedExp} (filho {@code Variables}), ignorando
+     * nós {@code Attr}.
+     */
+    private static List<Element> lambdaBoundVarIdElements(Element quantifiedExp) {
+        Element varsEl = BxmlExpressionToAcsl.childByLocalName(quantifiedExp, "Variables");
+        List<Element> ids = new ArrayList<>();
+        if (varsEl == null) return ids;
+        NodeList nl = varsEl.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element idEl = (Element) n;
+            if ("Attr".equals(idEl.getLocalName()) || !"Id".equals(idEl.getLocalName())) continue;
+            ids.add(idEl);
+        }
+        return ids;
+    }
+
+    /**
+     * Se {@code quantifiedExp} for o lado direito de uma igualdade {@code Id = %x.(...)} (ex.
+     * PROPERTIES {@code const_sum = %xx.(...)}), procura no bloco de tipagem ancestral
+     * ({@code Properties}/{@code Invariant}) uma predicate {@code Id : seq(...)/iseq(...)/perm(...)}
+     * para o MESMO Id — se encontrar uma tipagem alternativa (ex. {@code -->}/{@code +->}) para o
+     * mesmo Id, devolve {@code false} (não é sequência B: usar o modelo de mapa mesmo com
+     * domínio-intervalo); se encontrar {@code seq}/{@code iseq}/{@code perm}, devolve {@code true};
+     * se não encontrar NENHUMA tipagem explícita para o Id (ex. variável local não tipada, como o
+     * {@code aseq} de RobustFifo dentro de {@code #aseq.(...)}), devolve {@code null} (sem
+     * informação — mantém a heurística de domínio-intervalo já existente).
+     */
+    private static Boolean targetIsExplicitlySequenceTyped(Element quantifiedExp) {
+        Node parent = quantifiedExp.getParentNode();
+        if (!(parent instanceof Element parentEl)
+                || !"Exp_Comparison".equals(parentEl.getLocalName())
+                || !"=".equals(parentEl.getAttribute("op"))) {
+            return null;
+        }
+        Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(parentEl);
+        if (pair[0] == null || pair[1] == null) return null;
+        Element otherEl = pair[0] == quantifiedExp ? pair[1] : pair[0];
+        if (!"Id".equals(otherEl.getLocalName())) return null;
+        String targetName = otherEl.getAttribute("value");
+        if (targetName == null || targetName.isBlank()) return null;
+
+        Element typingScope = enclosingTypingScope(parentEl);
+        if (typingScope == null) return null;
+        return findExplicitTypingKind(typingScope, targetName);
+    }
+
+    /** Sobe a partir de {@code e} até {@code Properties} ou {@code Invariant}, ou {@code null}. */
+    private static Element enclosingTypingScope(Element e) {
+        Node n = e.getParentNode();
+        while (n instanceof Element el) {
+            String ln = el.getLocalName();
+            if ("Properties".equals(ln) || "Invariant".equals(ln)) return el;
+            n = el.getParentNode();
+        }
+        return null;
+    }
+
+    /**
+     * Varre {@code scope} por {@code Exp_Comparison op=':'} com {@code targetName} do lado
+     * esquerdo, devolvendo se o tipo do lado direito é sequência ({@link
+     * BxmlMachineVariables#isSequenceTypingOp}). {@code null} se {@code targetName} não for
+     * tipado em nenhum lugar de {@code scope}.
+     */
+    private static Boolean findExplicitTypingKind(Node scope, String targetName) {
+        if (scope.getNodeType() == Node.ELEMENT_NODE) {
+            Element el = (Element) scope;
+            if ("Exp_Comparison".equals(el.getLocalName()) && ":".equals(el.getAttribute("op"))) {
+                Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(el);
+                if (pair[0] != null && pair[1] != null
+                        && "Id".equals(pair[0].getLocalName())
+                        && targetName.equals(pair[0].getAttribute("value"))) {
+                    return BxmlMachineVariables.isSequenceTypingOp(pair[1]);
+                }
+            }
+        }
+        NodeList nl = scope.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node child = nl.item(i);
+            if (child.getNodeType() != Node.ELEMENT_NODE) continue;
+            Boolean r = findExplicitTypingKind(child, targetName);
+            if (r != null) return r;
+        }
+        return null;
+    }
+
+    /**
+     * {@code true} se {@code lambdaEl} (Quantified_Exp type='%') NÃO for traduzido pelo modelo de
+     * sequência — replica a condição de {@link #translateQuantifiedExp} para decidir se a
+     * igualdade {@code V = %x.(...)} precisa do envolvimento pontual de {@link
+     * #mapModelLambdaPointwiseEquality} (só o modelo de mapa produz uma função parametrizada por
+     * x que precisa desse {@code \forall}; o modelo de sequência produz um {@code \list} já
+     * correto sem envolvimento).
+     */
+    private static boolean isMapModelLambda(Element lambdaEl, BxmlTranslateContext ctx) {
+        List<Element> boundVarIds = lambdaBoundVarIdElements(lambdaEl);
+        if (boundVarIds.size() != 1) return true;
+        Element guardEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Pred");
+        Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
+        String[] intervalBounds =
+                intervalDomainBounds(guardPred, boundVarIds.get(0).getAttribute("value"), ctx);
+        if (intervalBounds == null) return true;
+        return Boolean.FALSE.equals(targetIsExplicitlySequenceTyped(lambdaEl));
     }
 
     /**
@@ -878,39 +988,37 @@ final class GeneralizedQuantifierTranslator {
     }
 
     /**
-     * {@code V = %x.(x:D | {y|Q})} — lambda "mapa" valorado-em-conjunto (ver {@link
-     * #translateMapLambda}). Uma igualdade nua {@code V == lambda_funcNN(x)} não faz sentido: {@code
-     * V} é a RELAÇÃO INTEIRA, {@code lambda_funcNN(x)} é só o valor NUM ponto {@code x} — a relação
-     * correta é pontual, restrita ao domínio {@code D}:
-     * {@code \forall Tx x; D ==> equals(function_apply(V,x), lambda_funcNN(x))}. Devolve {@code
-     * null} se {@code lambdaEl} não tiver exatamente esta forma (chamador cai no caminho genérico —
-     * ex. lambda "mapa" escalar comum, já correto sem este envolvimento).
+     * {@code V = %x.(x:D | E)} traduzido pelo MODELO DE MAPA (ver {@link #translateMapLambda} /
+     * {@link #isMapModelLambda}) — tanto corpo valorado-em-conjunto ({@code E = {y|Q}}) quanto
+     * corpo escalar (ex. {@code E} inteiro). Uma igualdade nua {@code V == lambda_funcNN(x)} não
+     * faz sentido: {@code V} é a RELAÇÃO/FUNÇÃO INTEIRA, {@code lambda_funcNN(x)} é só o valor NUM
+     * ponto {@code x} (que fica livre, sem nada que o ligue) — a relação correta é pontual,
+     * restrita ao domínio {@code D}: {@code \forall Tx x; D ==> equals(function_apply(V,x),
+     * lambda_funcNN(x))} (corpo valorado-em-conjunto) ou {@code \forall Tx x; D ==>
+     * function_apply(V,x) == lambda_funcNN(x)} (corpo escalar). Devolve {@code null} se {@code
+     * lambdaEl} não tiver esta forma, se o corpo for booleano (predicado, tratado à parte — ver
+     * {@link BxmlConstantsAndProperties}), ou se a classificação escolher o modelo de sequência
+     * (ver {@link #isMapModelLambda}) — nesse caso o chamador cai no caminho genérico ({@code
+     * \list}, já correto sem este envolvimento).
      */
     static String setValuedMapLambdaPointwiseEquality(
             Element varEl, Element lambdaEl, BxmlTranslateContext ctx) {
         if (!"Quantified_Exp".equals(lambdaEl.getLocalName()) || !"%".equals(lambdaEl.getAttribute("type"))) {
             return null;
         }
-        Element varsEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Variables");
-        Element boundIdEl = null;
-        int boundCount = 0;
-        if (varsEl != null) {
-            NodeList nl = varsEl.getChildNodes();
-            for (int i = 0; i < nl.getLength(); i++) {
-                Node n = nl.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element idEl = (Element) n;
-                if (!"Id".equals(idEl.getLocalName())) continue;
-                boundCount++;
-                boundIdEl = idEl;
-            }
-        }
-        if (boundCount != 1) return null; // só a forma de 1 variável ligada, por agora
+        List<Element> boundVarIds = lambdaBoundVarIdElements(lambdaEl);
+        if (boundVarIds.size() != 1) return null; // só a forma de 1 variável ligada, por agora
+        Element boundIdEl = boundVarIds.get(0);
         Element bodyEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Body");
         Element bodyExp = bodyEl != null ? BxmlExpressionToAcsl.firstExpChild(bodyEl) : null;
-        if (bodyExp == null || !"Quantified_Set".equals(bodyExp.getLocalName())) {
+        if (bodyExp == null || "Boolean_Exp".equals(bodyExp.getLocalName())) {
             return null;
         }
+        if (!isMapModelLambda(lambdaEl, ctx)) {
+            return null; // modelo de sequência escolhido — \list, sem necessidade de envolvimento
+        }
+        boolean isSetValuedBody = "Quantified_Set".equals(bodyExp.getLocalName());
+
         Element guardEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Pred");
         Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
 
@@ -925,8 +1033,10 @@ final class GeneralizedQuantifierTranslator {
         String lambdaCall = BxmlExpressionToAcsl.translate(lambdaEl, ctx);
         String guardStr = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx) : "\\true";
 
-        return "(\\forall " + acslT + " " + boundVar + "; (" + guardStr + ") ==> "
-                + "equals(function_apply(" + varStr + ", " + boundVar + "), " + lambdaCall + "))";
+        String pointwiseComparison = isSetValuedBody
+                ? "equals(function_apply(" + varStr + ", " + boundVar + "), " + lambdaCall + ")"
+                : "(function_apply(" + varStr + ", " + boundVar + ") == " + lambdaCall + ")";
+        return "(\\forall " + acslT + " " + boundVar + "; (" + guardStr + ") ==> " + pointwiseComparison + ")";
     }
 
     /** Substitui {@code name} por {@code replacement} em {@code text}, por fronteira de palavra. */
@@ -936,17 +1046,55 @@ final class GeneralizedQuantifierTranslator {
                 java.util.regex.Matcher.quoteReplacement(replacement));
     }
 
-    /** Recolhe recursivamente todos os valores {@code value} de nós {@code Id}. */
+    /**
+     * Recolhe recursivamente todos os valores {@code value} de nós {@code Id} que não estejam
+     * ligados por um quantificador ANINHADO (SIGMA/PI/MIN/MAX/UNION/INTER/{@code %}/{@code !}/
+     * {@code #}) dentro da própria subárvore — ex. em {@code SIGMA vv.(vv:0..10|vv*xx)}, {@code
+     * vv} é ligada pelo próprio SIGMA e nunca deve ser reportada como "livre" (só {@code xx} é
+     * genuinamente livre ali). Sem isto, variáveis ligadas por um quantificador interno vazam
+     * como parâmetros espúrios da função gerada para o quantificador externo.
+     */
     private static void collectIdValues(Element e, java.util.Set<String> out) {
-        if ("Id".equals(e.getLocalName())) {
+        collectIdValues(e, out, java.util.Set.of());
+    }
+
+    private static void collectIdValues(
+            Element e, java.util.Set<String> out, java.util.Set<String> locallyBound) {
+        String localName = e.getLocalName();
+        java.util.Set<String> childScope = locallyBound;
+        if ("Quantified_Exp".equals(localName) || "Quantified_Pred".equals(localName)) {
+            java.util.Set<String> ownBoundVars = boundVariableNamesOf(e);
+            if (!ownBoundVars.isEmpty()) {
+                childScope = new java.util.LinkedHashSet<>(locallyBound);
+                childScope.addAll(ownBoundVars);
+            }
+        }
+        if ("Id".equals(localName)) {
             String v = e.getAttribute("value");
-            if (v != null && !v.isBlank()) out.add(v.trim());
+            if (v != null && !v.isBlank() && !childScope.contains(v.trim())) out.add(v.trim());
         }
         NodeList nl = e.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
             Node n = nl.item(i);
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            collectIdValues((Element) n, out);
+            collectIdValues((Element) n, out, childScope);
         }
+    }
+
+    /** Nomes das variáveis ligadas por um {@code Quantified_Exp}/{@code Quantified_Pred}, a partir do seu filho {@code Variables}. */
+    private static java.util.Set<String> boundVariableNamesOf(Element quantifierEl) {
+        Element varsEl = BxmlExpressionToAcsl.childByLocalName(quantifierEl, "Variables");
+        if (varsEl == null) return java.util.Set.of();
+        java.util.Set<String> names = new java.util.LinkedHashSet<>();
+        NodeList nl = varsEl.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element idEl = (Element) n;
+            if ("Attr".equals(idEl.getLocalName()) || !"Id".equals(idEl.getLocalName())) continue;
+            String v = idEl.getAttribute("value");
+            if (v != null && !v.isBlank()) names.add(v.trim());
+        }
+        return names;
     }
 }

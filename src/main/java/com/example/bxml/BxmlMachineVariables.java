@@ -539,7 +539,7 @@ public final class BxmlMachineVariables {
         }
     }
 
-    private static boolean isSequenceTypingOp(Element exp) {
+    static boolean isSequenceTypingOp(Element exp) {
         if (!"Unary_Exp".equals(exp.getLocalName())) return false;
         String op = exp.getAttribute("op");
         return "seq".equals(op) || "iseq".equals(op) || "seq1".equals(op) || "iseq1".equals(op)

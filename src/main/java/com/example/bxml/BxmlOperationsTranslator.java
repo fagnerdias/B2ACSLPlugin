@@ -442,23 +442,36 @@ public final class BxmlOperationsTranslator {
 
         for (String opName : listOperationNames(localOpsEl)) {
             Element realOp = findOperationByName(operationsEl, opName);
+            Element declOp = findOperationByName(localOpsEl, opName);
+            Element opForParams = declOp != null ? declOp : realOp;
             Element body =
-                    BxmlDomUtils.firstChildElement(
-                            realOp != null ? realOp : findOperationByName(localOpsEl, opName), "Body");
+                    BxmlDomUtils.firstChildElement(realOp != null ? realOp : declOp, "Body");
             if (body == null) continue;
+
+            // Parâmetros de entrada/saída (ex.: TestLocalOperation's "ss <-- sum_op(xx) = ...") —
+            // ao contrário do caso "sem parâmetros" original desta função (ex. cv_struct's
+            // lclear), um parâmetro de SAÍDA é um ponteiro C, não uma variável concreta desta
+            // máquina: precisa de \valid/dereferenciamento "*", nunca do prefixo machineName__.
+            List<String> outputParams = parseOutputParameterNames(opForParams);
+            Set<String> outputParamSet = new LinkedHashSet<>(outputParams);
 
             List<String> ensures = new ArrayList<>();
             BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
+            applyStarPrefixToEnsures(ensures, outputParams);
 
             Set<String> assignedLhs = new LinkedHashSet<>();
             BxmlInitialisationTranslator.collectAssignedLhsNames(
                     BxmlDomUtils.firstSubChild(body), assignedLhs);
             List<String> connectionConcreteAssigns = new ArrayList<>();
             for (String v : assignedLhs) {
-                connectionConcreteAssigns.add(machineName + "__" + v);
+                connectionConcreteAssigns.add(
+                        outputParamSet.contains(v) ? "*" + v : machineName + "__" + v);
             }
 
             List<String> requires = new ArrayList<>(invariantPredicateNames);
+            for (String p : outputParams) {
+                requires.add("\\valid(" + p + ")");
+            }
             List<String> fullEnsures = new ArrayList<>(ensures);
             fullEnsures.addAll(invariantPredicateNames);
 
