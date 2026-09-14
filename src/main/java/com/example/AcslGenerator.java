@@ -978,39 +978,53 @@ public final class AcslGenerator {
                 ctx.unionInterRegistry(), ctx.crossMachineVariableNames(),
                 ctx.crossMachineVariableLogicTypes(), refinementChainVariableLogicTypes);
 
-        // 2b) Lambdas (emissão tardia, após variáveis): lambda_functions pode referenciar variáveis
-        // de estado (ex.: copyOf) que só estão declaradas nos blocos de variáveis acima. Emitido
-        // antes dos invariantes/properties bufferizados acima/abaixo, que podem referenciar
-        // predicados/funções lambda.
+        // 2b/2c) Lambdas e SIGMA/PI/MIN/MAX (emissão tardia, após variáveis: ambos podem referenciar
+        // variáveis de estado só declaradas nos blocos de variáveis acima). A ORDEM relativa entre
+        // os dois depende de qual referencia qual: o caso comum é independente (ordem lambda-depois
+        // sigma, como sempre foi), mas um lambda "sequence-builder" cujo CORPO chama SIGMA
+        // diretamente (ex.: TestLocalOperation's "const_sum = %xx.(xx:0..10 | SIGMA vv.(...))")
+        // referencia sigma_funcNN dentro do PRÓPRIO axiomatic lambda_functions — sem inverter a
+        // ordem nesse caso, o bloco lambda (antes incondicionalmente primeiro) citava sigma_funcNN
+        // antes do include que o declara, e o -acsl-import rejeitava com "unbound logic function
+        // sigma_func01". Detecta a dependência por texto (o nome sigma_funcNN só aparece se
+        // realmente referenciado) em vez de inverter sempre, para não arriscar quebrar o caso
+        // (não observado, mas simétrico) de um SIGMA cujo corpo referencie um lambda.
         int lambdaEmittedUpTo = 0;
         LambdaFunctionRegistry lambdaRegistry = ctx.lambdaRegistry();
-        if (lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo) {
-            sb.append("\n");
-            sb.append(lambdaRegistry.formatAxiomaticBlockFrom(lambdaEmittedUpTo));
-            sb.append("\n");
-        }
-        // 2c) SIGMA/PI/MIN/MAX (mesma emissão tardia que os lambdas, pelo mesmo motivo: podem
-        // referenciar variáveis de estado só declaradas nos blocos de variáveis acima). Ao
-        // contrário dos lambdas (só predicate/logic escalares), este bloco usa Set<A> genérico
-        // (ex.: Set<integer> no caso de domínio-conjunto) — -acsl-import só aceita instanciação
-        // genérica concreta dentro de um ficheiro alcançado via include, nunca inline num ficheiro
-        // de topo (confirmado empiricamente: "[Syntax error] <" na primeira ocorrência de "Set<" se
-        // deixado inline aqui — mesma restrição que TupleCodomainTypeRegistry já contorna para
-        // "type X = Y;"). Escreve num .acsl próprio da máquina e inclui NESTA MESMA posição (não no
-        // preâmbulo: o bloco referencia variáveis de estado só declaradas ANTES deste ponto).
+        String lambdaBlock =
+                lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo
+                        ? lambdaRegistry.formatAxiomaticBlockFrom(lambdaEmittedUpTo)
+                        : null;
+
+        // Ao contrário dos lambdas (só predicate/logic escalares), o bloco SIGMA/PI/MIN/MAX usa
+        // Set<A> genérico (ex.: Set<integer> no caso de domínio-conjunto) — -acsl-import só aceita
+        // instanciação genérica concreta dentro de um ficheiro alcançado via include, nunca inline
+        // num ficheiro de topo (confirmado empiricamente: "[Syntax error] <" na primeira ocorrência
+        // de "Set<" se deixado inline aqui — mesma restrição que TupleCodomainTypeRegistry já
+        // contorna para "type X = Y;"). Escreve num .acsl próprio da máquina; o include entra em
+        // 'sb' nesta mesma posição (não no preâmbulo: o bloco referencia variáveis de estado só
+        // declaradas ANTES deste ponto), antes ou depois do bloco lambda conforme a dependência
+        // detectada acima.
         int sigmaEmittedUpTo = 0;
         SigmaFunctionRegistry sigmaRegistry = ctx.sigmaRegistry();
-        if (sigmaRegistry != null && sigmaRegistry.size() > sigmaEmittedUpTo) {
-            String sigmaBlock = sigmaRegistry.formatAxiomaticBlockFrom(sigmaEmittedUpTo);
-            String sigmaFileName = baseName + "_sigma_functions.acsl";
-            Files.writeString(outputDir.resolve(sigmaFileName), sigmaBlock);
-            // O conteúdo saiu de 'sb' (só o include entra) — sem isto, símbolos da lib usados só lá
-            // dentro (is_finite, belongs, singleton, …) nunca apareceriam no texto varrido para
-            // decidir os includes do ficheiro raiz (mesmo padrão de connection.acsl, ver acima).
-            libScanRemovedBodies.append(sigmaBlock).append('\n');
+        String sigmaBlock =
+                sigmaRegistry != null && sigmaRegistry.size() > sigmaEmittedUpTo
+                        ? sigmaRegistry.formatAxiomaticBlockFrom(sigmaEmittedUpTo)
+                        : null;
+        String sigmaFileName = baseName + "_sigma_functions.acsl";
+        boolean lambdaNeedsSigmaFirst =
+                lambdaBlock != null && sigmaBlock != null && lambdaBlock.contains("sigma_func");
+
+        if (lambdaNeedsSigmaFirst) {
+            appendSigmaIncludeBlock(sb, outputDir, sigmaFileName, sigmaBlock, libScanRemovedBodies);
+        }
+        if (lambdaBlock != null) {
             sb.append("\n");
-            sb.append("include \"").append(sigmaFileName).append("\";\n");
+            sb.append(lambdaBlock);
             sb.append("\n");
+        }
+        if (sigmaBlock != null && !lambdaNeedsSigmaFirst) {
+            appendSigmaIncludeBlock(sb, outputDir, sigmaFileName, sigmaBlock, libScanRemovedBodies);
         }
         // 2d) UNION/INTER (mesmo motivo e mesma técnica de include separado que 2c — Set<T> genérico).
         int unionInterEmittedUpTo = 0;
@@ -1037,6 +1051,29 @@ public final class AcslGenerator {
             if (!propertiesBlock.endsWith("\n")) sb.append("\n");
             sb.append("\n");
         }
+    }
+
+    /**
+     * Escreve o bloco SIGMA/PI/MIN/MAX no {@code .acsl} próprio da máquina e anexa o
+     * {@code include} correspondente a {@code sb} — extraído de {@link
+     * #appendInvariantsAndQuantifierBlocks} para poder ser chamado antes OU depois do bloco lambda,
+     * conforme a dependência detectada ali.
+     */
+    private static void appendSigmaIncludeBlock(
+            StringBuilder sb,
+            Path outputDir,
+            String sigmaFileName,
+            String sigmaBlock,
+            StringBuilder libScanRemovedBodies)
+            throws IOException {
+        Files.writeString(outputDir.resolve(sigmaFileName), sigmaBlock);
+        // O conteúdo saiu de 'sb' (só o include entra) — sem isto, símbolos da lib usados só lá
+        // dentro (is_finite, belongs, singleton, …) nunca apareceriam no texto varrido para
+        // decidir os includes do ficheiro raiz (mesmo padrão de connection.acsl, ver acima).
+        libScanRemovedBodies.append(sigmaBlock).append('\n');
+        sb.append("\n");
+        sb.append("include \"").append(sigmaFileName).append("\";\n");
+        sb.append("\n");
     }
 
     private static void appendFunctionsSection(AcslGenerationState state) {
