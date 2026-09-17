@@ -113,7 +113,7 @@ public final class BxmlInvariantTranslator {
         Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
         if (Files.exists(abstractPath)) {
             try {
-                Element abstractEl = BxmlSetsTranslator.parseMachineElement(abstractPath);
+                Element abstractEl = BxmlDocumentLoader.parseMachineElement(abstractPath);
                 BxmlTranslateContext ctx = BxmlTranslateContext.forMachine(abstractEl, Map.of());
                 result.addAll(listInvariantPredicateNames(abstractEl, ctx));
             } catch (Exception ignored) {}

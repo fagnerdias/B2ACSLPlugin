@@ -122,7 +122,7 @@ public final class BxmlPredicateToAcsl {
         Element p0 = BxmlDomUtils.firstPredChild(predParent);
         Element arrow = p0 != null ? findFunctionArrowRhsForVariable(p0, name) : null;
         if (arrow != null) {
-            return functionArrowBinaryToAcslFunctionType(arrow);
+            return functionArrowBinaryToAcslFunctionType(arrow, ctx.types());
         }
         String trAttr = varId.getAttribute("typref");
         if (trAttr != null && !trAttr.isBlank()) {
@@ -154,14 +154,14 @@ public final class BxmlPredicateToAcsl {
         return trimmed;
     }
 
-    private static String functionArrowBinaryToAcslFunctionType(Element arrow) {
+    private static String functionArrowBinaryToAcslFunctionType(Element arrow, BxmlTypeRegistry types) {
         Element[] dr = BxmlExpressionToAcsl.twoDirectExpChildren(arrow);
         if (dr[0] == null || dr[1] == null) {
             return "Function<integer,integer>";
         }
         String lhs = arrowEndToBNameForProduct(dr[0]);
         String rhs = arrowEndToBNameForProduct(dr[1]);
-        String relation = BxmlTypeRegistry.powCartesianProductToAcslRelationType(lhs + "*" + rhs);
+        String relation = types.powCartesianProductToAcslRelationType(lhs + "*" + rhs);
         return relationOrFallbackQuantifierType(relation);
     }
 

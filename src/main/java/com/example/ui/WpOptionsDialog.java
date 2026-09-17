@@ -281,36 +281,24 @@ public final class WpOptionsDialog {
     }
 
     private static WpOptions readHeadlessOptions(String defaultProjectName) {
+        com.example.B2AcslConfig cfg = com.example.B2AcslConfig.fromSystemProperties();
         String projectName =
-                System.getProperty(
-                        "b2acsl.wp.project",
-                        defaultProjectName == null || defaultProjectName.isBlank()
+                cfg.wpProjectNameProperty() != null
+                        ? cfg.wpProjectNameProperty()
+                        : (defaultProjectName == null || defaultProjectName.isBlank()
                                 ? DEFAULT_PROJECT_NAME
                                 : defaultProjectName);
-        String proverProp = System.getProperty("b2acsl.wp.prover", DEFAULT_WP_PROVER);
-        List<String> provers = parseProverList(proverProp);
-        int timeout = Integer.getInteger("b2acsl.wp.timeout", DEFAULT_WP_TIMEOUT_SECONDS);
-        String output = System.getProperty("b2acsl.wp.output", DEFAULT_WP_OUTPUT);
-        boolean loopSimplification =
-                Boolean.parseBoolean(System.getProperty("b2acsl.wp.loopSimplification", "false"));
-        boolean smokeTests =
-                Boolean.parseBoolean(System.getProperty("b2acsl.wp.smokeTests", "true"));
-        boolean verifyPerOperation =
-                Boolean.parseBoolean(System.getProperty("b2acsl.wp.verifyPerOperation", "false"));
-        boolean counterExamples =
-                Boolean.parseBoolean(System.getProperty("b2acsl.wp.counterExamples", "true"));
-        boolean splitGoals =
-                Boolean.parseBoolean(System.getProperty("b2acsl.wp.splitGoals", "true"));
+        List<String> provers = parseProverList(cfg.wpProver());
         return buildWpOptions(
                 projectName,
                 provers,
-                timeout,
-                output,
-                loopSimplification,
-                smokeTests,
-                verifyPerOperation,
-                counterExamples,
-                splitGoals);
+                cfg.wpTimeoutSeconds(),
+                cfg.wpOutputFlag(),
+                cfg.wpLoopSimplification(),
+                cfg.wpSmokeTests(),
+                cfg.wpVerifyPerOperation(),
+                cfg.wpCounterExamples(),
+                cfg.wpSplitGoals());
     }
 
     private static List<String> parseProverList(String raw) {

@@ -71,7 +71,8 @@ final class AxiomaticTierSorter {
             return;
         }
         Map<String, Integer> rank = new HashMap<>();
-        List<String> orderedNames = AcslLibIncludes.orderedLibFunctionAxiomaticNames();
+        AcslLibraryResolver libraryResolver = new DefaultAcslLibraryResolver();
+        List<String> orderedNames = libraryResolver.orderedLibFunctionAxiomaticNames();
         for (int i = 0; i < orderedNames.size(); i++) {
             rank.put(orderedNames.get(i), i);
         }

@@ -1,6 +1,5 @@
 package com.example;
 
-import java.io.InputStream;
 import java.io.IOException;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -15,7 +14,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -110,21 +108,8 @@ public final class B2ACSLPipeline {
         return false;
     }
 
-    private static final boolean MOCK_MODE = isMockEnabled();
+    private static final boolean MOCK_MODE = B2AcslConfig.fromSystemProperties().mock();
 
-    private static boolean isMockEnabled() {
-        String sys = System.getProperty("b2acsl.mock");
-        if (sys != null && !sys.isBlank()) return Boolean.parseBoolean(sys);
-        try (InputStream in = B2ACSLPipeline.class.getResourceAsStream("/META-INF/b2acsl.properties")) {
-            if (in != null) {
-                Properties p = new Properties();
-                p.load(in);
-                String v = p.getProperty("b2acsl.mock");
-                if (v != null && !v.isBlank()) return Boolean.parseBoolean(v.trim());
-            }
-        } catch (Exception ignored) {}
-        return true;
-    }
     private B2ACSLPipeline() {}
 
     /**
@@ -269,7 +254,8 @@ public final class B2ACSLPipeline {
         // Step 1.1: Gerar arquivos .acsl na pasta lang/c (junto aos ficheiros C)
         Path acslDir = cDir;
         try {
-            AcslLibIncludes.resetLibraryBundleUnderOutput(acslDir);
+            AcslLibraryResolver libraryResolver = new DefaultAcslLibraryResolver();
+            libraryResolver.resetLibraryBundleUnderOutput(acslDir);
             List<Path> acslFiles = new ArrayList<>();
             // ** (Binary_Exp op='**i') não tem operador C nativo — verifica em TODAS as máquinas
             // do projeto (abstratas E implementações/refinamentos, não só as que geram .acsl
@@ -380,8 +366,9 @@ public final class B2ACSLPipeline {
                     return 7;
                 }
                 String selectedProjectName = wpOptions.projectName();
+                ExternalVerifierRunner verifierRunner = new FramaCVerifierRunner();
                 framaResult =
-                        FramaCRunner.runFramaC(
+                        verifierRunner.runFramaC(
                                 topLevelAcslFiles,
                                 acslFiles,
                                 acslDir,
