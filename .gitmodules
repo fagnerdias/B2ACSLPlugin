@@ -1,3 +1,3 @@
 [submodule "src/main/resources/lib"]
-	path = src/main/resources/lib
+	path = translate/src/main/resources/lib
 	url = git@github.com:fagnerdias/ACSL2BMethodLib.git

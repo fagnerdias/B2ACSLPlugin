@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>b2acsl-parent</artifactId>
+    <version>0.1.0</version>
+  </parent>
+
+  <artifactId>b2acsl-translate</artifactId>
+  <name>b2acsl-translate</name>
+  <description>Tradução BXML -> ACSL (com.example.bxml.*, AcslGenerator), resolução da biblioteca
+    B2ACSLLib (AcslLibIncludes/AcslLibSymbolDependencyMap/B2AcslLibraryPaths) e o modelo de máquina
+    (com.example.model.Machine). Depende só de b2acsl-core (B2AcslConfig, para as properties
+    acslLib* de boot) — b2acsl-core não depende de nada do projeto, então isto não introduz
+    ciclo.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>b2acsl-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.dataformat</groupId>
+      <artifactId>jackson-dataformat-xml</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <!-- JUnit 5: testes unitários em src/test/java (bxml.* stateless translators) -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

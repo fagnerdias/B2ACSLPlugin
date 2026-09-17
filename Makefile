@@ -11,8 +11,12 @@ TARGET_DIR := target
 ACSL_OUT := $(TARGET_DIR)/b2acsl-acsl
 
 # Maven Shade gera: target/<artifactId>-<version>-all.jar
-VERSION := $(shell $(MVN) -q -DforceStdout help:evaluate -Dexpression=project.version)
-ARTIFACT_ID := $(shell $(MVN) -q -DforceStdout help:evaluate -Dexpression=project.artifactId)
+# Projeto em multi-módulo (core/translate/frama-c/cli): o uber-JAR/binário nativo final é
+# produzido pelo módulo "cli" (artifactId "xml-reader", mantido de propósito), cujo <build>
+# redireciona a saída para o "target/" da raiz — "-pl cli" escopa a leitura de artifactId/version
+# a esse módulo em vez do agregador (pom "b2acsl-parent").
+VERSION := $(shell $(MVN) -q -DforceStdout -pl cli help:evaluate -Dexpression=project.version)
+ARTIFACT_ID := $(shell $(MVN) -q -DforceStdout -pl cli help:evaluate -Dexpression=project.artifactId)
 UBER_JAR := $(TARGET_DIR)/$(ARTIFACT_ID)-$(VERSION)-all.jar
 
 OS := $(shell uname -s)
