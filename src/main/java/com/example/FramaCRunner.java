@@ -297,8 +297,9 @@ final class FramaCRunner {
                 Files.isRegularFile(ghostCi)
                         ? Files.readString(ghostCi, StandardCharsets.UTF_8)
                         : "";
+        AcslLibraryResolver libraryResolver = new DefaultAcslLibraryResolver();
         Set<String> allowedLibSymbolsForLemmas =
-                AcslLibIncludes.allowedLibSymbolsForTransitiveIncludes(
+                libraryResolver.allowedLibSymbolsForTransitiveIncludes(
                         specScanForLemmas.toString(), ghostCiText);
 
         List<Path> acslImportFiles =

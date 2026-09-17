@@ -51,6 +51,14 @@ public final class BxmlTypeRegistry {
 
     private final Map<Integer, String> idToDisplay = new HashMap<>();
 
+    /**
+     * Registo de tipos de codomínio/domínio-tupla descobertos ao resolver tipos desta instância
+     * (ver {@link #powCartesianProductToAcslRelationType}) — captura, no momento da construção, a
+     * instância vinculada por {@link TupleCodomainTypeRegistry#bindForCurrentCall} para a chamada
+     * a {@code AcslGenerator#generateAcsl} em curso.
+     */
+    private final TupleCodomainTypeRegistry tupleCodomainTypes = TupleCodomainTypeRegistry.current();
+
     public static BxmlTypeRegistry fromMachine(Element machineEl) {
         BxmlTypeRegistry r = new BxmlTypeRegistry();
         NodeList typeInfos = machineEl.getElementsByTagNameNS("*", "TypeInfos");
@@ -102,7 +110,7 @@ public final class BxmlTypeRegistry {
     /**
      * Converte o texto de tipo B (de {@link #getRawType}) num tipo de lógica ACSL para variáveis.
      */
-    public static String rawBTypeToAcslVariableLogicType(String raw) {
+    public String rawBTypeToAcslVariableLogicType(String raw) {
         if (raw == null || raw.isBlank() || "UNKNOWN".equals(raw)) return "integer";
         String r = raw.trim();
         if (isScalarBTypeName(r)) {
@@ -178,7 +186,7 @@ public final class BxmlTypeRegistry {
         return i.endsWith(">") ? "Set<" + i + " >" : "Set<" + i + ">";
     }
 
-    public static String powCartesianProductToAcslRelationType(String innerProduct) {
+    public String powCartesianProductToAcslRelationType(String innerProduct) {
         if (innerProduct == null || !innerProduct.contains("*")) {
             return RELATION_INT_INT;
         }
@@ -234,7 +242,7 @@ public final class BxmlTypeRegistry {
      * achatavam para a MESMA string (ex. {@code "PLAYER*ISLAND*BOOL"}) e o caminho acima assumia
      * sempre a segunda forma — ver memória {@code project_union_inter_generalized_quantifiers}.
      */
-    private static String compoundDomainCartesianProductToAcslRelationType(String innerProduct) {
+    private String compoundDomainCartesianProductToAcslRelationType(String innerProduct) {
         int depth = 0;
         int closeIdx = -1;
         for (int i = 0; i < innerProduct.length(); i++) {
@@ -291,13 +299,13 @@ public final class BxmlTypeRegistry {
      * #compoundDomainCartesianProductToAcslRelationType}) — a forma de registo/nomeação não depende
      * de qual dos dois lados é o composto.
      */
-    private static String registerCartesianRelationType(String domainType, String codomainType) {
+    private String registerCartesianRelationType(String domainType, String codomainType) {
         String genericTypeExpr = "Relation<" + domainType + ", " + codomainType + ">";
         String flatName = flattenGenericTypeExprToIdentifier(genericTypeExpr);
         String definition =
                 spaceOutAdjacentClosingAngleBrackets(
                         "Set<Tuple<" + domainType + ", " + codomainType + "> >");
-        TupleCodomainTypeRegistry.register(flatName, definition);
+        tupleCodomainTypes.register(flatName, definition);
         // Function_X declarado com a MESMA definição concreta (Set<Tuple<...>>), não como
         // "= Relation_X" (sinónimo cruzado): confirmado empiricamente que o Frama-C reordena
         // declarações "type A = B;"/"type B = ...;" de forma NÃO DETERMINÍSTICA entre execuções do
@@ -310,7 +318,7 @@ public final class BxmlTypeRegistry {
         // outra, não têm essa dependência de ordem — nenhuma precisa que a outra já esteja
         // resolvida.
         String functionFlatName = "Function_" + flatName.substring("Relation_".length());
-        TupleCodomainTypeRegistry.register(functionFlatName, definition);
+        tupleCodomainTypes.register(functionFlatName, definition);
         return flatName;
     }
 

@@ -47,7 +47,7 @@ final class CrossMachineBxmlLoader {
         Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
         if (!Files.exists(abstractPath)) return Set.of();
         try {
-            Element abstractEl = BxmlSetsTranslator.parseMachineElement(abstractPath);
+            Element abstractEl = BxmlDocumentLoader.parseMachineElement(abstractPath);
             Set<String> result = new LinkedHashSet<>();
             NodeList ops = abstractEl.getElementsByTagNameNS("*", "Operations");
             if (ops.getLength() == 0) return Set.of();
@@ -120,7 +120,7 @@ final class CrossMachineBxmlLoader {
         Path path = bxmlDirectory.resolve(machineName + ".bxml");
         if (!Files.exists(path)) return Set.of();
         try {
-            Element machineEl = BxmlSetsTranslator.parseMachineElement(path);
+            Element machineEl = BxmlDocumentLoader.parseMachineElement(path);
             Set<String> result = new LinkedHashSet<>();
             NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
             if (ops.getLength() == 0) return Set.of();
@@ -174,7 +174,7 @@ final class CrossMachineBxmlLoader {
         Element abstractEl = null;
         Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
         if (Files.exists(abstractPath)) {
-            try { abstractEl = BxmlSetsTranslator.parseMachineElement(abstractPath); } catch (Exception ignored) {}
+            try { abstractEl = BxmlDocumentLoader.parseMachineElement(abstractPath); } catch (Exception ignored) {}
         }
 
         Element implEl = BxmlSetsTranslator.findImplementationMachineElement(machineName, bxmlDirectory);
@@ -232,7 +232,7 @@ final class CrossMachineBxmlLoader {
         Path path = bxmlDirectory.resolve(machineName + ".bxml");
         if (!Files.exists(path)) return List.of();
         try {
-            Element machineEl = BxmlSetsTranslator.parseMachineElement(path);
+            Element machineEl = BxmlDocumentLoader.parseMachineElement(path);
             List<String> names = new ArrayList<>();
             NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
             if (ops.getLength() == 0) return List.of();

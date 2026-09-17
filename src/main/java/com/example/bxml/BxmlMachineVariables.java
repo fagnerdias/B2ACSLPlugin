@@ -959,7 +959,7 @@ public final class BxmlMachineVariables {
             Path absPath = bxmlDirectory.resolve(importedName + ".bxml");
             if (!Files.exists(absPath)) continue;
             try {
-                Element importedAbstractEl = BxmlSetsTranslator.parseMachineElement(absPath);
+                Element importedAbstractEl = BxmlDocumentLoader.parseMachineElement(absPath);
                 for (String v : declaredVariableNames(importedAbstractEl)) {
                     importedVarToMachine.put(v, importedName);
                 }

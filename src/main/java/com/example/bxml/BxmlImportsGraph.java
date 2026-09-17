@@ -54,7 +54,7 @@ public final class BxmlImportsGraph {
                     stream.filter(p -> p.getFileName().toString().endsWith(".bxml")).sorted().toList();
             for (Path bxml : bxmlFiles) {
                 try {
-                    Element root = BxmlSetsTranslator.parseMachineElement(bxml);
+                    Element root = BxmlDocumentLoader.parseMachineElement(bxml);
                     String sourceRaw = root.getAttribute("name");
                     if (sourceRaw == null || sourceRaw.isBlank()) {
                         continue;
