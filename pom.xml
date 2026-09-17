@@ -5,10 +5,20 @@
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>com.example</groupId>
-  <artifactId>xml-reader</artifactId>
+  <artifactId>b2acsl-parent</artifactId>
   <version>0.1.0</version>
-  <name>xml-reader</name>
-  <description>Exemplo Maven Java 21: ler XML, Uber-JAR, GraalVM Native Image e jpackage</description>
+  <packaging>pom</packaging>
+  <name>b2acsl-parent</name>
+  <description>B2ACSLPlugin: tradutor BXML -> ACSL e pipeline de verificação Frama-C, em 4 módulos
+    Maven (core, translate, frama-c, cli) — split de empacotamento a partir do módulo único
+    original "xml-reader"; nenhuma lógica de tradução/pipeline foi alterada, só reorganizada.</description>
+
+  <modules>
+    <module>core</module>
+    <module>translate</module>
+    <module>frama-c</module>
+    <module>cli</module>
+  </modules>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -20,6 +30,8 @@
     <maven.shade.plugin.version>3.6.0</maven.shade.plugin.version>
     <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
     <maven.antrun.plugin.version>3.1.0</maven.antrun.plugin.version>
+    <maven.surefire.plugin.version>3.2.5</maven.surefire.plugin.version>
+    <junit.jupiter.version>5.10.3</junit.jupiter.version>
     <graalvm.home>${env.GRAALVM_HOME}</graalvm.home>
 
     <!-- SonarQube: análise local via "mvn sonar:sonar" contra um servidor em
@@ -34,45 +46,72 @@
     <sonar.java.source>${maven.compiler.release}</sonar.java.source>
   </properties>
 
-  <dependencies>
-    <!-- Jackson XML -->
-    <dependency>
-      <groupId>com.fasterxml.jackson.dataformat</groupId>
-      <artifactId>jackson-dataformat-xml</artifactId>
-      <version>${jackson.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
-      <version>${jackson.version}</version>
-    </dependency>
-  </dependencies>
+  <!-- Coordenadas dos módulos-irmãos, para cada módulo declarar como <dependency> apenas os
+       outros módulos de que realmente precisa (ver árvore de dependências no fim deste ficheiro). -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.example</groupId>
+        <artifactId>b2acsl-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.example</groupId>
+        <artifactId>b2acsl-translate</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.example</groupId>
+        <artifactId>b2acsl-frama-c</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>com.fasterxml.jackson.dataformat</groupId>
+        <artifactId>jackson-dataformat-xml</artifactId>
+        <version>${jackson.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>${jackson.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <version>${junit.jupiter.version}</version>
+        <scope>test</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <build>
-    <resources>
-      <resource>
-        <directory>src/main/resources</directory>
-        <filtering>true</filtering>
-        <includes>
-          <include>META-INF/b2acsl.properties</include>
-        </includes>
-      </resource>
-      <resource>
-        <directory>src/main/resources</directory>
-        <filtering>false</filtering>
-        <excludes>
-          <exclude>META-INF/b2acsl.properties</exclude>
-        </excludes>
-      </resource>
-    </resources>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>${maven.compiler.plugin.version}</version>
+          <configuration>
+            <release>${maven.compiler.release}</release>
+          </configuration>
+        </plugin>
+
+        <!-- JUnit 5 (JUnit Platform) precisa de surefire >= 2.22 para ser detectado
+             automaticamente; a versão herdada da super POM do Maven 3.8.x (2.12.4) não
+             reconhece o provider da plataforma. -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>${maven.surefire.plugin.version}</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
-        <version>${maven.compiler.plugin.version}</version>
-        <configuration>
-          <release>${maven.compiler.release}</release>
-        </configuration>
       </plugin>
 
       <!-- SonarQube: opt-in, só roda com "mvn sonar:sonar" (sem <executions>, não entra
@@ -83,167 +122,39 @@
         <artifactId>sonar-maven-plugin</artifactId>
         <version>${sonar.maven.plugin.version}</version>
       </plugin>
-
-      <!-- Uber-JAR (necessário para jpackage) -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-shade-plugin</artifactId>
-        <version>${maven.shade.plugin.version}</version>
-        <executions>
-          <execution>
-            <phase>package</phase>
-            <goals>
-              <goal>shade</goal>
-            </goals>
-            <configuration>
-              <createDependencyReducedPom>false</createDependencyReducedPom>
-              <shadedArtifactAttached>true</shadedArtifactAttached>
-              <shadedClassifierName>all</shadedClassifierName>
-              <transformers>
-                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                  <mainClass>com.example.Main</mainClass>
-                </transformer>
-              </transformers>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
-
-      <!-- GraalVM Native Image -->
-      <plugin>
-        <groupId>org.graalvm.buildtools</groupId>
-        <artifactId>native-maven-plugin</artifactId>
-        <version>${graalvm.native.plugin.version}</version>
-        <extensions>true</extensions>
-        <configuration>
-          <imageName>${project.artifactId}</imageName>
-          <mainClass>com.example.Main</mainClass>
-        </configuration>
-      </plugin>
-
     </plugins>
   </build>
 
-  <profiles>
-    <profile>
-      <id>native</id>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.graalvm.buildtools</groupId>
-            <artifactId>native-maven-plugin</artifactId>
-            <executions>
-              <execution>
-                <id>build-native</id>
-                <phase>package</phase>
-                <goals>
-                  <goal>compile-no-fork</goal>
-                </goals>
-              </execution>
-            </executions>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-    <profile>
-      <id>native-gui</id>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.graalvm.buildtools</groupId>
-            <artifactId>native-maven-plugin</artifactId>
-            <executions>
-              <execution>
-                <id>build-native-gui</id>
-                <phase>package</phase>
-                <goals>
-                  <goal>compile-no-fork</goal>
-                </goals>
-              </execution>
-            </executions>
-            <configuration>
-              <imageName>${project.artifactId}</imageName>
-              <mainClass>com.example.Main</mainClass>
-              <buildArgs>
-                <buildArg>-Djava.awt.headless=false</buildArg>
-                <buildArg>-H:+ReportExceptionStackTraces</buildArg>
-              </buildArgs>
-            </configuration>
-          </plugin>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-antrun-plugin</artifactId>
-            <version>${maven.antrun.plugin.version}</version>
-            <executions>
-              <execution>
-                <id>package-native-gui-dist</id>
-                <phase>package</phase>
-                <goals>
-                  <goal>run</goal>
-                </goals>
-                <configuration>
-                  <target>
-                    <condition property="resolved.graalvm.home" value="${graalvm.home}" else="${java.home}">
-                      <and>
-                        <isset property="graalvm.home"/>
-                        <not>
-                          <equals arg1="${graalvm.home}" arg2=""/>
-                        </not>
-                      </and>
-                    </condition>
+  <!--
+    Árvore de dependências entre módulos (acíclica — verificada classe a classe antes do split):
 
-                    <fail message="Could not resolve GraalVM home. Use -Dgraalvm.home=/path/to/graalvm or set GRAALVM_HOME.">
-                      <condition>
-                        <equals arg1="${resolved.graalvm.home}" arg2=""/>
-                      </condition>
-                    </fail>
+      core        (com.example.ui.*, com.example.analysis.*, B2AcslConfig)
+        ^               nenhuma dependência de outro módulo B2ACSL
+        |
+      translate   (com.example.bxml.*, com.example.model.Machine, AcslGenerator,
+        ^          AcslLibIncludes, AcslLibSymbolDependencyMap, B2AcslLibraryPaths,
+        |          AcslLibraryResolver/DefaultAcslLibraryResolver, BDefinitionsTranslator,
+        |          SpecificationTypesCollector) — depende só de core (B2AcslConfig, para as
+        |          properties acslLib* de boot lidas por AcslLibIncludes; targetAcslDir deixou de
+        |          ser property, passou a parâmetro Path explícito)
+        |
+      frama-c     (FramaCRunner, ExternalVerifierRunner/FramaCVerifierRunner,
+        ^          GhostMergedCodeCleanup + stages de merged_code.c, AxiomaticTierSorter e
+        |          demais passes de pós-processamento, AnySubMarkerSpec)
+        |          depende de core (ui/analysis) e de translate (bxml, AcslLibraryResolver)
+        |
+      cli         (Main, B2ACSLPipeline) — depende de core, translate e frama-c
 
-                    <mkdir dir="${project.build.directory}/dist"/>
-                    <mkdir dir="${project.build.directory}/dist/runtime/lib"/>
-                    <mkdir dir="${project.build.directory}/dist/runtime/lib/server"/>
-
-                    <copy file="${project.build.directory}/${project.artifactId}"
-                          tofile="${project.build.directory}/dist/${project.artifactId}"/>
-
-                    <copy file="${resolved.graalvm.home}/lib/libawt.so"
-                          tofile="${project.build.directory}/dist/runtime/lib/libawt.so"/>
-                    <copy file="${resolved.graalvm.home}/lib/libawt_xawt.so"
-                          tofile="${project.build.directory}/dist/runtime/lib/libawt_xawt.so"/>
-                    <copy file="${resolved.graalvm.home}/lib/libawt_headless.so"
-                          tofile="${project.build.directory}/dist/runtime/lib/libawt_headless.so"/>
-                    <copy file="${resolved.graalvm.home}/lib/libjawt.so"
-                          tofile="${project.build.directory}/dist/runtime/lib/libjawt.so"/>
-                    <copy file="${resolved.graalvm.home}/lib/server/libjvm.so"
-                          tofile="${project.build.directory}/dist/runtime/lib/server/libjvm.so"/>
-
-                    <echo file="${project.build.directory}/dist/run-gui.sh"><![CDATA[#!/usr/bin/env bash
-set -euo pipefail
-DIR="$(cd "$(dirname "$0")" && pwd)"
-
-export LD_LIBRARY_PATH="$DIR/runtime/lib/server:$DIR/runtime/lib:${LD_LIBRARY_PATH:-}"
-export JAVA_AWT_HEADLESS=false
-
-if [ -n "${DISPLAY:-}" ]; then
-  exec "$DIR/${project.artifactId}" "$@"
-fi
-
-if command -v xvfb-run >/dev/null 2>&1; then
-  exec xvfb-run "$DIR/${project.artifactId}" "$@"
-fi
-
-echo "No graphical DISPLAY and xvfb-run not found."
-echo "Install xvfb or run in a graphical session."
-exit 1
-]]></echo>
-                    <chmod file="${project.build.directory}/dist/run-gui.sh" perm="755"/>
-                    <chmod file="${project.build.directory}/dist/${project.artifactId}" perm="755"/>
-                  </target>
-                </configuration>
-              </execution>
-            </executions>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-  </profiles>
+    Achado do split: havia uma dependência circular real entre o pacote raiz com.example e
+    com.example.bxml (algumas classes de bxml importavam AcslGenerator/AcslLibIncludes/etc.,
+    enquanto quase todo o pacote raiz depende de bxml) — por isso "core"/"translate" acima não
+    corresponde 1:1 à nomeação ilustrativa original ("core, translate, frama-c, cli"): as classes
+    de resolução de biblioteca ACSL (AcslLibIncludes, AcslLibSymbolDependencyMap,
+    B2AcslLibraryPaths) foram ao módulo "translate" (não um "core" separado), porque é exatamente
+    esse quem as consome de dentro do pacote bxml. Duas referências reais (não-javadoc) do módulo
+    frama-c ao módulo cli também foram corrigidas como parte do split:
+    FramaCRunner.MERGED_CODE_FILE_NAME (movida de B2ACSLPipeline) e o anchor de classloader em
+    LemmaLibraryFilter (trocado de B2ACSLPipeline.class para LemmaLibraryFilter.class) — mesmo
+    valor/comportamento, só a classe usada como âncora do getResourceAsStream muda.
+  -->
 </project>
