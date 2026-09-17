@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>b2acsl-parent</artifactId>
+    <version>0.1.0</version>
+  </parent>
+
+  <!-- artifactId mantido como "xml-reader" (não "b2acsl-cli") de propósito: preserva os nomes de
+       artefato dos quais dependem, fora deste build, o script scripts/run_examples.sh
+       ("target/xml-reader-0.1.0-all.jar"), o Makefile e o plugin.etool do Atelier B
+       ("./xml-reader", o nome do binário nativo = ${project.artifactId}). -->
+  <artifactId>xml-reader</artifactId>
+  <name>xml-reader</name>
+  <description>Ponto de entrada (Main) e orquestração do pipeline (B2ACSLPipeline). Depende de
+    b2acsl-core, b2acsl-translate e b2acsl-frama-c. Produz o uber-JAR/binário nativo final —
+    ver a nota sobre o artifactId acima.</description>
+
+  <!-- Redireciona a saída deste módulo para o "target/" da raiz do reactor, em vez de
+       "cli/target/" — mesmo caminho de saída de antes do split em módulos (scripts e o
+       Makefile continuam a encontrar o uber-JAR/binário em "target/" na raiz do projeto). -->
+  <build>
+    <directory>${maven.multiModuleProjectDirectory}/target</directory>
+
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+    </resources>
+
+    <plugins>
+      <!-- Uber-JAR (necessário para jpackage) -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>${maven.shade.plugin.version}</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>all</shadedClassifierName>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.example.Main</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- GraalVM Native Image -->
+      <plugin>
+        <groupId>org.graalvm.buildtools</groupId>
+        <artifactId>native-maven-plugin</artifactId>
+        <version>${graalvm.native.plugin.version}</version>
+        <extensions>true</extensions>
+        <configuration>
+          <imageName>${project.artifactId}</imageName>
+          <mainClass>com.example.Main</mainClass>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>b2acsl-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>b2acsl-translate</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>b2acsl-frama-c</artifactId>
+    </dependency>
+  </dependencies>
+
+  <profiles>
+    <profile>
+      <id>native</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.graalvm.buildtools</groupId>
+            <artifactId>native-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>build-native</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>compile-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    <profile>
+      <id>native-gui</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.graalvm.buildtools</groupId>
+            <artifactId>native-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>build-native-gui</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>compile-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <imageName>${project.artifactId}</imageName>
+              <mainClass>com.example.Main</mainClass>
+              <buildArgs>
+                <buildArg>-Djava.awt.headless=false</buildArg>
+                <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+              </buildArgs>
+            </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <version>${maven.antrun.plugin.version}</version>
+            <executions>
+              <execution>
+                <id>package-native-gui-dist</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+                <configuration>
+                  <target>
+                    <condition property="resolved.graalvm.home" value="${graalvm.home}" else="${java.home}">
+                      <and>
+                        <isset property="graalvm.home"/>
+                        <not>
+                          <equals arg1="${graalvm.home}" arg2=""/>
+                        </not>
+                      </and>
+                    </condition>
+
+                    <fail message="Could not resolve GraalVM home. Use -Dgraalvm.home=/path/to/graalvm or set GRAALVM_HOME.">
+                      <condition>
+                        <equals arg1="${resolved.graalvm.home}" arg2=""/>
+                      </condition>
+                    </fail>
+
+                    <mkdir dir="${project.build.directory}/dist"/>
+                    <mkdir dir="${project.build.directory}/dist/runtime/lib"/>
+                    <mkdir dir="${project.build.directory}/dist/runtime/lib/server"/>
+
+                    <copy file="${project.build.directory}/${project.artifactId}"
+                          tofile="${project.build.directory}/dist/${project.artifactId}"/>
+
+                    <copy file="${resolved.graalvm.home}/lib/libawt.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/libawt.so"/>
+                    <copy file="${resolved.graalvm.home}/lib/libawt_xawt.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/libawt_xawt.so"/>
+                    <copy file="${resolved.graalvm.home}/lib/libawt_headless.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/libawt_headless.so"/>
+                    <copy file="${resolved.graalvm.home}/lib/libjawt.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/libjawt.so"/>
+                    <copy file="${resolved.graalvm.home}/lib/server/libjvm.so"
+                          tofile="${project.build.directory}/dist/runtime/lib/server/libjvm.so"/>
+
+                    <echo file="${project.build.directory}/dist/run-gui.sh"><![CDATA[#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+export LD_LIBRARY_PATH="$DIR/runtime/lib/server:$DIR/runtime/lib:${LD_LIBRARY_PATH:-}"
+export JAVA_AWT_HEADLESS=false
+
+if [ -n "${DISPLAY:-}" ]; then
+  exec "$DIR/${project.artifactId}" "$@"
+fi
+
+if command -v xvfb-run >/dev/null 2>&1; then
+  exec xvfb-run "$DIR/${project.artifactId}" "$@"
+fi
+
+echo "No graphical DISPLAY and xvfb-run not found."
+echo "Install xvfb or run in a graphical session."
+exit 1
+]]></echo>
+                    <chmod file="${project.build.directory}/dist/run-gui.sh" perm="755"/>
+                    <chmod file="${project.build.directory}/dist/${project.artifactId}" perm="755"/>
+                  </target>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>
