@@ -12,12 +12,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-
 import com.example.AcslLibIncludes;
 
-import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
@@ -407,7 +403,7 @@ public final class BxmlSetsTranslator {
                 continue;
             }
             try {
-                merged.addAll(listEnumeratedSets(parseMachineElement(p)));
+                merged.addAll(listEnumeratedSets(BxmlDocumentLoader.parseMachineElement(p)));
             } catch (Exception ignored) {
                 // ignora dependência inacessível
             }
@@ -448,7 +444,7 @@ public final class BxmlSetsTranslator {
                 continue;
             }
             try {
-                merged.putAll(buildEnumRenames(parseMachineElement(p)));
+                merged.putAll(buildEnumRenames(BxmlDocumentLoader.parseMachineElement(p)));
             } catch (Exception ignored) {
                 // ignora dependência inacessível
             }
@@ -537,7 +533,7 @@ public final class BxmlSetsTranslator {
                     continue;
                 }
                 try {
-                    Element depEl = parseMachineElement(p);
+                    Element depEl = BxmlDocumentLoader.parseMachineElement(p);
                     merged.putAll(buildEnumeratedSetRenames(depEl));
                     merged.putAll(buildDeferredSetRenames(depEl));
                 } catch (Exception ignored) {
@@ -693,7 +689,7 @@ public final class BxmlSetsTranslator {
                 continue;
             }
             try {
-                Element depEl = parseMachineElement(bxml);
+                Element depEl = BxmlDocumentLoader.parseMachineElement(bxml);
                 if (!MachineIncludeScanCollector.machineGeneratesOwnAcslFile(depEl)) {
                     continue;
                 }
@@ -740,7 +736,7 @@ public final class BxmlSetsTranslator {
                 continue;
             }
             try {
-                Element seenEl = parseMachineElement(p);
+                Element seenEl = BxmlDocumentLoader.parseMachineElement(p);
                 Element block = BxmlDomUtils.firstChildElement(seenEl, "Concrete_Constants");
                 if (block == null) {
                     continue;
@@ -802,7 +798,7 @@ public final class BxmlSetsTranslator {
                 continue;
             }
             try {
-                Element seenEl = parseMachineElement(p);
+                Element seenEl = BxmlDocumentLoader.parseMachineElement(p);
                 Element block = BxmlDomUtils.firstChildElement(seenEl, "Concrete_Constants");
                 if (block == null) {
                     continue;
@@ -865,7 +861,7 @@ public final class BxmlSetsTranslator {
                 continue;
             }
             try {
-                Element seenEl = parseMachineElement(p);
+                Element seenEl = BxmlDocumentLoader.parseMachineElement(p);
                 result.addAll(buildDeferredSetRenames(seenEl).values());
             } catch (Exception ignored) {
             }
@@ -900,7 +896,7 @@ public final class BxmlSetsTranslator {
         }
         for (Path p : candidates) {
             try {
-                Element el = parseMachineElement(p);
+                Element el = BxmlDocumentLoader.parseMachineElement(p);
                 if (!"implementation".equalsIgnoreCase(el.getAttribute("type"))) {
                     continue;
                 }
@@ -939,7 +935,7 @@ public final class BxmlSetsTranslator {
         }
         for (Path p : candidates) {
             try {
-                Element el = parseMachineElement(p);
+                Element el = BxmlDocumentLoader.parseMachineElement(p);
                 if (!"abstraction".equalsIgnoreCase(el.getAttribute("type"))) {
                     continue;
                 }
@@ -951,22 +947,6 @@ public final class BxmlSetsTranslator {
             }
         }
         return null;
-    }
-
-    /** Raiz {@code <Machine>} com parser namespace-aware (BXML 1.0 com {@code xmlns}). */
-    static Element parseMachineElement(Path bxmlPath) throws Exception {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(true);
-        try {
-            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-        } catch (Exception ignored) {
-            // opcional
-        }
-        DocumentBuilder builder = factory.newDocumentBuilder();
-        Document doc = builder.parse(bxmlPath.toFile());
-        Element root = doc.getDocumentElement();
-        root.normalize();
-        return root;
     }
 
     public static Map<String, String> buildEnumRenames(Element machineEl) {
@@ -1025,7 +1005,7 @@ public final class BxmlSetsTranslator {
                 Path p = bxmlDirectory.resolve(dep + ".bxml");
                 if (!Files.isRegularFile(p)) continue;
                 try {
-                    depMachineEls.add(parseMachineElement(p));
+                    depMachineEls.add(BxmlDocumentLoader.parseMachineElement(p));
                 } catch (Exception ignored) {}
             }
         }

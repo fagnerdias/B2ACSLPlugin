@@ -112,7 +112,7 @@ public final class MachineIncludeScanCollector {
                 if (Files.isRegularFile(bxml)) {
                     try {
                         sb.append(
-                                collectBxmlTextForIncludeScan(BxmlSetsTranslator.parseMachineElement(bxml)));
+                                collectBxmlTextForIncludeScan(BxmlDocumentLoader.parseMachineElement(bxml)));
                         sb.append('\n');
                     } catch (Exception ignored) {
                         // ignora

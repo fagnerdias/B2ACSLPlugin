@@ -76,6 +76,8 @@ public final class AcslGenerator {
 
     private AcslGenerator() {}
 
+    private static final AcslLibraryResolver LIBRARY_RESOLVER = new DefaultAcslLibraryResolver();
+
     /**
      * Raiz XML {@code <Machine>} do ficheiro BXML.
      */
@@ -283,6 +285,7 @@ public final class AcslGenerator {
         String propertiesBlock;
         Map<Element, Map<String, String>> mergedVariableRenames;
         List<BDefinitionsTranslator.ResolvedDefinition> bDefinitions = List.of();
+        com.example.bxml.TupleCodomainTypeRegistry tupleCodomainTypeRegistry;
     }
 
     /**
@@ -333,7 +336,8 @@ public final class AcslGenerator {
         // ao inferir os tipos das variáveis desta máquina (mais abaixo) são escritos num .acsl
         // próprio dela e incluídos localmente, perto do fim desta função — limpa aqui para não
         // herdar entradas de uma máquina anterior processada no mesmo processo.
-        com.example.bxml.TupleCodomainTypeRegistry.clear();
+        state.tupleCodomainTypeRegistry = new com.example.bxml.TupleCodomainTypeRegistry();
+        com.example.bxml.TupleCodomainTypeRegistry.bindForCurrentCall(state.tupleCodomainTypeRegistry);
         boolean libCarrier =
                 libIncludeCarrierMachineName != null
                         && !libIncludeCarrierMachineName.isBlank()
@@ -1133,7 +1137,7 @@ public final class AcslGenerator {
         }
         String fullAcsl = sb.toString();
         if (omitLibIncludesFromPreamble) {
-            fullAcsl = AcslLibIncludes.removeLibIncludesFromPreamble(fullAcsl);
+            fullAcsl = LIBRARY_RESOLVER.removeLibIncludesFromPreamble(fullAcsl);
         }
         if (!state.bDefinitions.isEmpty()) {
             // Reescreve os pontos de uso (ensures/invariant/…, já gerados a partir do BXML
@@ -1144,7 +1148,7 @@ public final class AcslGenerator {
         Path acslFile = state.acslFile;
         Files.writeString(acslFile, fullAcsl);
         if (!omitLibIncludesFromPreamble) {
-            AcslLibIncludes.copyReferencedLibraryFiles(
+            LIBRARY_RESOLVER.copyReferencedLibraryFiles(
                     fullAcsl, acslFile, libResolution.combinedExtraScan(), libResolution.dependencyLibIncludePaths());
         }
         return acslFile;
@@ -1214,7 +1218,7 @@ public final class AcslGenerator {
                         joinNonBlank(extraLibScanText, extraLibSymbolScan),
                         dependencyMachinesScan);
         String libIncludes =
-                AcslLibIncludes.formatIncludeBlock(
+                LIBRARY_RESOLVER.formatIncludeBlock(
                         bodyForLibScan, combinedExtraScan, dependencyLibIncludePaths);
         return new LibIncludeResolution(combinedExtraScan, libIncludes, dependencyLibIncludePaths);
     }
@@ -1252,7 +1256,7 @@ public final class AcslGenerator {
      * própria lib, nunca visto reordenado nas várias execuções desta sessão).
      */
     private static String writeTupleTypesFileIfNeeded(AcslGenerationState state) throws IOException {
-        Map<String, String> extraTupleTypes = com.example.bxml.TupleCodomainTypeRegistry.snapshotAndClear();
+        Map<String, String> extraTupleTypes = state.tupleCodomainTypeRegistry.snapshotAndClear();
         if (extraTupleTypes.isEmpty()) {
             return "";
         }
@@ -1286,8 +1290,8 @@ public final class AcslGenerator {
         if (!Files.isRegularFile(mainAcsl)) {
             return Optional.empty();
         }
-        String body = AcslLibIncludes.acslBodyAfterPreambleIncludes(Files.readString(mainAcsl));
-        String includes = AcslLibIncludes.formatIncludeBlock(body, null);
+        String body = LIBRARY_RESOLVER.acslBodyAfterPreambleIncludes(Files.readString(mainAcsl));
+        String includes = LIBRARY_RESOLVER.formatIncludeBlock(body, null);
         if (includes.isBlank()) {
             return Optional.empty();
         }
@@ -1298,7 +1302,7 @@ public final class AcslGenerator {
                         + " */\n\n"
                         + includes;
         Files.writeString(sidecar, sidecarText);
-        AcslLibIncludes.copyReferencedLibraryFiles(sidecarText + "\n" + body, sidecar, null);
+        LIBRARY_RESOLVER.copyReferencedLibraryFiles(sidecarText + "\n" + body, sidecar, null);
         return Optional.of(sidecar);
     }
 

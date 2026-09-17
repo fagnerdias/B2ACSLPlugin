@@ -15,31 +15,51 @@ import java.util.Map;
  * máquina que os precisa e incluídos localmente por ela (ver {@link AcslGenerator#generateAcsl}),
  * em vez de exigir um alias estático pré-existente para CADA combinação de tipos/aridade possível.
  *
- * <p>Estado estático, âmbito de UMA chamada a {@code AcslGenerator#generateAcsl}: limpo no início e
- * lido (e limpo de novo) no fim dessa mesma chamada — o pipeline processa máquinas sequencialmente,
- * não há concorrência.
+ * <p>Estado de instância, âmbito de UMA chamada a {@code AcslGenerator#generateAcsl}: uma instância
+ * nova é criada e vinculada (ver {@link #bindForCurrentCall}) no início dessa chamada, e lida (e
+ * limpa) uma única vez no fim, via {@link #snapshotAndClear()} — o pipeline processa máquinas
+ * sequencialmente, não há concorrência. Todo {@link BxmlTypeRegistry} construído durante essa
+ * chamada (em qualquer classe do pacote {@code bxml}) captura, no momento em que é criado, a
+ * instância vinculada por {@link #bindForCurrentCall} — reproduzindo exatamente o âmbito que antes
+ * era dado por um {@code Map} estático único, mas agora sobre um objeto instanciável.
  */
 public final class TupleCodomainTypeRegistry {
 
-    private static final Map<String, String> NEEDED = new LinkedHashMap<>();
+    private final Map<String, String> needed = new LinkedHashMap<>();
 
-    private TupleCodomainTypeRegistry() {}
+    private static TupleCodomainTypeRegistry current;
 
-    public static void clear() {
-        NEEDED.clear();
+    public TupleCodomainTypeRegistry() {}
+
+    /**
+     * Vincula {@code instance} como o registo ativo para a chamada em curso a {@code
+     * AcslGenerator#generateAcsl}; chamado exclusivamente por {@code AcslGenerator} no início dessa
+     * chamada (substitui o antigo {@code clear()} estático: em vez de esvaziar um mapa partilhado,
+     * troca a instância ativa por uma nova e vazia).
+     */
+    public static void bindForCurrentCall(TupleCodomainTypeRegistry instance) {
+        current = instance;
+    }
+
+    /**
+     * Registo ativo para a chamada em curso, ou um registo novo e descartável se nenhum foi
+     * vinculado ainda (uso fora do pipeline principal do {@code AcslGenerator}).
+     */
+    static TupleCodomainTypeRegistry current() {
+        return current != null ? current : new TupleCodomainTypeRegistry();
     }
 
     /**
      * @param name nome achatado (ver {@link BxmlTypeRegistry#flattenGenericTypeExprToIdentifier})
      * @param setTupleDefinition ex.: {@code "Set<Tuple<integer, Tuple<boolean,integer>> >"}
      */
-    static void register(String name, String setTupleDefinition) {
-        NEEDED.putIfAbsent(name, setTupleDefinition);
+    void register(String name, String setTupleDefinition) {
+        needed.putIfAbsent(name, setTupleDefinition);
     }
 
-    public static Map<String, String> snapshotAndClear() {
-        Map<String, String> copy = Map.copyOf(NEEDED);
-        NEEDED.clear();
+    public Map<String, String> snapshotAndClear() {
+        Map<String, String> copy = Map.copyOf(needed);
+        needed.clear();
         return copy;
     }
 }
