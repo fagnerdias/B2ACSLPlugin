@@ -9,7 +9,7 @@ Projeto de exemplo estruturado com Maven para:
 
 ## Clonar o repositório
 
-O plugin depende da biblioteca ACSL em `src/main/resources/lib`, registrada como submódulo Git apontando para [ACSL2BMethodLib](https://github.com/fagnerdias/ACSL2BMethodLib).
+O plugin depende da biblioteca ACSL em `translate/src/main/resources/lib`, registrada como submódulo Git apontando para [ACSL2BMethodLib](https://github.com/fagnerdias/ACSL2BMethodLib).
 
 Clone o repositório principal já trazendo o submódulo:
 
@@ -36,16 +36,16 @@ git submodule update --init --recursive
 Para buscar a versão mais recente da biblioteca no remoto do submódulo:
 
 ```bash
-git submodule update --remote src/main/resources/lib
+git submodule update --remote translate/src/main/resources/lib
 ```
 
-Revise as alterações em `src/main/resources/lib` antes de fixar um novo commit do submódulo no repositório principal.
+Revise as alterações em `translate/src/main/resources/lib` antes de fixar um novo commit do submódulo no repositório principal.
 
 ### Biblioteca ACSL no classpath
 
-O submódulo preenche `src/main/resources/lib` com o repositório completo da ACSL2BMethodLib. O plugin carrega as funções ACSL diretamente de `src/main/resources/lib/B2ACSLLib` no classpath.
+O submódulo preenche `translate/src/main/resources/lib` com o repositório completo da ACSL2BMethodLib. O plugin carrega as funções ACSL diretamente de `translate/src/main/resources/lib/B2ACSLLib` no classpath (módulo Maven `translate`).
 
-O mapa de dependências entre símbolos da biblioteca fica em `src/main/resources/b2acsl/symbol_dependency_map.json` e pode ser regenerado com:
+O mapa de dependências entre símbolos da biblioteca fica em `translate/src/main/resources/b2acsl/symbol_dependency_map.json` e pode ser regenerado com:
 
 ```bash
 python3 scripts/generate_acsl_symbol_dependency_map.py
@@ -73,12 +73,14 @@ Se você pretende gerar o executável nativo:
 
 ## Estrutura do projeto
 
-- `src/main/java/com/example/Main.java`: exemplo lendo `example.xml` do classpath
-- `src/main/resources/example.xml`: XML de exemplo
-- `src/main/resources/lib/`: submódulo Git com a biblioteca ACSL2BMethodLib (`B2ACSLLib/`)
-- `src/main/resources/b2acsl/symbol_dependency_map.json`: mapa de dependências entre símbolos da biblioteca
-- `pom.xml`: compiler Java 21, Shade (Uber-JAR) e GraalVM Native Image plugin
-- `Makefile`: automações `build-jar`, `build-native`, `build-installer`, `clean`
+O projeto é um reactor Maven multi-módulo (`pom.xml` na raiz, `packaging=pom`), dividido em 4 módulos com dependência acíclica entre si (`core`/`translate` não dependem de nada no projeto; `frama-c` depende dos dois; `cli` depende dos três):
+
+- `core/`: diálogos Swing (`com.example.ui.*`), estimador de `-ulevel` (`com.example.analysis`), configuração tipada `B2AcslConfig`
+- `translate/`: tradução BXML → ACSL (`com.example.bxml.*`, `AcslGenerator`), resolução da biblioteca (`AcslLibIncludes`, `AcslLibSymbolDependencyMap`); inclui o submódulo Git `translate/src/main/resources/lib/` (`B2ACSLLib/`), `translate/src/main/resources/b2acsl/symbol_dependency_map.json` e os testes JUnit (`translate/src/test/`)
+- `frama-c/`: invocação do Frama-C (`FramaCRunner`) e pós-processamento de `merged_code.c`
+- `cli/`: ponto de entrada (`Main.java`) e orquestração (`B2ACSLPipeline`) — artifactId mantido como `xml-reader` (não `b2acsl-cli`) e build redirecionado para `target/` na raiz, para preservar os caminhos que `scripts/run_examples.sh`, o `Makefile` e o `plugin.etool` do Atelier B já esperavam antes do split
+- `pom.xml`: pai do reactor — propriedades compartilhadas, `<modules>`, versões de plugin
+- `Makefile`: automações `build-jar`, `build-native`, `build-installer`, `clean` (usa `mvn -pl cli help:evaluate` para descobrir `artifactId`/`version` do módulo final)
 
 ## Como executar
 

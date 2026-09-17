@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>b2acsl-parent</artifactId>
+    <version>0.1.0</version>
+  </parent>
+
+  <artifactId>b2acsl-core</artifactId>
+  <name>b2acsl-core</name>
+  <description>Diálogos Swing de verificação (com.example.ui), estimador de -ulevel
+    (com.example.analysis) e configuração tipada b2acsl.* (B2AcslConfig) — sem dependência de
+    nenhum outro módulo B2ACSL.</description>
+
+  <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>true</filtering>
+        <includes>
+          <include>META-INF/b2acsl.properties</include>
+        </includes>
+      </resource>
+    </resources>
+  </build>
+</project>

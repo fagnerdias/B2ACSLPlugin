@@ -4,8 +4,10 @@
 # Log file
 *.log
 
-# Maven
+# Maven (projeto multi-módulo: core/translate/frama-c/cli têm cada um o seu próprio target/,
+# além do target/ na raiz onde o módulo cli redireciona a build final)
 target/*
+*/target/
 
 # BlueJ files
 *.ctxt
@@ -36,3 +38,6 @@ plugin.etool
 docs/*
 
 examples/
+
+# Logs de execução de scripts/run_examples.sh (histórico local de regressão manual)
+scripts/run-logs/

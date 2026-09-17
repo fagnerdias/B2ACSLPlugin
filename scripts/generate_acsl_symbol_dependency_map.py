@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Analisa src/main/resources/lib/B2ACSLLib/**/*.acsl e grava b2acsl/symbol_dependency_map.json.
+Analisa translate/src/main/resources/lib/B2ACSLLib/**/*.acsl e grava
+translate/src/main/resources/b2acsl/symbol_dependency_map.json (caminhos dentro do módulo Maven
+"translate", desde o split em módulos core/translate/frama-c/cli).
 
 Campos gerados:
   - symbols: nomes declarados como logic/predicate (exclui ficheiros em SKIPPED_DEFINING_FILES).
@@ -28,8 +30,8 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ROOT = PROJECT_ROOT / "src/main/resources/lib/B2ACSLLib"
-OUT = PROJECT_ROOT / "src/main/resources/b2acsl/symbol_dependency_map.json"
+ROOT = PROJECT_ROOT / "translate/src/main/resources/lib/B2ACSLLib"
+OUT = PROJECT_ROOT / "translate/src/main/resources/b2acsl/symbol_dependency_map.json"
 
 # Ficheiros a ignorar como fontes de declaração de símbolos (legados / teste).
 SKIPPED_DEFINING_FILES = {
