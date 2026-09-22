@@ -23,6 +23,7 @@ import com.example.bxml.BxmlImportsGraph;
 import com.example.bxml.BxmlSeesGraph;
 import com.example.bxml.GhostOperationsCiGenerator;
 import com.example.ui.FormalVerificationReportDialog;
+import com.example.ui.PreVerificationErrorDialog;
 import com.example.ui.VerificationProgressDialog;
 import com.example.ui.VerificationReportData;
 import com.example.analysis.LoopUnrollLevelEstimator;
@@ -445,6 +446,7 @@ final class FramaCRunner {
         // uma mensagem que já não nomeia o token ("unexpected token ','"). Por isso lembra-se aqui
         // cada token curado para reaplicar a mesma renomeação já feita nos .acsl, depois do strip.
         Set<String> healedReservedWords = new LinkedHashSet<>();
+        String importOutput = "";
         for (int attempt = 0; attempt < 5; attempt++) {
             ProcessBuilder importPb = new ProcessBuilder(importCmd);
             importPb.directory(cDir.toFile());
@@ -461,12 +463,14 @@ final class FramaCRunner {
             if (importExitCode == 0) {
                 break;
             }
-            String importOutput =
+            importOutput =
                     Files.isRegularFile(mergedCode)
                             ? Files.readString(mergedCode, StandardCharsets.UTF_8)
                             : "";
             String badToken = extractAcslImportSyntaxErrorToken(importOutput);
             if (badToken == null || PROTECTED_ACSL_STRUCTURAL_WORDS.contains(badToken)) {
+                PreVerificationErrorDialog.show(
+                        projectName, "Frama-C -acsl-import", String.join(" ", importCmd), importOutput);
                 return importExitCode;
             }
             System.out.println(
@@ -479,6 +483,8 @@ final class FramaCRunner {
             healedReservedWords.add(badToken);
         }
         if (importExitCode != 0) {
+            PreVerificationErrorDialog.show(
+                    projectName, "Frama-C -acsl-import", String.join(" ", importCmd), importOutput);
             return importExitCode;
         }
 
