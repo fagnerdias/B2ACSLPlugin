@@ -737,23 +737,30 @@ public final class BxmlSetsTranslator {
             }
             try {
                 Element seenEl = BxmlDocumentLoader.parseMachineElement(p);
-                Element block = BxmlDomUtils.firstChildElement(seenEl, "Concrete_Constants");
-                if (block == null) {
-                    continue;
-                }
-                NodeList ch = block.getChildNodes();
-                for (int i = 0; i < ch.getLength(); i++) {
-                    Node n = ch.item(i);
-                    if (n.getNodeType() != Node.ELEMENT_NODE) {
+                // Concrete_Constants E Abstract_Constants: uma constante ABSTRACT_CONSTANTS (ex.
+                // csp_stdLib_type_cst's SBOOL, definida via PROPERTIES) é igualmente um global
+                // partilhado só visível através do .acsl da máquina vista (-acsl-import) — o
+                // front-end isolado do .ci rejeita com "unbound logic variable" se só as
+                // Concrete_Constants forem consideradas aqui.
+                for (String blockName : List.of("Concrete_Constants", "Abstract_Constants")) {
+                    Element block = BxmlDomUtils.firstChildElement(seenEl, blockName);
+                    if (block == null) {
                         continue;
                     }
-                    Element e = (Element) n;
-                    if (!"Id".equals(e.getLocalName())) {
-                        continue;
-                    }
-                    String name = e.getAttribute("value");
-                    if (name != null && !name.isBlank()) {
-                        result.add(name.trim());
+                    NodeList ch = block.getChildNodes();
+                    for (int i = 0; i < ch.getLength(); i++) {
+                        Node n = ch.item(i);
+                        if (n.getNodeType() != Node.ELEMENT_NODE) {
+                            continue;
+                        }
+                        Element e = (Element) n;
+                        if (!"Id".equals(e.getLocalName())) {
+                            continue;
+                        }
+                        String name = e.getAttribute("value");
+                        if (name != null && !name.isBlank()) {
+                            result.add(name.trim());
+                        }
                     }
                 }
             } catch (Exception ignored) {
@@ -799,28 +806,32 @@ public final class BxmlSetsTranslator {
             }
             try {
                 Element seenEl = BxmlDocumentLoader.parseMachineElement(p);
-                Element block = BxmlDomUtils.firstChildElement(seenEl, "Concrete_Constants");
-                if (block == null) {
-                    continue;
-                }
                 BxmlTypeRegistry seenTypes = BxmlTypeRegistry.fromMachine(seenEl);
-                NodeList ch = block.getChildNodes();
-                for (int i = 0; i < ch.getLength(); i++) {
-                    Node n = ch.item(i);
-                    if (n.getNodeType() != Node.ELEMENT_NODE) {
+                // Concrete_Constants E Abstract_Constants — ver comentário equivalente em
+                // listSeenMachineConcreteConstantNames.
+                for (String blockName : List.of("Concrete_Constants", "Abstract_Constants")) {
+                    Element block = BxmlDomUtils.firstChildElement(seenEl, blockName);
+                    if (block == null) {
                         continue;
                     }
-                    Element e = (Element) n;
-                    if (!"Id".equals(e.getLocalName())) {
-                        continue;
+                    NodeList ch = block.getChildNodes();
+                    for (int i = 0; i < ch.getLength(); i++) {
+                        Node n = ch.item(i);
+                        if (n.getNodeType() != Node.ELEMENT_NODE) {
+                            continue;
+                        }
+                        Element e = (Element) n;
+                        if (!"Id".equals(e.getLocalName())) {
+                            continue;
+                        }
+                        String name = e.getAttribute("value");
+                        if (name == null || name.isBlank()) {
+                            continue;
+                        }
+                        String tr = e.getAttribute("typref");
+                        int typref = tr.isBlank() ? -1 : Integer.parseInt(tr.trim());
+                        result.put(name.trim(), seenTypes.acslVariableLogicTypeFromTypref(typref));
                     }
-                    String name = e.getAttribute("value");
-                    if (name == null || name.isBlank()) {
-                        continue;
-                    }
-                    String tr = e.getAttribute("typref");
-                    int typref = tr.isBlank() ? -1 : Integer.parseInt(tr.trim());
-                    result.put(name.trim(), seenTypes.acslVariableLogicTypeFromTypref(typref));
                 }
             } catch (Exception ignored) {
             }
