@@ -1,3 +1,184 @@
+# Implementações v0.0.4
+
+Release consolidando a tradução B → ACSL desde a v0.0.3 (52 commits) e uma refatoração de
+arquitetura (split em módulos Maven). O conjunto de exemplos validados cresceu de **16 (v0.0.3)
+para 31 projetos**, com **3583/4098 (87,4%) obrigações de prova (PO) provadas** automaticamente
+pelo Frama-C WP (CVC5) nesta execução — sem nenhuma regressão introduzida pela refatoração de
+arquitetura (verificado comparando a suíte completa antes/depois em 4 rodadas distintas).
+
+---
+
+## O que foi traduzido
+
+### Sequências B (`seq`, `seq1`, `iseq`, `iseq1`, `perm`, …)
+
+Cobertura completa da família de operadores de sequência do B, validada pelo projeto dedicado
+`cv_seq` (18/18):
+
+- `seq`/`seq1`/`iseq`/`iseq1`/`perm` decompostos em predicados já existentes (`seq` + `iSeq` +
+  `sequence_ran` + `equals`) em vez de ficarem omitidos.
+- `conc`, `rev`, `front`, `tail`, `first`, `last`, `length`, `is_seq_of`.
+- `function_to_list`/`list_to_function`, `restrict_front`/`restrict_tail`.
+- Correção de um bug latente de classe geral em `\list<A>` (sobrecarga de `belongs`) e de uma
+  classe de axiomas de nil ambíguo (`front`/`tail`/`iSeq`/`conc`/`rev`).
+- `>>` (concatenação) no lexer; tradução de sequências construídas por lambda como construtor
+  recursivo (`\list` + lemas-ponte `_length`/`_nth`) — necessário para o invariante de buffer
+  circular do `RobustFifo`, item que ficara aberto desde a v0.0.3.
+
+### Funções e relações (`cv_fun`, operadores de relação)
+
+- Tradução de `+->>`, `>+>`, `>->`, `>->>` (função parcial/total sobrejetiva/injetiva/bijetiva),
+  validada pelo projeto `cv_fun` (18/18).
+- `closure`, `closure1`, `iterate` sobre relações.
+- `succ`/`pred` como identificador solto (`(nn|->nn+1):succ` → `belongs(couple(nn,nn+1), succ)`).
+- `<+` (overwrite de relação) via nova função `overwrite`/`relation_overwrite` na biblioteca.
+- `f(x) := y` (sobrescrita de relação/função) traduzido para
+  `equals(f, overwrite(f, singleton(couple(x,y))))` em vez da equivalência fraca
+  `function_apply(f,x)==y`.
+- `::` (`becomes_element_of`): nova tradução com 2 sobrecargas (domínio-função e conjunto
+  simples), substituindo `is_total_function`/`belongs`.
+- `Relation<A,B>`/`Function<A,B>` genéricos em todo lugar onde antes se instanciava um literal
+  achatado (`Relation_X`/`Function_X`) — corrige uma regressão que quebrava 6/17 projetos quando
+  o literal não estava previamente declarado.
+- `**` (potência): geração automática de `b_pow.acsl` com contrato dedicado sempre que detectado,
+  evitando depender de um helper de runtime sem especificação.
+
+### Conjuntos e quantificadores generalizados
+
+- `cv_sets` (21/21): operações de não-inclusão, `inter(...)` e `union(...)` explícitos.
+- Novos registros dedicados `SigmaFunctionRegistry` (`SIGMA`/`PI`/`MIN`/`MAX`) e
+  `UnionInterFunctionRegistry` (`UNION`/`INTER`) — cada quantificador generalizado do B vira uma
+  função lógica nomeada, axiomatizada por indução (domínio-intervalo) ou estruturalmente sobre
+  `empty`/`set_union` (domínio-conjunto), com lemas-ponte para indução de loop no WP.
+- Registro global de nomes de conjuntos declarados (`declaredSetNames`) para não capturar o
+  próprio nome do conjunto como variável livre espúria em lambdas (`%cc.(cc:SETNAME|...)`).
+
+### Lambda B (`%`)
+
+Redesenho em três vias, em vez de uma tradução única: construtor de sequência (recursivo, para
+domínios `lo..hi`, com lemas-ponte `_length`/`_nth`), mapa (predicado/função, caminho antigo), e
+eliminação `\let` para o padrão `#v.(v=E & P)`.
+
+### `ANY` e cláusulas não-escalares
+
+- Tradução migrada de `\forall … ==> …` para `\exists … && …`, com `\old()` correto.
+- `AnySubMarkerSpec` (novo): predicados-marcador nulários para contornar a mini-DSL restrita do
+  `-acsl-import` quando a cláusula quantificada não é escalar — permitindo suporte inicial a
+  `ANY` sobre tipos compostos, tanto no caminho ghost quanto no caminho de contrato real.
+
+### `DEFINITIONS`, operações locais e variáveis cross-machine
+
+- `BDefinitionsTranslator` (novo): traduz a cláusula B `DEFINITIONS` para um bloco `axiomatic`
+  ACSL e reescreve os pontos de uso para os nomes simbólicos.
+- Suporte a `LOCAL_OPERATIONS` na tradução de operações.
+- Tipos lógicos de variável resolvidos de forma transitiva entre máquinas (`SEES`/`IMPORTS`),
+  fechando mais uma instância da classe de bug "só olha um nível de profundidade" já corrigida
+  parcialmente na v0.0.3 (agora também para a especificação de loop de `INITIALISATION` quando o
+  domínio é valorado numa máquina só-`SEES`).
+- Variáveis de mesmo nome entre abstrato e implementação continuam colapsando numa única
+  variável array-backed (sem gêmeo ghost) — comportamento herdado da v0.0.3, agora coberto por
+  mais exemplos.
+
+---
+
+## Arquitetura (refatoração, sem mudança de tradução)
+
+Trabalho de reorganização estrutural, verificado a cada etapa contra a suíte completa de
+exemplos sem nenhuma regressão:
+
+- Extração de interfaces (`ExternalVerifierRunner` sobre `FramaCRunner`, `AcslLibraryResolver`
+  sobre `AcslLibIncludes`), eliminação de estado estático mutável (`TupleCodomainTypeRegistry`,
+  `cachedProps`), `B2AcslConfig` tipado substituindo leituras dispersas de `System.getProperty`,
+  e uma suíte JUnit inicial (14 testes) para os tradutores `bxml.*` sem estado.
+- Lista de estágios nomeada para o pós-processamento de `merged_code.c`; quebra dos
+  acoplamentos circulares `B2ACSLPipeline`↔`FramaCRunner` e
+  `BxmlMachineVariables`↔`ConcreteAssignTargetResolver`.
+- **Split em 4 módulos Maven** (`core`/`translate`/`frama-c`/`cli`), desenhado pela dependência
+  real de classes — o módulo `translate` (tradução BXML→ACSL + biblioteca `B2ACSLLib`) é
+  standalone, sem depender de nenhum outro módulo do projeto.
+- `targetAcslDir` deixou de ser uma property da JVM escrita em runtime, virando parâmetro `Path`
+  explícito.
+
+---
+
+## Exemplos utilizados para verificar a tradução (31 projetos)
+
+Resultados de obrigações de prova (PO) obtidos executando o pipeline completo
+(`B2ACSLPipeline` → Frama-C `-acsl-import` → `-wp -wp-prover CVC5 -wp-rte -wp-smoke-tests`)
+contra o estado atual do código, pasta `examples/`:
+
+| Projeto | PO provadas / total | % |
+|---|---|---|
+| AddRunner | 41 / 41 | 100,0% |
+| airlock | 123 / 123 | 100,0% |
+| Biblioteca | 172 / 218 | 78,9% |
+| BirthdayRegister | 60 / 64 | 93,8% |
+| Customer_estr | 138 / 147 | 93,9% |
+| cv_arith | 20 / 20 | 100,0% |
+| cv_base | 11 / 11 | 100,0% |
+| cv_closure | 18 / 18 | 100,0% |
+| cv_fun | 18 / 18 | 100,0% |
+| cv_rec¹ | não conclui | — |
+| cv_rel | 18 / 22 | 81,8% |
+| cv_seq | 18 / 18 | 100,0% |
+| cv_sets | 21 / 21 | 100,0% |
+| cv_struct | 41 / 41 | 100,0% |
+| DataFields | 3 / 3 | 100,0% |
+| DataValidation | 147 / 167 | 88,0% |
+| filling_array | 143 / 158 | 90,5% |
+| finding_the_max_array | 156 / 177 | 88,1% |
+| fuel_level | 239 / 239 | 100,0% |
+| integer_arithmetic_calculator | 123 / 125 | 98,4% |
+| mult | 78 / 78 | 100,0% |
+| OddEvenCounter | 59 / 63 | 93,7% |
+| railroad_switch | 47 / 47 | 100,0% |
+| Register | 65 / 75 | 86,7% |
+| RobustFifo | 331 / 334 | 99,1% |
+| Room | 25 / 26 | 96,2% |
+| RulesOfTheSeas | 1319 / 1679 | 78,6% |
+| Seats | 88 / 102 | 86,3% |
+| simple_loop | 38 / 38 | 100,0% |
+| TestLocalOperation | 23 / 25 | 92,0% |
+| xor_integrity² | 74 / 74 (exit≠0) | — |
+| **Total (29 projetos concluídos)** | **3583 / 4098** | **87,4%** |
+
+¹ `cv_rec` trava na etapa de parsing do Frama-C (`-acsl-import -print`) antes de qualquer goal de
+WP ser agendado — pré-existente, reproduzido de forma idêntica num worktree isolado da branch
+`main` pristina (sem nenhuma das mudanças desta release).
+
+² `xor_integrity` prova **todas as 74 obrigações** que consegue agendar, mas termina com código de
+saída ≠ 0: a verificação por-operação tenta rodar `-wp-fct` também para operações de máquinas
+`SEES`-only (`xor_ops`, `xor_spec`) que não têm função C compilada correspondente, e o Frama-C
+recusa esses 3 alvos com "no function". Também pré-existente — o mesmo comportamento aparece já
+no commit anterior à v0.0.3 (`xor_integrity` era 174/174 antes de um merge posterior introduzir
+esse efeito colateral do modo por-operação).
+
+**Verificação cruzada independente** — 6 projetos também têm uma referência `correct/` (contrato
+ACSL escrito à mão, verificada com `frama-c -wp` direto, fora do pipeline `-acsl-import`):
+BirthdayRegister (73/73), Customer_estr (119/126), filling_array (131/134),
+finding_the_max_array (189/189), OddEvenCounter (40/42), RobustFifo (323/324).
+
+Das PO não provadas nos 29 projetos concluídos, a mesma classificação da v0.0.3 continua válida:
+a maioria é timeout do CVC5 (candidata a prover alternativo/timeout maior) ou smoke-test de
+código morto (`Doomed`) já revisado — não há nenhum contraexemplo real (`Invalid`) em nenhum
+exemplo.
+
+---
+
+## Próximos passos sugeridos
+
+- Resolver os 3 alvos `SEES`-only de `xor_integrity` na verificação por-operação (não incluir
+  operações sem função C própria na lista de `-wp-fct`).
+- Investigar o parsing travado de `cv_rec`.
+- Investigar os goals com timeout de maior duração (`RulesOfTheSeas`, `Biblioteca`, `Seats`,
+  `Register`) com timeout maior ou lemmas auxiliares.
+- Seção `ASSERTIONS` de B (obrigações de prova explícitas na máquina) segue sem suporte —
+  afeta `cv_arith`/`cv_sets`/`cv_rel`/`cv_seq`/`xor_integrity`; adiado por decisão consciente.
+- Considerar publicar o módulo `translate` como artefato standalone (Maven Central ou repositório
+  interno), já que ele não depende de nenhum outro módulo do projeto.
+
+---
+
 # Implementações v0.0.3
 
 Release focada na tradução de máquinas B com **IMPORTS/SEES multi-máquina** via mecanismo de
