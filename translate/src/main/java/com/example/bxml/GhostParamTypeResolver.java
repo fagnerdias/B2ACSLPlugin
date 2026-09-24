@@ -46,7 +46,16 @@ final class GhostParamTypeResolver {
                 String tr = e.getAttribute("typref");
                 int typref = (tr == null || tr.isBlank()) ? -1 : Integer.parseInt(tr.trim());
                 String logicType = ctx.types().acslVariableLogicTypeFromTypref(typref);
-                result.put(name, "logic " + logicType + " " + name);
+                // Este bloco vive dentro de ghost_operations.ci (front-end isolado, sem os aliases
+                // "type Relation<A,B> = ...;"/"type Function_X = ...;" de types.acsl nem os
+                // ficheiros _tuple_types.acsl gerados só para o lado real) — um tipo achatado
+                // legado (ex. "Relation_Tuple_integer_integer_Set_integer") fica sem tipo
+                // declarado nenhum ("no such type"), ao contrário do bloco "dummy_ghost" logo
+                // acima, que já usa DummyGhostAxiomaticBuilder#dummyAxiomaticLogicType para o
+                // mesmo problema. O NOME da constante fica bare (não fica "dummy_"-prefixado, ver
+                // comentário em DummyGhostAxiomaticBuilder#format sobre este bloco sobreviver ao
+                // merged_code.c), só o TIPO precisa da forma D-prefixada/genérica local.
+                result.put(name, "logic " + DummyGhostAxiomaticBuilder.dummyAxiomaticLogicType(logicType) + " " + name);
             }
         }
         return result;

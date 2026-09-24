@@ -303,6 +303,16 @@ public final class BxmlPredicateToAcsl {
 
     private static String translateMembershipComparison(
             Element leftEl, Element rightEl, BxmlTranslateContext ctx) {
+        // rv : struct(fld1: T1, fld2: T2, ...) → conjunção de pertenças POR-CAMPO
+        // (belongs(rv__fld1, T1) && belongs(rv__fld2, T2)), nunca uma pertença struct-valorada
+        // única: "rv" não é um termo struct-valorado — é um espelho logic escalar por-campo
+        // (ver MachineAxiomaticBlockFormatter#appendStructFieldMirrors, mesma convenção de nome
+        // "rv__campo" usada por BxmlExpressionToAcsl#translateRecordFieldAccess/
+        // #formatRecordLiteralAssignment).
+        if ("Struct".equals(rightEl.getLocalName())) {
+            String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            return translateStructMembership(left, rightEl, ctx);
+        }
         // ss : POW(S) → belongs(ss, pow_set(S)); ss : FIN(ss) → is_finite(ss)
         if ("Unary_Exp".equals(rightEl.getLocalName())) {
             String uop = rightEl.getAttribute("op");
@@ -480,6 +490,52 @@ public final class BxmlPredicateToAcsl {
             return "(" + left + " /* : " + right + " */)";
         }
         return "belongs(" + left + ", " + right + ")";
+    }
+
+    /**
+     * Corpo de {@code rv : struct(fld1: T1, fld2: T2, ...)} — uma cláusula de pertença por campo,
+     * recorrendo a {@link #translateFieldTypeMembership} para o tipo de cada campo (incluindo
+     * registos aninhados, via recursão).
+     */
+    private static String translateStructMembership(
+            String leftText, Element structEl, BxmlTranslateContext ctx) {
+        List<String> clauses = new ArrayList<>();
+        NodeList children = structEl.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element item = (Element) n;
+            if (!"Record_Item".equals(item.getLocalName())) continue;
+            String label = item.getAttribute("label");
+            Element typeEl = BxmlDomUtils.firstNonAttrElementChild(item);
+            if (label == null || label.isBlank() || typeEl == null) continue;
+            clauses.add(translateFieldTypeMembership(leftText + "__" + label, typeEl, ctx));
+        }
+        return String.join(" && ", clauses);
+    }
+
+    /**
+     * Pertença de {@code fieldRef} (já o nome do espelho logic por-campo, ex. {@code rv__fld1}) ao
+     * tipo B {@code typeEl} de um {@code Record_Item} — mesma lógica de intervalo/tipo primitivo do
+     * final de {@link #translateMembershipComparison}, sem repetir os ramos de POW/sequência/relação
+     * (nunca aparecem como tipo de campo de registo nos exemplos atuais).
+     */
+    private static String translateFieldTypeMembership(
+            String fieldRef, Element typeEl, BxmlTranslateContext ctx) {
+        if ("Struct".equals(typeEl.getLocalName())) {
+            return translateStructMembership(fieldRef, typeEl, ctx);
+        }
+        if (BxmlExpressionToAcsl.isIntervalBinaryExp(typeEl)) {
+            String setRef = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(typeEl, ctx);
+            return "belongs(" + fieldRef + ", " + setRef + ")";
+        }
+        String typeText = BxmlExpressionToAcsl.translate(typeEl, ctx);
+        if (isPrimitiveTypeName(typeText)) {
+            if ("NAT".equals(typeText)) return "belongs(" + fieldRef + ", NAT)";
+            if ("BOOL".equals(typeText)) return "belongs(" + fieldRef + ", BOOL)";
+            if ("INT".equals(typeText)) return "belongs(" + fieldRef + ", INT)";
+        }
+        return "belongs(" + fieldRef + ", " + typeText + ")";
     }
 
     private static String translateEqualityComparison(

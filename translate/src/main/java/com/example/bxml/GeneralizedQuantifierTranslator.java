@@ -456,8 +456,9 @@ final class GeneralizedQuantifierTranslator {
     static java.util.List<String>[] freeVarsAndTypes(
             java.util.List<String> boundVarNames, BxmlTranslateContext ctx, Element... scanRoots) {
         java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
+        java.util.Map<String, Integer> idTyprefs = new java.util.HashMap<>();
         for (Element root : scanRoots) {
-            if (root != null) collectIdValues(root, allIds);
+            if (root != null) collectIdValues(root, allIds, idTyprefs);
         }
         allIds.removeAll(boundVarNames);
         allIds.removeAll(ctx.variableLogicTypes().keySet());
@@ -466,9 +467,7 @@ final class GeneralizedQuantifierTranslator {
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
         for (String v : freeVarNames) {
-            String t = ctx.variableLogicTypes().get(v);
-            if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(v);
-            freeVarTypes.add(t == null || t.isBlank() ? "integer" : t);
+            freeVarTypes.add(resolveFreeVarType(v, ctx, idTyprefs));
         }
         @SuppressWarnings("unchecked")
         java.util.List<String>[] out = new java.util.List[] {freeVarNames, freeVarTypes};
@@ -862,8 +861,9 @@ final class GeneralizedQuantifierTranslator {
         // LambdaFunctionRegistry#registerSequenceBuilder), logo uma variável de OUTRA máquina (ex.
         // array, de VArray, importada por Fifo_i_2) tem de entrar como parâmetro tipado explícito.
         java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
-        collectIdValues(bodyExp, allIds);
-        if (guardPred != null) collectIdValues(guardPred, allIds);
+        java.util.Map<String, Integer> idTyprefs = new java.util.HashMap<>();
+        collectIdValues(bodyExp, allIds, idTyprefs);
+        if (guardPred != null) collectIdValues(guardPred, allIds, idTyprefs);
         allIds.remove(boundVarName);
         allIds.removeAll(ctx.variableLogicTypes().keySet());
         allIds.removeAll(ctx.declaredSetNames());
@@ -871,8 +871,7 @@ final class GeneralizedQuantifierTranslator {
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
         for (String v : freeVarNames) {
-            String t = ctx.crossMachineVariableLogicTypes().get(v);
-            freeVarTypes.add(t == null || t.isBlank() ? "integer" : t);
+            freeVarTypes.add(resolveFreeVarType(v, ctx, idTyprefs));
         }
 
         String bodyForLo = replaceWordBoundary(bodyStr, boundVarName, "lo");
@@ -928,8 +927,9 @@ final class GeneralizedQuantifierTranslator {
             boundSet.addAll(quantifiedSetOwnBoundVarNames(bodyExp));
         }
         java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
-        collectIdValues(scanRoot, allIds);
-        if (guardPred != null) collectIdValues(guardPred, allIds);
+        java.util.Map<String, Integer> idTyprefs = new java.util.HashMap<>();
+        collectIdValues(scanRoot, allIds, idTyprefs);
+        if (guardPred != null) collectIdValues(guardPred, allIds, idTyprefs);
         allIds.removeAll(boundSet);
         allIds.removeAll(ctx.variableLogicTypes().keySet());
         allIds.removeAll(ctx.crossMachineVariableNames());
@@ -938,9 +938,7 @@ final class GeneralizedQuantifierTranslator {
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
         for (String v : freeVarNames) {
-            String t = ctx.variableLogicTypes().get(v);
-            if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(v);
-            freeVarTypes.add(t == null || t.isBlank() ? "integer" : t);
+            freeVarTypes.add(resolveFreeVarType(v, ctx, idTyprefs));
         }
 
         LambdaFunctionRegistry registry = ctx.lambdaRegistry();
@@ -995,11 +993,18 @@ final class GeneralizedQuantifierTranslator {
      * ponto {@code x} (que fica livre, sem nada que o ligue) — a relação correta é pontual,
      * restrita ao domínio {@code D}: {@code \forall Tx x; D ==> equals(function_apply(V,x),
      * lambda_funcNN(x))} (corpo valorado-em-conjunto) ou {@code \forall Tx x; D ==>
-     * function_apply(V,x) == lambda_funcNN(x)} (corpo escalar). Devolve {@code null} se {@code
-     * lambdaEl} não tiver esta forma, se o corpo for booleano (predicado, tratado à parte — ver
-     * {@link BxmlConstantsAndProperties}), ou se a classificação escolher o modelo de sequência
-     * (ver {@link #isMapModelLambda}) — nesse caso o chamador cai no caminho genérico ({@code
-     * \list}, já correto sem este envolvimento).
+     * function_apply(V,x) == lambda_funcNN(x)} (corpo escalar). Com N&gt;1 variáveis ligadas (ex.
+     * {@code add_uint32 = %(x1,x2).(x1:D1 & x2:D2 | x1+x2)}), o argumento de {@code
+     * function_apply} é o par ACHATADO À ESQUERDA {@code couple(x1, x2)} (mesma convenção de
+     * {@code GhostNamespacePrefixer#uncurryAbstractConstantApplications}), com um {@code \forall}
+     * por cada variável — sem isto ({@code function_apply(V, x1, x2)} ou pior, nenhum envolvimento
+     * nenhum) x1/x2 ficavam LIVRES na comparação nua {@code V == lambda_funcNN(...)}, "unbound
+     * logic variable x1" no {@code -acsl-import} (só descoberto ao corrigir a tipagem de variável
+     * livre de {@link #resolveFreeVarType} deixar de mascarar este erro com "incompatible types"
+     * mais cedo no mesmo ficheiro). Devolve {@code null} se {@code lambdaEl} não tiver esta forma,
+     * se o corpo for booleano (predicado, tratado à parte — ver {@link BxmlConstantsAndProperties}),
+     * ou se a classificação escolher o modelo de sequência (ver {@link #isMapModelLambda}) — nesse
+     * caso o chamador cai no caminho genérico ({@code \list}, já correto sem este envolvimento).
      */
     static String setValuedMapLambdaPointwiseEquality(
             Element varEl, Element lambdaEl, BxmlTranslateContext ctx) {
@@ -1007,8 +1012,7 @@ final class GeneralizedQuantifierTranslator {
             return null;
         }
         List<Element> boundVarIds = lambdaBoundVarIdElements(lambdaEl);
-        if (boundVarIds.size() != 1) return null; // só a forma de 1 variável ligada, por agora
-        Element boundIdEl = boundVarIds.get(0);
+        if (boundVarIds.isEmpty()) return null;
         Element bodyEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Body");
         Element bodyExp = bodyEl != null ? BxmlExpressionToAcsl.firstExpChild(bodyEl) : null;
         if (bodyExp == null || "Boolean_Exp".equals(bodyExp.getLocalName())) {
@@ -1022,10 +1026,16 @@ final class GeneralizedQuantifierTranslator {
         Element guardEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Pred");
         Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
 
-        String boundVar = boundIdEl.getAttribute("value");
-        String trAttr = boundIdEl.getAttribute("typref");
-        int typref = trAttr.isBlank() ? -1 : Integer.parseInt(trAttr.trim());
-        String acslT = ctx.types().acslLogicTypeForValueTypref(typref);
+        List<String> boundVarDecls = new ArrayList<>();
+        String appliedArg = null;
+        for (Element boundIdEl : boundVarIds) {
+            String boundVar = boundIdEl.getAttribute("value");
+            String trAttr = boundIdEl.getAttribute("typref");
+            int typref = trAttr.isBlank() ? -1 : Integer.parseInt(trAttr.trim());
+            String acslT = ctx.types().acslLogicTypeForValueTypref(typref);
+            boundVarDecls.add(acslT + " " + boundVar);
+            appliedArg = appliedArg == null ? boundVar : "couple(" + appliedArg + ", " + boundVar + ")";
+        }
 
         String varStr = BxmlExpressionToAcsl.translate(varEl, ctx);
         // BxmlExpressionToAcsl.translate() regista o lambda em ctx.lambdaRegistry() e devolve a chamada já correta
@@ -1034,9 +1044,9 @@ final class GeneralizedQuantifierTranslator {
         String guardStr = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx) : "\\true";
 
         String pointwiseComparison = isSetValuedBody
-                ? "equals(function_apply(" + varStr + ", " + boundVar + "), " + lambdaCall + ")"
-                : "(function_apply(" + varStr + ", " + boundVar + ") == " + lambdaCall + ")";
-        return "(\\forall " + acslT + " " + boundVar + "; (" + guardStr + ") ==> " + pointwiseComparison + ")";
+                ? "equals(function_apply(" + varStr + ", " + appliedArg + "), " + lambdaCall + ")"
+                : "(function_apply(" + varStr + ", " + appliedArg + ") == " + lambdaCall + ")";
+        return "(\\forall " + String.join(", ", boundVarDecls) + "; (" + guardStr + ") ==> " + pointwiseComparison + ")";
     }
 
     /** Substitui {@code name} por {@code replacement} em {@code text}, por fronteira de palavra. */
@@ -1055,11 +1065,36 @@ final class GeneralizedQuantifierTranslator {
      * como parâmetros espúrios da função gerada para o quantificador externo.
      */
     private static void collectIdValues(Element e, java.util.Set<String> out) {
-        collectIdValues(e, out, java.util.Set.of());
+        collectIdValues(e, out, java.util.Set.of(), null);
+    }
+
+    /**
+     * Como {@link #collectIdValues(Element, java.util.Set)}, mas também regista (1ª ocorrência) o
+     * {@code typref} de cada {@code Id} livre em {@code typrefsOut} — usado por {@link
+     * #resolveFreeVarType} para resolver o tipo de uma variável livre que uma máquina B só liga por
+     * fora (ex.: variável ligada por um {@code \forall}/{@code %} ENVOLVENTE, como {@code ts} em
+     * {@code !(c0,ts).(... & ts:1..9-->X | ...)}), portanto ausente de {@code
+     * ctx.variableLogicTypes()}/{@code ctx.crossMachineVariableLogicTypes()} (que só cobrem estado
+     * de máquina), sem essa informação ficava sempre {@code integer} por omissão — mesmo quando o
+     * {@code typref} do próprio nó {@code Id} já diz o tipo real (ex.: uma relação, usada depois em
+     * {@code dummy_function_apply(ts, ...)}, gerando "incompatible types integer and DRelation<...>"
+     * já dentro do universo isolado de {@code ghost_operations.ci}).
+     */
+    private static void collectIdValues(
+            Element e, java.util.Set<String> out, java.util.Map<String, Integer> typrefsOut) {
+        collectIdValues(e, out, java.util.Set.of(), typrefsOut);
     }
 
     private static void collectIdValues(
             Element e, java.util.Set<String> out, java.util.Set<String> locallyBound) {
+        collectIdValues(e, out, locallyBound, null);
+    }
+
+    private static void collectIdValues(
+            Element e,
+            java.util.Set<String> out,
+            java.util.Set<String> locallyBound,
+            java.util.Map<String, Integer> typrefsOut) {
         String localName = e.getLocalName();
         java.util.Set<String> childScope = locallyBound;
         if ("Quantified_Exp".equals(localName) || "Quantified_Pred".equals(localName)) {
@@ -1071,14 +1106,50 @@ final class GeneralizedQuantifierTranslator {
         }
         if ("Id".equals(localName)) {
             String v = e.getAttribute("value");
-            if (v != null && !v.isBlank() && !childScope.contains(v.trim())) out.add(v.trim());
+            if (v != null && !v.isBlank() && !childScope.contains(v.trim())) {
+                String key = v.trim();
+                out.add(key);
+                if (typrefsOut != null && !typrefsOut.containsKey(key)) {
+                    String tr = e.getAttribute("typref");
+                    if (tr != null && !tr.isBlank()) {
+                        try {
+                            typrefsOut.put(key, Integer.parseInt(tr.trim()));
+                        } catch (NumberFormatException ignored) {
+                            // typref não-numérico: sem entrada, resolveFreeVarType cai no default.
+                        }
+                    }
+                }
+            }
         }
         NodeList nl = e.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
             Node n = nl.item(i);
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            collectIdValues((Element) n, out, childScope);
+            collectIdValues((Element) n, out, childScope, typrefsOut);
         }
+    }
+
+    /**
+     * Tipo ACSL de uma variável livre {@code v}, na mesma ordem de precedência usada nos 3 pontos de
+     * tipagem de variável livre deste ficheiro (SIGMA/PI/MIN/MAX/UNION/INTER via {@link
+     * #freeVarsAndTypes}, lambda-mapa via {@link #translateMapLambda}, lambda-sequência via {@link
+     * #translateSequenceBuilderLambda}): (1) variável de estado da PRÓPRIA máquina, (2) variável de
+     * estado de OUTRA máquina (SEES/IMPORTS), (3) {@code typref} do próprio {@code Id} livre (capturado
+     * por {@link #collectIdValues(Element, java.util.Set, java.util.Map)}) — cobre os casos (1) e (2)
+     * não cobrem: uma variável ligada por um quantificador ENVOLVENTE (não é "estado" nenhum) e um
+     * conjunto só {@code SEES} (não tem entrada em nenhum dos dois mapas de variável, só em {@code
+     * declaredSetNames()} — que só cobre a MÁQUINA PRÓPRIA, nunca as vistas). Só cai em {@code
+     * "integer"} se nenhuma das três fontes resolver — igual ao comportamento anterior para os casos
+     * genuinamente escalares.
+     */
+    private static String resolveFreeVarType(
+            String v, BxmlTranslateContext ctx, java.util.Map<String, Integer> typrefs) {
+        String t = ctx.variableLogicTypes().get(v);
+        if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(v);
+        if ((t == null || t.isBlank()) && typrefs != null && typrefs.containsKey(v)) {
+            t = ctx.types().acslVariableLogicTypeFromTypref(typrefs.get(v));
+        }
+        return t == null || t.isBlank() ? "integer" : t;
     }
 
     /** Nomes das variáveis ligadas por um {@code Quantified_Exp}/{@code Quantified_Pred}, a partir do seu filho {@code Variables}. */

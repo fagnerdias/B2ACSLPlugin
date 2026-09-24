@@ -214,7 +214,11 @@ final class DummyGhostAxiomaticBuilder {
         }
 
         if (needsBool) {
-            sb.append("        logic DSet<integer> dummy_BOOL;\n\n");
+            // BOOL é Set<boolean> no lado real (set_functions/variables.acsl) — DSet<integer>
+            // aqui produzia "no such predicate dummy_becomes_element_of(boolean, DSet<integer>)"
+            // sempre que uma variável B BOOL usasse "v :: BOOL" (becomes_element_of(v, BOOL)
+            // com v:boolean).
+            sb.append("        logic DSet<boolean> dummy_BOOL;\n\n");
         }
 
         sb.append("    }\n*/\n");
@@ -524,9 +528,12 @@ final class DummyGhostAxiomaticBuilder {
      * {@link BxmlMachineVariables#inferVariableLogicTypes} (bloco {@code _variables} do .acsl).
      * Tipos da B2ACSLLib ({@code Set}, {@code Relation_*}, {@code Function_*}) mapeiam para
      * {@code DSet} / {@code DRelation}; escalares e outros tipos não-lib mantêm-se iguais
-     * ({@code integer}, {@code boolean}, {@code \list<…>}, …).
+     * ({@code integer}, {@code boolean}, {@code \list<…>}, …). Visibilidade de pacote: também usado
+     * por {@link GhostParamTypeResolver#buildAbstractConstantDecls} para as constantes abstratas
+     * declaradas no bloco {@code axiomatic <M>_ci_abstract_constants} (fora do {@code dummy_ghost}
+     * principal, mas com a MESMA necessidade de tipos D-prefixados/genéricos do universo isolado).
      */
-    private static String dummyAxiomaticLogicType(String inferred) {
+    static String dummyAxiomaticLogicType(String inferred) {
         if (inferred == null || inferred.isBlank()) {
             return "integer";
         }
@@ -583,6 +590,27 @@ final class DummyGhostAxiomaticBuilder {
             for (int i = 1; i < domainLeaves.size(); i++) {
                 domain = "DTuple<" + domain + ", " + domainLeaves.get(i) + ">";
             }
+            String result = "DRelation<" + domain + ", " + codomain + " >";
+            return result.replaceAll(">(?=>)", "> ");
+        }
+        // Domínio composto (como o ramo acima) + codomínio POW(escalar) (ex.: railmap's
+        // C_contrainteDeplacementReel : (INTEGER*NATURAL) --> POW(INTEGER)) — ver
+        // BxmlTypeRegistry#TUPLE_DOMAIN_SET_CODOMAIN_RELATION_NAME; sem este ramo caía no
+        // fallback genérico Relation_/Function_ abaixo, que trata "Tuple" como domainToken sozinho
+        // (perdendo a aridade do domínio) e "integer_integer_Set_integer" inteiro como
+        // codomainSuffix — produzindo um tipo nunca declarado ("no such type").
+        Matcher tupleDomainSetCodomainMatch =
+                BxmlTypeRegistry.TUPLE_DOMAIN_SET_CODOMAIN_RELATION_NAME.matcher(t);
+        if (tupleDomainSetCodomainMatch.matches()) {
+            List<String> domainLeaves = new ArrayList<>();
+            for (String leaf : tupleDomainSetCodomainMatch.group(2).split("_")) {
+                if (!leaf.isBlank()) domainLeaves.add(leaf);
+            }
+            String domain = domainLeaves.get(0);
+            for (int i = 1; i < domainLeaves.size(); i++) {
+                domain = "DTuple<" + domain + ", " + domainLeaves.get(i) + ">";
+            }
+            String codomain = "DSet<" + tupleDomainSetCodomainMatch.group(3) + ">";
             String result = "DRelation<" + domain + ", " + codomain + " >";
             return result.replaceAll(">(?=>)", "> ");
         }

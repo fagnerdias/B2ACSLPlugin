@@ -16,6 +16,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.example.bxml.BxmlGluingNormalizer;
 import com.example.bxml.BxmlMachineVariables;
@@ -207,10 +209,44 @@ public final class B2ACSLPipeline {
         // cDir, quando isso reduz a lista sem a esvaziar (nunca filtra o caso normal de uma só
         // implementação, nem o modo mock sem nenhum .c ainda gerado).
         filterMergePathsToAvailableImplementations(mergePathsByRootAbstract, cDir);
+        // Pré-passo: regista qual máquina primeiro reivindica cada nome de variável abstrata,
+        // entre as máquinas que precisam de abstração ghost — detecta colisões de nome entre
+        // máquinas B SEM relação SEES/IMPORTS entre si que coincidentemente usam o mesmo nome de
+        // variável (ex.: "enregistrementCroisillon" em rmc_deplacement/rmc_deplacement_1/
+        // rmc_entrees no projeto railmap). Sem isto, ghost_operations.ci e os .acsl de cada
+        // máquina acabam com MAIS DE UMA declaração global do MESMO símbolo lógico — o Frama-C
+        // rejeita com "already declared with the same profile" quando os tipos divergem, e
+        // quando calham a bater tipo (aceite silenciosamente) as duas máquinas ficam a partilhar
+        // sem querer um único símbolo ghost. Ordem de iteração = ordem de "machines" abaixo, logo
+        // determinística: a 1ª máquina a reivindicar um nome mantém-no tal-e-qual (sem
+        // qualificação, comportamento inalterado); só a 2ª+ ocorrência do MESMO nome é
+        // qualificada (ver qualifyCollidingGhostNamesInAppendedSection/qualifyCollidingRealAcslNames
+        // abaixo) — projetos sem nenhuma colisão (a esmagadora maioria) ficam byte-a-byte iguais.
+        Map<String, String> machineByOwnedVarName = new HashMap<>();
+        for (MachineFile mf : machines) {
+            Element mr = mf.machine().getMachineElement();
+            if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
+                continue;
+            }
+            String machineName = mf.machine().getMachineName();
+            List<Element> mergedEls = new ArrayList<>();
+            for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
+                mergedEls.add(AcslGenerator.parseMachineElement(mp));
+            }
+            if (!BxmlMachineVariables.needsGhostAbstraction(mr, mergedEls)
+                    && !GhostOperationsCiGenerator.machineHasAnySubOperations(mr)) {
+                continue;
+            }
+            for (String v : ownAbstractVariableNames(mr, mergedEls)) {
+                machineByOwnedVarName.putIfAbsent(v, machineName);
+            }
+        }
+
         // Limpa antes do loop: GhostOperationsCiGenerator.write() ACRESCENTA (não sobrescreve) a
         // cada chamada — ver comentário abaixo — por isso o ficheiro precisa de começar vazio a
         // cada execução, senão conteúdo de uma run anterior ficaria duplicado.
-        Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
+        Path ghostCiTargetPath = GhostOperationsCiGenerator.targetPath(cDir);
+        Files.deleteIfExists(ghostCiTargetPath);
         boolean anyNeedsGhost = false;
         for (MachineFile mf : machines) {
             Element mr = mf.machine().getMachineElement();
@@ -227,6 +263,12 @@ public final class B2ACSLPipeline {
                 continue;
             }
             anyNeedsGhost = true;
+            Set<String> collidingVars =
+                    collidingAbstractVarNames(mr, mergedEls, machineName, machineByOwnedVarName);
+            String ghostCiBefore =
+                    Files.isRegularFile(ghostCiTargetPath)
+                            ? Files.readString(ghostCiTargetPath, StandardCharsets.UTF_8)
+                            : "";
             // write() ACRESCENTA ao ghost_operations.ci (não sobrescreve): num projeto com VÁRIAS
             // máquinas a precisar de abstração ghost (ex.: Customer_estr tem Customer E Set), cada
             // chamada usava Files.writeString sem APPEND, e só a ÚLTIMA máquina processada
@@ -237,6 +279,10 @@ public final class B2ACSLPipeline {
             // só logo a seguir ao loop, para não duplicar "type DSet<A>;" etc.
             GhostOperationsCiGenerator.write(
                     cDir, mr, invariantGluingSubstitutions, bdp, mergedEls, seesGraph, importsGraph);
+            if (!collidingVars.isEmpty()) {
+                qualifyCollidingGhostNamesInAppendedSection(
+                        ghostCiTargetPath, ghostCiBefore, machineName, collidingVars);
+            }
         }
         if (!anyNeedsGhost) {
             Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
@@ -314,6 +360,18 @@ public final class B2ACSLPipeline {
                                 libIncludeCarrierMachineName,
                                 libIncludeScanRootMachineName,
                                 ghostCiStripped);
+                if (acsl.isPresent()) {
+                    List<Element> mergedEls = new ArrayList<>();
+                    for (Path mp : mergePaths) {
+                        mergedEls.add(AcslGenerator.parseMachineElement(mp));
+                    }
+                    Set<String> collidingVars =
+                            collidingAbstractVarNames(
+                                    machineRoot, mergedEls, machineName, machineByOwnedVarName);
+                    if (!collidingVars.isEmpty()) {
+                        qualifyCollidingRealAcslNames(acsl.get(), machineName, collidingVars);
+                    }
+                }
                 acsl.ifPresent(acslFiles::add);
             }
             List<String> topLevelImportMachines =
@@ -545,6 +603,114 @@ public final class B2ACSLPipeline {
         System.out.println("[B2ACSL] [MOCK] Arquivos C: " + cFiles.size());
         System.out.println("[B2ACSL] [MOCK] Simulando acsl-importer + WP -> OK");
         return 0;
+    }
+
+    /**
+     * Nomes das variáveis abstratas PRÓPRIAS de {@code machineEl} (excluindo as colapsadas na
+     * implementação — ver {@link BxmlMachineVariables#collapsedIntoImplementationVariableNames}),
+     * exatamente como {@link GhostOperationsCiGenerator#write} as calcula internamente — reutilizado
+     * aqui para o pré-passo de deteção de colisão de nomes entre máquinas (ver comentário acima do
+     * loop que constrói {@code machineByOwnedVarName}).
+     */
+    private static List<String> ownAbstractVariableNames(
+            Element machineEl, List<Element> mergedMachineElements) {
+        Set<String> collapsed =
+                BxmlMachineVariables.collapsedIntoImplementationVariableNames(
+                        machineEl, mergedMachineElements);
+        return GhostOperationsCiGenerator.listAbstractVariableNames(machineEl).stream()
+                .filter(v -> !collapsed.contains(v))
+                .toList();
+    }
+
+    /**
+     * Variáveis abstratas PRÓPRIAS de {@code machineEl} cujo nome já foi reivindicado por OUTRA
+     * máquina em {@code machineByOwnedVarName} — candidatas a qualificação (ver {@link
+     * #qualifyCollidingGhostNamesInAppendedSection}/{@link #qualifyCollidingRealAcslNames}).
+     */
+    private static Set<String> collidingAbstractVarNames(
+            Element machineEl,
+            List<Element> mergedMachineElements,
+            String machineName,
+            Map<String, String> machineByOwnedVarName) {
+        Set<String> colliding = new LinkedHashSet<>();
+        for (String v : ownAbstractVariableNames(machineEl, mergedMachineElements)) {
+            String owner = machineByOwnedVarName.get(v);
+            if (owner != null && !owner.equals(machineName)) {
+                colliding.add(v);
+            }
+        }
+        return colliding;
+    }
+
+    /**
+     * Qualifica, com o prefixo {@code <machineName>__}, as referências ghost ({@code dummy_<v>}/
+     * {@code ghost_<v>}) de {@code collidingVars} — mas SÓ dentro do trecho que a chamada a {@link
+     * GhostOperationsCiGenerator#write} que acabou de correr ACRESCENTOU a {@code ghostCiPath}
+     * (identificado por {@code ghostCiTextBeforeWrite}, o conteúdo do ficheiro capturado
+     * imediatamente antes dessa chamada — {@code write()} só faz append, nunca reescreve o que já lá
+     * estava). Evita renomear a ocorrência já existente (bare, da 1ª máquina a reivindicar o nome)
+     * doutra secção do ficheiro.
+     */
+    private static void qualifyCollidingGhostNamesInAppendedSection(
+            Path ghostCiPath, String ghostCiTextBeforeWrite, String machineName, Set<String> collidingVars)
+            throws IOException {
+        if (!Files.isRegularFile(ghostCiPath)) {
+            return;
+        }
+        String full = Files.readString(ghostCiPath, StandardCharsets.UTF_8);
+        if (full.length() <= ghostCiTextBeforeWrite.length()) {
+            return;
+        }
+        String head = full.substring(0, ghostCiTextBeforeWrite.length());
+        String tail = full.substring(ghostCiTextBeforeWrite.length());
+        String qualifiedTail = tail;
+        for (String v : collidingVars) {
+            String suffix = machineName + "__" + v;
+            qualifiedTail =
+                    Pattern.compile("\\bdummy_" + Pattern.quote(v) + "\\b")
+                            .matcher(qualifiedTail)
+                            .replaceAll(Matcher.quoteReplacement("dummy_" + suffix));
+            qualifiedTail =
+                    Pattern.compile("\\bghost_" + Pattern.quote(v) + "\\b")
+                            .matcher(qualifiedTail)
+                            .replaceAll(Matcher.quoteReplacement("ghost_" + suffix));
+        }
+        if (!qualifiedTail.equals(tail)) {
+            Files.writeString(ghostCiPath, head + qualifiedTail, StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
+     * Qualifica, com o prefixo {@code <machineName>__}, as declarações/referências do símbolo lógico
+     * real ({@code <v>}) e do respetivo helper {@code dummy_ghost_<v>} (usado na cláusula
+     * {@code reads}) de {@code collidingVars}, dentro do {@code .acsl} já gerado para esta máquina —
+     * mesmo problema que {@link #qualifyCollidingGhostNamesInAppendedSection}, mas do lado REAL
+     * (não-isolado): cada máquina declara {@code logic <T> <v> reads dummy_ghost_<v>;} no seu
+     * PRÓPRIO {@code .acsl}, e todos os {@code .acsl} do projeto são carregados juntos numa ÚNICA
+     * invocação {@code -acsl-import} (sem isolamento de namespace por ficheiro) — confirmado que sem
+     * esta qualificação o Frama-C rejeita com o mesmo "already declared with the same profile" que
+     * o lado ghost, só que mais tarde. {@code dummy_ghost_<v>} é substituído PRIMEIRO: a boundary
+     * regex do passo seguinte (bare {@code <v>}) não volta a casar dentro do resultado já
+     * qualificado (o "_" antes de {@code <v>} em "...__<v>" nunca é fronteira de palavra).
+     */
+    private static void qualifyCollidingRealAcslNames(
+            Path acslFile, String machineName, Set<String> collidingVars) throws IOException {
+        String content = Files.readString(acslFile, StandardCharsets.UTF_8);
+        String updated = content;
+        for (String v : collidingVars) {
+            String suffix = machineName + "__" + v;
+            updated =
+                    Pattern.compile("\\bdummy_ghost_" + Pattern.quote(v) + "\\b")
+                            .matcher(updated)
+                            .replaceAll(Matcher.quoteReplacement("dummy_ghost_" + suffix));
+            updated =
+                    Pattern.compile("\\b" + Pattern.quote(v) + "\\b")
+                            .matcher(updated)
+                            .replaceAll(Matcher.quoteReplacement(suffix));
+        }
+        if (!updated.equals(content)) {
+            Files.writeString(acslFile, updated, StandardCharsets.UTF_8);
+        }
     }
 
     /**

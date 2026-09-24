@@ -545,7 +545,7 @@ final class FramaCRunner {
             ProcessResult wpResult =
                     runProcessWithCapturedOutput(
                             wpPb,
-                            600,
+                            wpOptions.functionTimeoutSeconds(),
                             TimeUnit.SECONDS,
                             line -> {
                                 progress.appendLogLine(line);
@@ -560,9 +560,13 @@ final class FramaCRunner {
                 reportData.addTimeout(
                         "Timeout while executing WP"
                                 + (functionName == null ? "" : " for function " + functionName)
-                                + " (600s limit).");
+                                + " (" + wpOptions.functionTimeoutSeconds() + "s limit).");
                 progress.markCompleted(
-                        sourceName, VerificationProgressDialog.Status.TIMEOUT, 0, 0, "timed out (600s)");
+                        sourceName,
+                        VerificationProgressDialog.Status.TIMEOUT,
+                        0,
+                        0,
+                        "timed out (" + wpOptions.functionTimeoutSeconds() + "s)");
                 progress.finish(false);
                 showVerificationReport(
                         projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);

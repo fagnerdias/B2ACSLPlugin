@@ -50,6 +50,12 @@ public final class BxmlMachineVariables {
             String t = fromInvariant.get(name);
             if (t == null) {
                 t = types.acslVariableLogicTypeFromTypref(typref);
+                // Sentinela "struct" (ver BxmlTypeRegistry#rawBTypeToAcslVariableLogicType): carrega
+                // o typref junto para MachineAxiomaticBlockFormatter reencontrar os campos do registo
+                // sem precisar de um segundo passe sobre machineEl.
+                if ("struct".equals(t)) {
+                    t = "struct:" + typref;
+                }
             }
             out.put(name, t);
         }

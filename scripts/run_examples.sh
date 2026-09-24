@@ -20,10 +20,17 @@
 #                     perto para a JVM sequer tentar depender de um.
 #
 # Variáveis de ambiente:
-#   WP_TIMEOUT   timeout por goal do -wp-timeout / b2acsl.wp.timeout (default: 10, igual ao
-#                default do próprio plugin)
-#   WP_PROVER    prova usado no -wp-prover (default: CVC5)
-#   BACKGROUND   "1" equivale a passar -b/--background
+#   WP_TIMEOUT           timeout por goal do -wp-timeout / b2acsl.wp.timeout (default: 10, igual ao
+#                        default do próprio plugin)
+#   WP_FUNCTION_TIMEOUT  teto de parede (segundos) da chamada -wp INTEIRA de uma função (soma de
+#                        todos os goals dela) / b2acsl.wp.functionTimeout — DISTINTO de WP_TIMEOUT
+#                        acima (esse é por-goal individual do solver). Default: 600 (10min),
+#                        suficiente para a maioria dos exemplos; exemplos com muitos goals numa
+#                        função só (ex. RulesOfTheSeas, ~3711 goals) podem precisar de bem mais —
+#                        rode só esse exemplo com um valor maior em vez de subir o default global
+#                        (ex.: WP_FUNCTION_TIMEOUT=1800 scripts/run_examples.sh -b RulesOfTheSeas)
+#   WP_PROVER            prova usado no -wp-prover (default: CVC5)
+#   BACKGROUND           "1" equivale a passar -b/--background
 
 set -uo pipefail
 
@@ -61,6 +68,7 @@ LOG_DIR="scripts/run-logs/${TIMESTAMP}"
 SUMMARY_FILE="${LOG_DIR}/summary.tsv"
 
 WP_TIMEOUT="${WP_TIMEOUT:-50}"
+WP_FUNCTION_TIMEOUT="${WP_FUNCTION_TIMEOUT:-600}"
 WP_PROVER="${WP_PROVER:-CVC5}"
 
 # headless: false por padrão (execução em foreground, terminal interativo); true só quando
@@ -123,6 +131,7 @@ run_pipeline() {
     java -Djava.awt.headless="$JAVA_HEADLESS" \
          -Db2acsl.wp.prover="$WP_PROVER" \
          -Db2acsl.wp.timeout="$WP_TIMEOUT" \
+         -Db2acsl.wp.functionTimeout="$WP_FUNCTION_TIMEOUT" \
          -jar "$JAR" "$ROOT_DIR/$bdp" > "$logfile" 2>&1
     exit_code=$?
     end=$(date +%s)

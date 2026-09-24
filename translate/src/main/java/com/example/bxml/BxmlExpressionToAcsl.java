@@ -28,6 +28,10 @@ public final class BxmlExpressionToAcsl {
      * {@code card(…)}).
      */
     public static String formatEquality(Element leftExp, Element rightExp, BxmlTranslateContext ctx) {
+        String recordLiteral = formatRecordLiteralAssignment(leftExp, rightExp, ctx);
+        if (recordLiteral != null) {
+            return recordLiteral;
+        }
         String functionOverride = formatFunctionOverrideAssignment(leftExp, rightExp, ctx);
         if (functionOverride != null) {
             return functionOverride;
@@ -59,6 +63,42 @@ public final class BxmlExpressionToAcsl {
             return "equals(" + l + ", " + r + ")";
         }
         return l + " == " + r;
+    }
+
+    /**
+     * B {@code v := rec(fld1: E1, fld2: E2, ...)} (atribuição de literal de registo a uma variável
+     * de registo) → conjunção de igualdades POR-CAMPO ({@code v__fld1 == E1 && v__fld2 == E2}),
+     * nunca uma única igualdade struct-valorada: ACSL não suporta literais de struct agregados em
+     * termos lógicos (confirmado empiricamente: "unsupported aggregated field construct"), e mesmo
+     * que suportasse, {@code v} não é um único termo struct-valorado — é um espelho escalar por-campo
+     * (ver {@link MachineAxiomaticBlockFormatter#appendStructFieldMirrors}, mesma convenção de nome
+     * {@code v__campo} usada por {@link #translateRecordFieldAccess}). {@code null} (não um literal
+     * de registo) faz {@link #formatEquality} cair no caminho genérico.
+     *
+     * <p>O chamador ({@code BxmlInitialisationTranslator#parseAssignementSub}) envolve o resultado
+     * com {@code wrapLhsVarsInRhsWithOld}, que corta no PRIMEIRO {@code " == "} — inofensivo aqui:
+     * um literal de registo nunca referencia a própria variável sendo atribuída, então o "recorte"
+     * reconstrói o texto inalterado independentemente de quantos {@code " == "} existirem.
+     */
+    private static String formatRecordLiteralAssignment(
+            Element leftExp, Element rightExp, BxmlTranslateContext ctx) {
+        if (leftExp == null || rightExp == null || !"Record".equals(rightExp.getLocalName())) {
+            return null;
+        }
+        String base = translate(leftExp, ctx);
+        List<String> clauses = new ArrayList<>();
+        NodeList children = rightExp.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element item = (Element) n;
+            if (!"Record_Item".equals(item.getLocalName())) continue;
+            String label = item.getAttribute("label");
+            Element valueEl = BxmlDomUtils.firstNonAttrElementChild(item);
+            if (label == null || label.isBlank() || valueEl == null) continue;
+            clauses.add(base + "__" + label + " == " + translate(valueEl, ctx));
+        }
+        return clauses.isEmpty() ? null : String.join(" && ", clauses);
     }
 
     /**
@@ -239,7 +279,8 @@ public final class BxmlExpressionToAcsl {
                         || isIntervalBinaryExp(exp)
                         || isDirectProductOp(op)
                         || "prj1".equals(op) || "prj2".equals(op)
-                        || "<+".equals(op);
+                        || "<+".equals(op)
+                        || ";".equals(op == null ? "" : op.trim());
             }
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
             default -> false;
@@ -682,10 +723,19 @@ public final class BxmlExpressionToAcsl {
     }
 
     /**
-     * Constantes nomeadas do B que não existem como símbolos ACSL — traduzem-se para literais
-     * {@code integer} compatíveis com {@code int} de 32 bits ({@code INT_MAX} / {@code INT_MIN}),
-     * coerentes com o limite superior de {@code NAT} usado na lib de exemplos
-     * ({@code 2147483647} em {@code Deck/code_commented.c}).
+     * Constantes/conjuntos nomeados do B que não existem tal-e-qual como símbolos ACSL — {@code
+     * MAXINT}/{@code MININT} traduzem-se para literais {@code integer} compatíveis com {@code int}
+     * de 32 bits, coerentes com o limite superior de {@code NAT} usado na lib de exemplos ({@code
+     * 2147483647} em {@code Deck/code_commented.c}); {@code INTEGER} (conjunto B de todos os
+     * inteiros) mapeia para {@code INT}, o único destes 4 que a lib declara com nome diferente
+     * ({@code set_functions/variables.acsl} só tem {@code NAT}/{@code NAT1}/{@code INT}/{@code
+     * BOOL} — sem entrada "INTEGER"). Já usado (duplicado) só dentro de {@link
+     * #buildEmptySetWitnessExpr}; faltava aqui, no dispatcher geral de {@code Id} — qualquer OUTRO
+     * uso de {@code INTEGER} como expressão bare (ex.: RHS de {@code ::}/{@code Becomes_In}, como em
+     * {@code v :: INTEGER}) ficava sem tradução, produzindo {@code becomes_element_of(v, INTEGER)}
+     * literal — "unbound logic variable INTEGER" no front-end isolado de {@code
+     * ghost_operations.ci} (1º a reportar, mas o mesmo texto cru sobrevive também no {@code .acsl}
+     * real gerado, ainda não validado nesse ponto do {@code -acsl-import}).
      */
     static String translateBNamedConstant(String id) {
         if (id == null) {
@@ -694,6 +744,7 @@ public final class BxmlExpressionToAcsl {
         return switch (id.trim()) {
             case "MAXINT" -> "2147483647"; // INT_MAX (32-bit int)
             case "MININT" -> "-2147483648"; // INT_MIN (32-bit int)
+            case "INTEGER" -> "INT";
             default -> id;
         };
     }
@@ -779,8 +830,47 @@ public final class BxmlExpressionToAcsl {
             case "Quantified_Set" -> translateQuantifiedSet(exp, ctx);
             case "Boolean_Exp" -> translateBooleanExp(exp, ctx);
             case "Quantified_Exp" -> GeneralizedQuantifierTranslator.translateQuantifiedExp(exp, ctx);
+            case "Record_Field_Access" -> translateRecordFieldAccess(exp, ctx);
             default -> "/* TODO: " + ln + " */";
         };
+    }
+
+    /**
+     * B {@code r'campo} (acesso a campo de registo). ACSL não suporta literais de struct agregados
+     * em termos lógicos ("unsupported aggregated field construct", confirmado empiricamente) — por
+     * isso não há um único termo struct-valorado "r" para aplicar {@code .campo}: se a base for
+     * ela própria um literal {@code Record} (ex. {@code rec(fld1:0,fld2:TRUE)'fld1}), reduz-se por
+     * constant-folding ao valor desse campo no literal; senão (variável de registo), usa-se o
+     * espelho logic escalar por-campo já declarado por
+     * {@link MachineAxiomaticBlockFormatter#appendStructFieldMirrors} ({@code var__campo}, mesma
+     * convenção de nome usada em {@link #formatRecordLiteralAssignment}).
+     */
+    private static String translateRecordFieldAccess(Element exp, BxmlTranslateContext ctx) {
+        String label = exp.getAttribute("label");
+        Element base = BxmlDomUtils.firstNonAttrElementChild(exp);
+        if (base == null || label == null || label.isBlank()) {
+            return "/* TODO: Record_Field_Access */";
+        }
+        if ("Record".equals(base.getLocalName())) {
+            Element item = recordItemByLabel(base, label);
+            Element valueEl = item == null ? null : BxmlDomUtils.firstNonAttrElementChild(item);
+            return valueEl == null ? "/* TODO: Record_Field_Access */" : translate(valueEl, ctx);
+        }
+        return translate(base, ctx) + "__" + label;
+    }
+
+    /** {@code Record_Item} de {@code recordEl} cujo {@code label} bate com {@code label}; {@code null} se nenhum. */
+    private static Element recordItemByLabel(Element recordEl, String label) {
+        NodeList children = recordEl.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element item = (Element) n;
+            if ("Record_Item".equals(item.getLocalName()) && label.equals(item.getAttribute("label"))) {
+                return item;
+            }
+        }
+        return null;
     }
 
     /**
@@ -934,6 +1024,13 @@ public final class BxmlExpressionToAcsl {
             // general_inter<A>(Set<Set<A>>) : Set<A>.
             case "union" -> "general_union(" + a + ")";
             case "inter" -> "general_inter(" + a + ")";
+            // B unário -E (ex.: "-C_vitesseMax" num limite de interval_set) — MESMO token "-i" do
+            // operador BINÁRIO de subtração (ver isArithmeticOp/normalizeExpComparisonOp), mas aqui
+            // em Unary_Exp; sem caso próprio caía no default genérico "opname(arg)" e produzia
+            // literalmente "-i(C_vitesseMax)" — Frama-C lê isso como CHAMADA à função "i" (nunca
+            // declarada), "unbound logic function i", só descoberto ao corrigir a tipagem de
+            // variável livre deixar de mascarar este erro com um erro mais cedo no mesmo ficheiro.
+            case "-i" -> "(-" + a + ")";
             default -> opTrim + "(" + a + ")";
         };
     }
@@ -1023,6 +1120,12 @@ public final class BxmlExpressionToAcsl {
             // "f(x) := y" (formatFunctionOverrideAssignment), que constrói o segundo argumento como
             // singleton(couple(x,y)) — aqui ambos os lados já são relações completas.
             return "overwrite(" + left + ", " + right + ")";
+        }
+        if (";".equals(op == null ? "" : op.trim())) {
+            // B: q ; r — composição relacional (aplica q primeiro, depois r) → relation_composition
+            // (ACSL_Lib/relation_functions/composition.acsl): belongs((x,z), relation_composition(q,r))
+            // <==> \exists y; belongs((x,y),q) && belongs((y,z),r) — mesma ordem de operandos do B.
+            return "relation_composition(" + left + ", " + right + ")";
         }
         if ("..".equals(op == null ? "" : op.trim())) {
             return "interval_set(" + left + ", " + right + ")";
