@@ -540,9 +540,45 @@ public final class BxmlMachineVariables {
                 }
                 if (isSequenceTypingOp(pair[1])) {
                     acc.put(v, acslListTypeForSequenceUnary(pair[1], types));
+                    return;
+                }
+                String sequenceDomainRelationType = sequenceDomainRelationTypeIfAny(pair[1], types);
+                if (sequenceDomainRelationType != null) {
+                    acc.put(v, sequenceDomainRelationType);
                 }
             }
         }
+    }
+
+    /**
+     * {@code "V : (seq(D) --> R)"} (ou {@code +->}/{@code >->}/etc.) — {@code V} é uma RELAÇÃO cujo
+     * DOMÍNIO é uma sequência (ex.: {@code stdlib_CRC16Polynom3D65 : seq1(uint8_t) --> uint16_t},
+     * {@code csp_stdLib_crc} e {@code csp_stdLib_addr}, ambos partilhados por {@code railmap} e
+     * {@code safetyflasher}). O typref cru de {@code V} é {@code POW(POW(INTEGER*INTEGER)*INTEGER)}
+     * — o split ingénuo por {@code "*"} de {@link BxmlTypeRegistry#powCartesianProductToAcslRelationType}
+     * não respeita o {@code POW(...)} aninhado do domínio-sequência e quebra em partes erradas,
+     * produzindo um tipo totalmente errado (ex. {@code Relation_integer_Tuple_integer_integer} em vez
+     * de {@code Relation<\list<integer>, integer>}) — só descoberto tarde no {@code -acsl-import} como
+     * "incompatible types \list<integer> and integer" no ponto de uso ({@code is_total_function}).
+     * Mesma razão de {@code ctx.variableLogicTypes()} ser consultado primeiro em {@link
+     * #handleExpComparisonForTypes} (ver comentário em {@code
+     * BxmlConstantsAndProperties#formatAbstractConstantsBlock}): o typref cru não distingue
+     * {@code \list} de {@code Relation}/POW aninhado. {@code null} se {@code rhs} não tiver esta forma.
+     */
+    private static String sequenceDomainRelationTypeIfAny(Element rhs, BxmlTypeRegistry types) {
+        Element arrowDomain = BxmlExpressionToAcsl.arrowTypeDomainIfAny(rhs);
+        Element arrowCodomain = BxmlExpressionToAcsl.arrowTypeCodomainIfAny(rhs);
+        if (arrowDomain == null
+                || arrowCodomain == null
+                || !isSequenceTypingOp(arrowDomain)
+                || !"Id".equals(arrowCodomain.getLocalName())) {
+            return null;
+        }
+        String domainType = acslListTypeForSequenceUnary(arrowDomain, types);
+        String codomainRhs = arrowCodomain.getAttribute("value");
+        String codomainType =
+                isNamedBaseType(codomainRhs) ? types.acslElementTypeName(codomainRhs) : "integer";
+        return types.registerCartesianRelationType(domainType, codomainType);
     }
 
     static boolean isSequenceTypingOp(Element exp) {

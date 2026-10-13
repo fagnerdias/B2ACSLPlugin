@@ -394,7 +394,17 @@ public final class BxmlExpressionToAcsl {
         String ln = exp.getLocalName();
         return switch (ln) {
             case "Id" -> isRelationOrFunctionValuedId(exp, ctx);
-            case "Binary_Exp" -> isDomainRestrictionOp(exp.getAttribute("op"));
+            case "Binary_Exp" -> {
+                String bOp = exp.getAttribute("op");
+                // ";" (relation_composition) faltava aqui: "pred ; p_trame" (composição relacional)
+                // produz uma Relation/Function tal como "<|" (domain_restriction) já reconhecido —
+                // sem este caso, "(pred ; p_trame) /|\ n" (B front-restriction sobre uma relação
+                // composta, ver isSequenceRestrictFrontOp) não sabia que precisava de
+                // function_to_list(...) antes de restrict_front (esse só aceita \list<A>), e o
+                // -acsl-import rejeitava com "incompatible types Relation<integer,integer> and
+                // \list<A>".
+                yield isDomainRestrictionOp(bOp) || ";".equals(bOp == null ? "" : bOp.trim());
+            }
             default -> false;
         };
     }
@@ -668,6 +678,37 @@ public final class BxmlExpressionToAcsl {
             return false;
         }
         return isRelationArrowOp(e.getAttribute("op"));
+    }
+
+    /**
+     * {@code true} se {@code e} for qualquer forma de seta relação/função B ({@code <->}/{@code -->}/
+     * {@code +->}/{@code >->}/{@code >+>}/{@code -->>}/{@code +->>}/{@code >->>}) — só a FORMA
+     * (para extrair domínio/codomínio ao inferir o tipo lógico ACSL de uma constante, ver
+     * {@link com.example.bxml.BxmlMachineVariables#sequenceDomainRelationTypeIfAny}), não a
+     * totalidade/injetividade/sobrejetividade (essas viram predicados {@code is_total_function}/
+     * {@code is_injective}/… à parte, tratados em {@link BxmlPredicateToAcsl}).
+     */
+    private static boolean isAnyRelationOrFunctionArrowType(Element e) {
+        return isRelationArrowType(e)
+                || isFunctionArrowType(e)
+                || isPartialFunctionArrowType(e)
+                || isTotalSurjectionArrowType(e)
+                || isPartialInjectionArrowType(e)
+                || isTotalInjectionArrowType(e)
+                || isPartialSurjectionArrowType(e)
+                || isTotalBijectionArrowType(e);
+    }
+
+    /** Filho ESQUERDO (domínio) de {@code e} se for uma seta relação/função B; senão {@code null}. */
+    public static Element arrowTypeDomainIfAny(Element e) {
+        if (!isAnyRelationOrFunctionArrowType(e)) return null;
+        return twoDirectExpChildren(e)[0];
+    }
+
+    /** Filho DIREITO (codomínio) de {@code e} se for uma seta relação/função B; senão {@code null}. */
+    public static Element arrowTypeCodomainIfAny(Element e) {
+        if (!isAnyRelationOrFunctionArrowType(e)) return null;
+        return twoDirectExpChildren(e)[1];
     }
 
     /** B produto direto {@code R1 >< R2} → {@code direct_product(R1, R2)} (ACSL_Lib/relation_functions/direct_product.acsl). */
@@ -1141,11 +1182,21 @@ public final class BxmlExpressionToAcsl {
         }
         if (isSequenceRestrictFrontOp(op)) {
             // B: s /|\ n (mantém os primeiros n elementos) → restrict_front (ACSL_Lib/sequence_functions/restrict_front.acsl)
-            return "restrict_front(" + left + ", " + right + ")";
+            // restrict_front só aceita \list<A> — "s" pode ser uma RELAÇÃO em B (B não distingue
+            // "sequência" de "função de INTEGER" ao nível do tipo bruto; ver
+            // isRelationOrFunctionValued), ex.: "(pred ; p_trame) /|\ p_size" em
+            // csp_stdLib_crc__get_stdlib_CRC16Polynom3D65 (p_trame array-backed vira
+            // Function<integer,uint8_t> via array_to_function_int, "pred;p_trame" fica
+            // Relation<integer,integer> via relation_composition) — sem a ponte function_to_list,
+            // "incompatible types Relation<integer,integer> and \list<A>" no -acsl-import.
+            String seq = isRelationOrFunctionValued(pair[0], ctx) ? "function_to_list(" + left + ")" : left;
+            return "restrict_front(" + seq + ", " + right + ")";
         }
         if (isSequenceRestrictTailOp(op)) {
             // B: s \|/ n (descarta os primeiros n elementos) → restrict_tail (ACSL_Lib/sequence_functions/restrict_tail.acsl)
-            return "restrict_tail(" + left + ", " + right + ")";
+            // Mesma ponte function_to_list de restrict_front acima, mesmo motivo.
+            String seq = isRelationOrFunctionValued(pair[0], ctx) ? "function_to_list(" + left + ")" : left;
+            return "restrict_tail(" + seq + ", " + right + ")";
         }
         if ("mod".equals(op)) return "(" + left + " % " + right + ")";
         if ("**i".equals(op == null ? "" : op.trim())) {

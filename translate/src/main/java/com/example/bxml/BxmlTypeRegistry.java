@@ -347,7 +347,18 @@ public final class BxmlTypeRegistry {
      * #compoundDomainCartesianProductToAcslRelationType}) — a forma de registo/nomeação não depende
      * de qual dos dois lados é o composto.
      */
-    private String registerCartesianRelationType(String domainType, String codomainType) {
+    /**
+     * Visibilidade de pacote: também usado por {@link
+     * BxmlMachineVariables#sequenceDomainRelationTypeIfAny} para registar o tipo {@code Relation<...>}
+     * de uma constante {@code V : (seq(D) --> R)} cujo domínio já foi resolvido à parte (via {@link
+     * BxmlMachineVariables#acslListTypeForSequenceUnary}, não pelo caminho normal de {@code
+     * powCartesianProductToAcslRelationType} — esse não sabe reconhecer domínio-sequência dentro do
+     * POW aninhado do typref cru B). Confirmado empiricamente (teste isolado com frama-c
+     * -acsl-import) que {@code \list<A>} aninhado dentro de {@code Tuple<...>} PARSEIA bem desde que
+     * o alias fique num ficheiro alcançado via {@code include} (nunca inline no ficheiro de topo) —
+     * exatamente o que este método já faz.
+     */
+    String registerCartesianRelationType(String domainType, String codomainType) {
         String genericTypeExpr = "Relation<" + domainType + ", " + codomainType + ">";
         String flatName = flattenGenericTypeExprToIdentifier(genericTypeExpr);
         String definition =

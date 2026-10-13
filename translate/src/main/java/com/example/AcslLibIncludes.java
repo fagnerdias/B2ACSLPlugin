@@ -175,6 +175,7 @@ public final class AcslLibIncludes {
             "sequence_functions/get.acsl",
             "sequence_functions/is_seq_of.acsl",
             "sequence_functions/seq.acsl",
+            "sequence_functions/seq1.acsl",
             "sequence_functions/range.acsl",
             "sequence_functions/iseq.acsl",
             "sequence_functions/last.acsl",

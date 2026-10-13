@@ -1,8 +1,8 @@
 {
   "_meta": {
     "generator": "scripts/generate_acsl_symbol_dependency_map.py",
-    "root": "src/main/resources/lib/B2ACSLLib",
-    "symbol_count": 81
+    "root": "translate/src/main/resources/lib/B2ACSLLib",
+    "symbol_count": 82
   },
   "symbols": [
     "apply",
@@ -76,6 +76,7 @@
     "rev",
     "second",
     "seq",
+    "seq1",
     "sequence_ran",
     "set_difference",
     "set_intersection",
@@ -159,6 +160,7 @@
     "rev": "sequence_functions/rev.acsl",
     "second": "tuple_functions/accessors.acsl",
     "seq": "sequence_functions/seq.acsl",
+    "seq1": "sequence_functions/seq1.acsl",
     "sequence_ran": "sequence_functions/range.acsl",
     "set_difference": "set_functions/difference.acsl",
     "set_intersection": "set_functions/intersection.acsl",
@@ -386,6 +388,9 @@
     ],
     "seq": [
       "sequence_functions/seq.acsl"
+    ],
+    "seq1": [
+      "sequence_functions/seq1.acsl"
     ],
     "sequence_ran": [
       "sequence_functions/range.acsl"
@@ -907,6 +912,10 @@
       "belongs",
       "is_seq_of"
     ],
+    "seq1": [
+      "belongs",
+      "is_seq_of"
+    ],
     "sequence_ran": [
       "belongs",
       "empty",
@@ -1142,7 +1151,6 @@
       "relation_functions/domain.acsl",
       "relation_functions/domain_restriction.acsl",
       "relation_functions/inverse.acsl",
-      "relation_functions/is_relation.acsl",
       "relation_functions/range.acsl",
       "relation_functions/range_restriction.acsl",
       "relation_functions/singleton.acsl",
@@ -1413,6 +1421,11 @@
     "sequence_axioms/rev_axioms.acsl": [
       "sequence_functions/rev.acsl"
     ],
+    "sequence_axioms/seq1_axioms.acsl": [
+      "sequence_functions/is_seq_of.acsl",
+      "sequence_functions/seq1.acsl",
+      "set_functions/belongs.acsl"
+    ],
     "sequence_axioms/seq_axioms.acsl": [
       "sequence_functions/is_seq_of.acsl",
       "sequence_functions/seq.acsl",
@@ -1462,6 +1475,9 @@
     ],
     "sequence_functions/seq.acsl": [
       "sequence_axioms/seq_axioms.acsl"
+    ],
+    "sequence_functions/seq1.acsl": [
+      "sequence_axioms/seq1_axioms.acsl"
     ],
     "sequence_functions/tail.acsl": [
       "sequence_axioms/tail_axioms.acsl"

@@ -1338,10 +1338,24 @@ public final class BxmlOperationsTranslator {
     /**
      * Parâmetros de saída em C são ponteiros: {@code ret : S} no B traduz-se para
      * {@code belongs(*ret, BOOL)} ou {@code belongs((integer)*ret, S)} nos {@code requires}.
+     *
+     * <p>SEM âncoras {@code ^}/{@code $} (ao contrário da versão anterior): uma precondição B com
+     * vários conjuntos {@code &} (ex.: {@code get_stdlib_CRC16Polynom3D65}'s 7 conjuntos, incluindo
+     * {@code po : uint16_t}) chega aqui como UMA ÚNICA string {@code requires} (ver {@link
+     * BxmlPredicateToAcsl#translatePredicateBlock}, que junta a árvore inteira com {@code &&} —
+     * distinto de {@code translateInvariantConjuncts}, que achataria em entradas separadas). Uma
+     * âncora exigia que a string INTEIRA fosse só {@code belongs(param, S)}; com {@code po : uint16_t}
+     * embutido no MEIO de uma string maior, o {@code matches()} nunca disparava e {@code po} ficava
+     * sem desreferenciar — "incompatible types integer and uint16_t *" no {@code -acsl-import}
+     * (parâmetros de saída simples, com precondição de 1 conjunto só, já funcionavam antes).
+     * {@code [^()]+} (não {@code [^)]+}) evita consumir um {@code (} de outra chamada adjacente na
+     * mesma string (ex. {@code is_total_function(array_to_function_int(...), ...)}) — se o 2º
+     * argumento tiver parênteses próprios, esta ocorrência simplesmente não casa (degrada para "não
+     * reescreve", nunca para uma reescrita errada).
      */
     private static final Pattern REQUIRES_BELONGS =
             Pattern.compile(
-                    "^belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^)]+)\\s*\\)$");
+                    "belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^()]+?)\\s*\\)");
 
     private static void rewriteRequiresForOutputParameters(
             List<String> requires, List<String> outputParams, Set<String> boolOutputParams) {
@@ -1355,22 +1369,31 @@ public final class BxmlOperationsTranslator {
             if (req == null || req.isBlank()) {
                 continue;
             }
-            Matcher m = REQUIRES_BELONGS.matcher(req.trim());
-            if (!m.matches()) {
+            Matcher m = REQUIRES_BELONGS.matcher(req);
+            StringBuilder rewritten = new StringBuilder();
+            boolean changed = false;
+            while (m.find()) {
+                String var = m.group(1).trim();
+                String set = m.group(2).trim();
+                if (!out.contains(var)) {
+                    continue;
+                }
+                changed = true;
+                // Saídas bool (C _Bool*) correspondem diretamente ao tipo lógico ACSL "boolean" —
+                // sem cast. O cast (integer) só se aplica a saídas int/enum (ex.: cc : COPY em
+                // Biblioteca), cujo domínio (Set<integer>) exige elevar o valor C para o tipo
+                // lógico "integer". Aplicá-lo também a saídas bool comparadas contra um domínio
+                // Set<boolean> (ex.: BOOL) provoca "invalid implicit conversion from integer to
+                // boolean" no Frama-C.
+                String value = boolOut.contains(var) ? "*" + var : "(integer)*" + var;
+                m.appendReplacement(
+                        rewritten, Matcher.quoteReplacement("belongs(" + value + ", " + set + ")"));
+            }
+            if (!changed) {
                 continue;
             }
-            String var = m.group(1).trim();
-            String set = m.group(2).trim();
-            if (!out.contains(var)) {
-                continue;
-            }
-            // Saídas bool (C _Bool*) correspondem diretamente ao tipo lógico ACSL "boolean" — sem
-            // cast. O cast (integer) só se aplica a saídas int/enum (ex.: cc : COPY em Biblioteca),
-            // cujo domínio (Set<integer>) exige elevar o valor C para o tipo lógico "integer".
-            // Aplicá-lo também a saídas bool comparadas contra um domínio Set<boolean> (ex.: BOOL)
-            // provoca "invalid implicit conversion from integer to boolean" no Frama-C.
-            String value = boolOut.contains(var) ? "*" + var : "(integer)*" + var;
-            requires.set(i, "belongs(" + value + ", " + set + ")");
+            m.appendTail(rewritten);
+            requires.set(i, rewritten.toString());
         }
     }
 
@@ -1387,6 +1410,20 @@ public final class BxmlOperationsTranslator {
     record ArrayFunctionParamInfo(String lengthExpr, boolean boolCodomain) {
         String functionName() {
             return boolCodomain ? "array_to_function_bool" : "array_to_function_int";
+        }
+
+        /**
+         * {@code array_to_function_int}/{@code _bool} exigem exatamente {@code int *}/{@code _Bool *}
+         * (ver assinatura em {@code function_functions/array_to_function_int.acsl}/{@code _bool.acsl})
+         * — um parâmetro C de outro tipo inteiro (ex.: {@code uint8_t *p_trame}, domínio B
+         * {@code uint8_t}) precisa deste cast explícito, senão o {@code -acsl-import} rejeita com
+         * "invalid implicit conversion from 'uint8_t *' to 'int *'". Mesmo cast já usado (sem este
+         * bug) no caminho de VARIÁVEIS concretas array-backed (ver {@code MachineAxiomaticBlockFormatter},
+         * ex. {@code array_to_function_int((int*)(Customer__limit), ...)}) — faltava só aqui, no
+         * caminho de PARÂMETROS de operação.
+         */
+        String castType() {
+            return boolCodomain ? "_Bool" : "int";
         }
     }
 
@@ -1419,9 +1456,13 @@ public final class BxmlOperationsTranslator {
             ArrayFunctionParamInfo info = e.getValue();
             String fn = info.functionName();
             // Substitui ocorrências isoladas de p que não estejam já dentro de array_to_function_*(
+            // Cast (int*)/(_Bool*) explícito: p pode ser um tipo inteiro C mais estreito que "int"
+            // (ex.: uint8_t *p_trame, domínio B uint8_t) — sem o cast, "invalid implicit conversion
+            // from 'uint8_t *' to 'int *'" no -acsl-import (mesmo cast já usado no caminho de
+            // variáveis concretas array-backed, ver ArrayFunctionParamInfo#castType).
             s = s.replaceAll(
                     "(?<!array_to_function_int\\()(?<!array_to_function_bool\\()\\b" + Pattern.quote(p) + "\\b",
-                    fn + "(" + p + ", " + info.lengthExpr() + ")");
+                    fn + "((" + info.castType() + "*)(" + p + "), " + info.lengthExpr() + ")");
         }
         return s;
     }
