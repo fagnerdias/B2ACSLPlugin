@@ -33,8 +33,13 @@ import com.example.ui.WpOptionsDialog.WpOptions;
  * Invocação do Frama-C ({@code -acsl-import} + {@code -wp}), com retry de auto-cura para colisões
  * de palavra reservada e execução opcional por-operação. Extraído de {@code B2ACSLPipeline}
  * (WMC=607) por extract-class puro: nenhuma linha de lógica mudou, só o arquivo em que vive.
+ *
+ * <p>Classe {@code public} (ao contrário do resto deste pacote, pensado só para uso interno entre
+ * módulos Maven do mesmo reactor) especificamente para expor {@link #verify} como entry point
+ * reutilizável por chamadores verdadeiramente externos (fora deste pacote/reactor) — ver o jar
+ * standalone produzido por {@code frama-c/pom.xml} (classifier {@code all}).
  */
-final class FramaCRunner {
+public final class FramaCRunner {
 
     private FramaCRunner() {}
 
@@ -370,29 +375,12 @@ final class FramaCRunner {
             String projectName)
             throws IOException, InterruptedException {
         if (cFiles.isEmpty()) return 0;
-        VerificationReportData reportData = new VerificationReportData();
-        long wpStartNanos = System.nanoTime();
-
-        Path mergedCode = cDir.resolve(MERGED_CODE_FILE_NAME);
-
-        Path ghostCi = GhostOperationsCiGenerator.targetPath(cDir);
-        StringBuilder specScanForLemmas = new StringBuilder();
-        if (allAcslFiles != null) {
-            for (Path ap : allAcslFiles) {
-                if (ap != null && Files.isRegularFile(ap)) {
-                    specScanForLemmas.append(Files.readString(ap, StandardCharsets.UTF_8)).append('\n');
-                }
-            }
-        }
-        String ghostCiText =
-                Files.isRegularFile(ghostCi)
-                        ? Files.readString(ghostCi, StandardCharsets.UTF_8)
-                        : "";
-        AcslLibraryResolver libraryResolver = new DefaultAcslLibraryResolver();
-        Set<String> allowedLibSymbolsForLemmas =
-                libraryResolver.allowedLibSymbolsForTransitiveIncludes(
-                        specScanForLemmas.toString(), ghostCiText);
-
+        // Resolve a ORDEM de .acsl a partir do grafo SEES/IMPORTS do BXML — a ÚNICA parte deste
+        // método que depende desse grafo. Os 3 passos finais (acsl-import → pós-processamento de
+        // merged_code.c → WP) vivem em #verify, que não sabe nada de BXML/SEES/IMPORTS e aceita a
+        // lista de ficheiros já na ordem certa — entry point reutilizável fora do pipeline B2ACSL
+        // completo (ex.: reexecutar só estes 3 passos depois de editar um .acsl à mão, sem refazer
+        // a tradução BXML→ACSL inteira; ou outra ferramenta que já tem os seus próprios .acsl/.c).
         List<Path> acslImportFiles =
                 resolveAcslImportForAllCFiles(
                         cFiles,
@@ -401,10 +389,71 @@ final class FramaCRunner {
                         importsGraph,
                         topLevelAcslFiles,
                         allAcslFiles);
-        if (acslImportFiles.isEmpty()) {
+        Path ghostCi = GhostOperationsCiGenerator.targetPath(cDir);
+        return verify(acslImportFiles, ghostCi, cFiles, cDir, specificationUsedTypes, wpOptions, projectName);
+    }
+
+    /**
+     * Entry point reutilizável para os passos {@code acsl-import} → pós-processamento de {@code
+     * merged_code.c} → {@code -wp}, a partir de ficheiros JÁ GERADOS — sem nenhuma dependência do
+     * grafo SEES/IMPORTS do BXML (ao contrário de {@link #runFramaC}, que resolve a ORDEM de {@code
+     * acslFiles} a partir desse grafo antes de delegar para aqui). Pensado para chamadores externos
+     * (outra ferramenta, um teste isolado, uma reexecução manual depois de editar um {@code .acsl}
+     * à mão) que já sabem a ordem de dependência correta dos seus próprios ficheiros e só querem os
+     * 3 passos finais do pipeline B2ACSL, sem a tradução BXML→ACSL completa.
+     *
+     * @param acslFiles ficheiros {@code .acsl} para {@code -acsl-import} E para a varredura de
+     *     lemas da biblioteca ACSL — NA ORDEM de dependência correta (quem vem primeiro é visto por
+     *     quem vem depois; o {@code -acsl-import} do Frama-C partilha um namespace global entre
+     *     todos os ficheiros desta lista, tal como entre esta lista e {@code cFiles})
+     * @param ghostCi {@code ghost_operations.ci} (contratos ghost, front-end isolado), ou {@code
+     *     null}/inexistente se não houver
+     * @param cFiles ficheiros {@code .c} (implementações reais), na MESMA ordem topológica de
+     *     {@code acslFiles}
+     * @param cDir diretório de trabalho — onde {@code merged_code.c} é escrito e onde o {@code -wp}
+     *     corre
+     * @param specificationUsedTypes tipos genéricos usados na especificação (para a
+     *     monomorphização de blocos {@code axiomatic} genéricos em {@code merged_code.c})
+     * @param wpOptions opções de {@code -wp} (prover, timeouts por-goal e por-função, etc.)
+     * @param projectName nome do projeto, só para os relatórios/diálogos de progresso
+     * @return código de saída: {@code 0} sucesso, {@code 4} sem {@code .acsl} para importar, {@code
+     *     5} timeout no próprio {@code -acsl-import}, {@code 6} timeout no {@code -wp}, outro valor
+     *     = exit code genuíno do {@code -acsl-import}/{@code -wp} que falhou
+     */
+    public static int verify(
+            List<Path> acslFiles,
+            Path ghostCi,
+            List<Path> cFiles,
+            Path cDir,
+            List<String> specificationUsedTypes,
+            WpOptions wpOptions,
+            String projectName)
+            throws IOException, InterruptedException {
+        if (cFiles == null || cFiles.isEmpty()) return 0;
+        if (acslFiles == null || acslFiles.isEmpty()) {
             System.err.println("[B2ACSL] Nenhum .acsl para importar.");
             return 4;
         }
+        List<Path> acslImportFiles = List.copyOf(acslFiles);
+        VerificationReportData reportData = new VerificationReportData();
+        long wpStartNanos = System.nanoTime();
+
+        Path mergedCode = cDir.resolve(MERGED_CODE_FILE_NAME);
+
+        StringBuilder specScanForLemmas = new StringBuilder();
+        for (Path ap : acslImportFiles) {
+            if (ap != null && Files.isRegularFile(ap)) {
+                specScanForLemmas.append(Files.readString(ap, StandardCharsets.UTF_8)).append('\n');
+            }
+        }
+        String ghostCiText =
+                ghostCi != null && Files.isRegularFile(ghostCi)
+                        ? Files.readString(ghostCi, StandardCharsets.UTF_8)
+                        : "";
+        AcslLibraryResolver libraryResolver = new DefaultAcslLibraryResolver();
+        Set<String> allowedLibSymbolsForLemmas =
+                libraryResolver.allowedLibSymbolsForTransitiveIncludes(
+                        specScanForLemmas.toString(), ghostCiText);
 
         // frama-c -acsl-import="f1,f2,…" [ghost_operations.ci] <c>… -print -no-unicode
         // O ghost_operations.ci vem antes dos .c: declarações do dummy_ghost (ex.: IS_VALID) são
@@ -414,13 +463,13 @@ final class FramaCRunner {
         String acslImportList =
                 acslImportFiles.stream().map(Path::toString).collect(java.util.stream.Collectors.joining(","));
         importCmd.add("-acsl-import=" + acslImportList);
-        if (Files.isRegularFile(ghostCi)) {
+        if (ghostCi != null && Files.isRegularFile(ghostCi)) {
             importCmd.add(ghostCi.toString());
         }
         // Ordena os .c pela MESMA ordem topológica (dependências antes de quem as usa) do
-        // -acsl-import, em vez da ordem alfabética de findCFiles: senão, os globais C de uma
-        // máquina "vista"/"importada" (ex.: main_fuel) podem acabar impressos DEPOIS da função de
-        // outra máquina que a usa (ex.: entry_point), e nenhum reordenamento de comentários ACSL
+        // -acsl-import, em vez da ordem dada por cFiles: senão, os globais C de uma máquina
+        // "vista"/"importada" (ex.: main_fuel) podem acabar impressos DEPOIS da função de outra
+        // máquina que a usa (ex.: entry_point), e nenhum reordenamento de comentários ACSL
         // (MemoryDependentBlockReorderer.moveMemoryDependentVariableBlocksAfterTheirGlobals) resolve isso — a própria função C
         // já está na ordem errada.
         for (Path cFile : orderCFilesByAcslImportOrder(cFiles, acslImportFiles)) {
