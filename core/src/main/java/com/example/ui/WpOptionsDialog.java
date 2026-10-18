@@ -38,10 +38,11 @@ public final class WpOptionsDialog {
     private static final String DEFAULT_WP_PROVER = "CVC5";
     private static final int DEFAULT_WP_TIMEOUT_SECONDS = 10;
     // Teto de parede da chamada -wp INTEIRA de uma função (soma de todos os goals dela) — não o
-    // timeoutSeconds acima (esse é por-GOAL individual do solver, -wp-timeout). Exemplos com muitas
-    // goals numa função só (ex. RulesOfTheSeas, ~3711) podem passar deste teto mesmo com um timeout
-    // por-goal pequeno; ver com.example.B2AcslConfig#DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS (mesmo
-    // default, mesma property "b2acsl.wp.functionTimeout").
+    // timeoutSeconds acima (esse é por-GOAL individual do solver, -wp-timeout). Sem controlo na
+    // interface Swing (removido - sempre este valor fixo quando o diálogo é usado); ajustável só no
+    // caminho headless via a variável de ambiente WP_FUNCTION_TIMEOUT/property
+    // "b2acsl.wp.functionTimeout" (ver com.example.B2AcslConfig#DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS,
+    // mesmo default) — útil para exemplos com muitas goals numa função só (ex. RulesOfTheSeas).
     private static final int DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS = 600;
     private static final String DEFAULT_WP_OUTPUT = "status";
     private static final String DEFAULT_PROJECT_NAME = "Project";
@@ -93,18 +94,6 @@ public final class WpOptionsDialog {
                     new JSpinner(new SpinnerNumberModel(DEFAULT_WP_TIMEOUT_SECONDS, 1, 36000, 1));
             JComponent editor = timeoutSpinner.getEditor();
             if (editor instanceof JSpinner.DefaultEditor defaultEditor) {
-                defaultEditor.getTextField().setColumns(5);
-            }
-
-            // Teto de parede da função inteira (soma de todos os goals dela) — distinto do timeout
-            // por-goal acima; range bem maior (até 216000s/60h) já que exemplos com muitos goals
-            // numa função só (ex. RulesOfTheSeas) podem legitimamente precisar de muito mais do que
-            // o timeout por-goal individual.
-            JSpinner functionTimeoutSpinner =
-                    new JSpinner(
-                            new SpinnerNumberModel(DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS, 1, 216000, 1));
-            JComponent functionTimeoutEditor = functionTimeoutSpinner.getEditor();
-            if (functionTimeoutEditor instanceof JSpinner.DefaultEditor defaultEditor) {
                 defaultEditor.getTextField().setColumns(5);
             }
 
@@ -162,18 +151,12 @@ public final class WpOptionsDialog {
 
             gbc.gridx = 0;
             gbc.gridy = 3;
-            gbc.gridwidth = 1;
-            gbc.insets = new Insets(4, 0, 0, 10);
-            content.add(field("Function Timeout (sec)", functionTimeoutSpinner), gbc);
-
-            gbc.gridx = 0;
-            gbc.gridy = 4;
             gbc.gridwidth = 2;
             gbc.insets = new Insets(4, 2, 0, 0);
             smokeTestsBox.setOpaque(false);
             content.add(smokeTestsBox, gbc);
 
-            gbc.gridy = 5;
+            gbc.gridy = 4;
             counterExamplesBox.setOpaque(false);
             content.add(counterExamplesBox, gbc);
 
@@ -222,14 +205,13 @@ public final class WpOptionsDialog {
                         }
                         String project = projectField.getText();
                         int timeout = ((Number) timeoutSpinner.getValue()).intValue();
-                        int functionTimeout = ((Number) functionTimeoutSpinner.getValue()).intValue();
                         String output = (String) outputCombo.getSelectedItem();
                         resultHolder[0] =
                                 buildWpOptions(
                                         project,
                                         selectedProvers,
                                         timeout,
-                                        functionTimeout,
+                                        DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS,
                                         output,
                                         loopSimplificationBox.isSelected(),
                                         smokeTestsBox.isSelected(),
