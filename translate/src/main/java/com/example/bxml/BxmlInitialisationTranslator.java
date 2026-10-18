@@ -80,9 +80,17 @@ public final class BxmlInitialisationTranslator {
 
         InitSource src = selectInitialisationSource(machineEl, mergedMachineElements);
 
+        // ensures: sempre da INITIALISATION da máquina ABSTRATA, nunca da implementação — regra do
+        // prompt "contratos ACSL traduzidos literalmente" (2.1): a abstrata é a especificação; a da
+        // implementação tipicamente só concretiza uma escolha B não-determinística (ex. "V :: S -->
+        // T" virando "V := S*{c}"), que não é a especificação, só uma testemunha válida dela. Ao
+        // contrário de loopSpecs/explicitLoops abaixo (que descrevem o LAÇO C real e por isso
+        // continuam vindo de `src`, que prefere a implementação), o ensures nunca deve prometer um
+        // valor mais específico do que a abstrata garante.
         List<String> ensures = new ArrayList<>();
-        if (src.initSource() != null) {
-            walkSubstitution(BxmlDomUtils.firstSubChild(src.initSource()), ensures, ctx);
+        Element abstractInit = BxmlDomUtils.firstChildElement(machineEl, "Initialisation");
+        if (abstractInit != null) {
+            walkSubstitution(BxmlDomUtils.firstSubChild(abstractInit), ensures, ctx);
         }
         List<CartesianProductLoopSpecDetector.LoopInitSpec> loopSpecs = (src.initSource() != null)
                 ? CartesianProductLoopSpecDetector.detectAllLoopSpecs(
@@ -1310,7 +1318,13 @@ public final class BxmlInitialisationTranslator {
      *       faria) produz sintaxe inválida. {@code -->>} (sobrejeção total) acrescenta
      *       {@code is_surjective(v, rng)}.</li>
      *   <li>{@code S} é uma expressão de conjunto literal: {@code v} é elemento simples — usa
-     *       {@code becomes_element_of(v, S)} ({@code set_functions/becomes_element_of.acsl}).</li>
+     *       {@code belongs(v, S)} diretamente, em vez de {@code becomes_element_of(v, S)}: a
+     *       sobrecarga de conjunto simples de {@code becomes_element_of}
+     *       ({@code set_functions/becomes_element_of.acsl}) é DEFINIDA como
+     *       {@code predicate becomes_element_of(integer x, Set<integer> e) = belongs(x, e);} — são
+     *       equivalentes para o WP, e {@code belongs} é o nome pedido pela tradução literal da
+     *       especificação B (prompt "contratos ACSL traduzidos literalmente", regra 3.1: {@code x
+     *       :: S} vira {@code belongs(x, S)}).</li>
      * </ul>
      * Espelha {@code GhostOperationsCiGenerator#ghostMembershipEnsure} para o universo NÃO-ghost —
      * a mesma lacuna que aquele método já resolvia do lado ghost nunca tinha sido replicada aqui.
@@ -1330,7 +1344,7 @@ public final class BxmlInitialisationTranslator {
         }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) return null;
-        return "becomes_element_of(" + v + ", " + setExprText + ")";
+        return "belongs(" + v + ", " + setExprText + ")";
     }
 
     /**

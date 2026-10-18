@@ -124,12 +124,32 @@ public final class GhostContractPredicates {
             Element abstractMachineEl,
             String machineNamePrefix,
             Map<String, String> variableLogicTypes) {
+        return formatGhostPatternsAxiomaticBlock(
+                abstractMachineEl, machineNamePrefix, variableLogicTypes, Set.of());
+    }
+
+    /**
+     * Como acima, mas excluindo {@code collapsedVariableNames} — variáveis abstratas de mesmo nome
+     * que uma {@code Concrete_Variables} da implementação (ver {@code
+     * BxmlMachineVariables#collapsedIntoImplementationVariableNames}): sem camada ghost paralela
+     * para elas (regra B: nome igual = mesma variável, só concreta), {@code dummy_ghost_<v>} nunca é
+     * lido por ninguém, e uma operação cuja ÚNICA variável abstrata atribuída está nesse conjunto não
+     * precisa de {@code predicate ghost__<op>} nenhum — sem este filtro, as duas declarações ficavam
+     * como lixo morto (nunca referenciado) depois do colapso, embora inofensivas para o WP.
+     */
+    public static String formatGhostPatternsAxiomaticBlock(
+            Element abstractMachineEl,
+            String machineNamePrefix,
+            Map<String, String> variableLogicTypes,
+            Set<String> collapsedVariableNames) {
         if (abstractMachineEl == null
                 || machineNamePrefix == null
                 || machineNamePrefix.isBlank()) {
             return "";
         }
-        List<String> vars = GhostOperationsCiGenerator.listAbstractVariableNames(abstractMachineEl);
+        Set<String> collapsed = collapsedVariableNames == null ? Set.of() : collapsedVariableNames;
+        List<String> vars = new ArrayList<>(GhostOperationsCiGenerator.listAbstractVariableNames(abstractMachineEl));
+        vars.removeAll(collapsed);
         if (vars.isEmpty()) return "";
 
         Map<String, String> types =

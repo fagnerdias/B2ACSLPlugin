@@ -412,10 +412,16 @@ public final class BxmlOperationsTranslator {
      * parâmetros de entrada/saída, sem abstração ghost (operam diretamente sobre as variáveis
      * concretas já resolvidas desta mesma máquina — não há "abstrata" para ligar).
      *
-     * <p>BXML duplica cada operação local: {@code <Local_Operations>} tem a declaração (que aqui só
-     * serve para descobrir OS NOMES), {@code <Operations>} tem o corpo "real" (mesmo texto B nos
-     * exemplos vistos até agora, mas é o segundo que os outros corpos de operação desta
-     * implementação realmente invocam — usa-se esse).
+     * <p>BXML duplica cada operação local: {@code <Local_Operations>} tem a DECLARAÇÃO — nome,
+     * parâmetros, {@code <Precondition>} e {@code <Body>} com a ESPECIFICAÇÃO B da operação — e a
+     * {@code <Operations>} irmã tem o corpo REAL (o texto B0 que o C gerado efetivamente executa,
+     * usado só para a VERIFICAÇÃO, nunca como fonte de cláusulas — regra do prompt "contratos ACSL
+     * traduzidos literalmente"). O contrato (requires/ensures/assigns) vem inteiramente da
+     * declaração em {@code <Local_Operations>}, nunca do corpo real: traduzir o corpo real (como
+     * esta função fazia antes) gera uma cláusula por caminho de {@code IF} enumerado, em vez da
+     * especificação declarada (ex.: {@code update_bistables} em {@code logic_i.imp} tinha 48
+     * {@code ensures} vindos do corpo, contra as 2 que a especificação
+     * {@code C_CSS_V2 :: NAT || EIT_C_CSS :: NAT} pede).
      *
      * @param implementationMachineEl elemento fundido {@code type="implementation"} com o
      *        {@code <Local_Operations>} (ex. cv_struct_i)
@@ -441,18 +447,20 @@ public final class BxmlOperationsTranslator {
         String machineName = rootAbstractMachineName;
 
         for (String opName : listOperationNames(localOpsEl)) {
-            Element realOp = findOperationByName(operationsEl, opName);
             Element declOp = findOperationByName(localOpsEl, opName);
-            Element opForParams = declOp != null ? declOp : realOp;
-            Element body =
-                    BxmlDomUtils.firstChildElement(realOp != null ? realOp : declOp, "Body");
+            if (declOp == null) continue;
+            // Guarda defensiva: a <Operations> irmã (corpo real, usado só para a verificação do
+            // WP, nunca como fonte de cláusula) deve existir — não é mais lida aqui, mas a sua
+            // ausência indicaria BXML malformado.
+            if (findOperationByName(operationsEl, opName) == null) continue;
+            Element body = BxmlDomUtils.firstChildElement(declOp, "Body");
             if (body == null) continue;
 
             // Parâmetros de entrada/saída (ex.: TestLocalOperation's "ss <-- sum_op(xx) = ...") —
             // ao contrário do caso "sem parâmetros" original desta função (ex. cv_struct's
             // lclear), um parâmetro de SAÍDA é um ponteiro C, não uma variável concreta desta
             // máquina: precisa de \valid/dereferenciamento "*", nunca do prefixo machineName__.
-            List<String> outputParams = parseOutputParameterNames(opForParams);
+            List<String> outputParams = parseOutputParameterNames(declOp);
             Set<String> outputParamSet = new LinkedHashSet<>(outputParams);
 
             List<String> ensures = new ArrayList<>();
@@ -469,6 +477,10 @@ public final class BxmlOperationsTranslator {
             }
 
             List<String> requires = new ArrayList<>(invariantPredicateNames);
+            Element pre = BxmlDomUtils.firstChildElement(declOp, "Precondition");
+            if (pre != null) {
+                requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
+            }
             for (String p : outputParams) {
                 requires.add("\\valid(" + p + ")");
             }

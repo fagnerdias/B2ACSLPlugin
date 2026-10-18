@@ -694,7 +694,7 @@ public final class AcslGenerator {
         String ghostPatternsBlock =
                 useGhostAbstraction
                         ? GhostContractPredicates.formatGhostPatternsAxiomaticBlock(
-                                machineEl, baseName, ctx.variableLogicTypes())
+                                machineEl, baseName, ctx.variableLogicTypes(), state.collapsedVariableNames)
                         : "";
         appendBlockWithSpacing(sb, ghostPatternsBlock);
         appendAnySubMarkerDeclarations(state);
