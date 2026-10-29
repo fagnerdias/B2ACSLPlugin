@@ -41,3 +41,6 @@ examples/
 
 # Logs de execução de scripts/run_examples.sh (histórico local de regressão manual)
 scripts/run-logs/
+
+# Saídas do comparator (make compare): workspaces e relatórios JSON
+comparator-out/

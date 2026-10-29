@@ -49,7 +49,7 @@ public final class FramaCRunner {
      * (não-javadoc) de um módulo {@code frama-c} a um módulo {@code cli}, o que quebraria o grafo
      * de dependências acíclico entre módulos.
      */
-    static final String MERGED_CODE_FILE_NAME = "merged_code.c";
+    public static final String MERGED_CODE_FILE_NAME = "merged_code.c";
 
     private static final String FRAMA_C = "frama-c";
 
@@ -190,6 +190,23 @@ public final class FramaCRunner {
         if (changed) {
             Files.writeString(mergedCode, rebuilt.toString(), StandardCharsets.UTF_8);
         }
+    }
+
+    /**
+     * Ordem de {@code -acsl-import} que {@link #runFramaC} usa, exposta para chamadores que
+     * verificam {@code .acsl} gerados por outra ferramenta a partir da mesma entrada BXML (ex.: o
+     * módulo {@code comparator}), para que os dois lados sejam importados na MESMA ordem.
+     */
+    public static List<Path> orderAcslFilesForImport(
+            List<Path> cFiles,
+            Path acslDir,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            List<Path> topLevelAcslFiles,
+            List<Path> allAcslFiles)
+            throws IOException {
+        return resolveAcslImportForAllCFiles(
+                cFiles, acslDir, seesGraph, importsGraph, topLevelAcslFiles, allAcslFiles);
     }
 
     /**
@@ -429,16 +446,72 @@ public final class FramaCRunner {
             WpOptions wpOptions,
             String projectName)
             throws IOException, InterruptedException {
-        if (cFiles == null || cFiles.isEmpty()) return 0;
-        if (acslFiles == null || acslFiles.isEmpty()) {
-            System.err.println("[B2ACSL] Nenhum .acsl para importar.");
-            return 4;
-        }
-        List<Path> acslImportFiles = List.copyOf(acslFiles);
+        return verifyWithReport(
+                        acslFiles,
+                        ghostCi,
+                        cFiles,
+                        cDir,
+                        specificationUsedTypes,
+                        wpOptions,
+                        projectName,
+                        true)
+                .exitCode();
+    }
+
+    /** Em que ponto {@link #verifyWithReport} terminou. */
+    public enum VerificationStatus {
+        COMPLETED,
+        NO_C_FILES,
+        NO_ACSL_FILES,
+        IMPORT_TIMEOUT,
+        IMPORT_ERROR,
+        WP_TIMEOUT,
+        WP_ERROR
+    }
+
+    /**
+     * Resultado estruturado de {@link #verifyWithReport}: o mesmo {@code exitCode} de {@link
+     * #verify}, mais as contagens de goals já interpretadas (total e por função).
+     *
+     * @param importOutput saída do {@code -acsl-import} quando ele falhou ({@code ""} caso
+     *     contrário)
+     */
+    public record VerificationOutcome(
+            int exitCode,
+            VerificationStatus status,
+            VerificationReportData report,
+            long elapsedMs,
+            Path mergedCode,
+            String importOutput) {}
+
+    /**
+     * Igual a {@link #verify}, mas devolve o relatório estruturado em vez de só o código de saída.
+     *
+     * @param showReportDialog {@code false} não mostra o relatório final (janela ou, sem display,
+     *     resumo + log WP completo reimpresso no console) — para chamadores que consomem o {@link
+     *     VerificationOutcome} diretamente
+     */
+    public static VerificationOutcome verifyWithReport(
+            List<Path> acslFiles,
+            Path ghostCi,
+            List<Path> cFiles,
+            Path cDir,
+            List<String> specificationUsedTypes,
+            WpOptions wpOptions,
+            String projectName,
+            boolean showReportDialog)
+            throws IOException, InterruptedException {
         VerificationReportData reportData = new VerificationReportData();
         long wpStartNanos = System.nanoTime();
-
         Path mergedCode = cDir.resolve(MERGED_CODE_FILE_NAME);
+        if (cFiles == null || cFiles.isEmpty()) {
+            return outcome(0, VerificationStatus.NO_C_FILES, reportData, wpStartNanos, mergedCode, "");
+        }
+        if (acslFiles == null || acslFiles.isEmpty()) {
+            System.err.println("[B2ACSL] Nenhum .acsl para importar.");
+            return outcome(4, VerificationStatus.NO_ACSL_FILES, reportData, wpStartNanos, mergedCode, "");
+        }
+        List<Path> acslImportFiles = List.copyOf(acslFiles);
 
         StringBuilder specScanForLemmas = new StringBuilder();
         for (Path ap : acslImportFiles) {
@@ -506,7 +579,7 @@ public final class FramaCRunner {
             boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
             if (!importOk) {
                 pImport.destroyForcibly();
-                return 5;
+                return outcome(5, VerificationStatus.IMPORT_TIMEOUT, reportData, wpStartNanos, mergedCode, "");
             }
             importExitCode = pImport.exitValue();
             if (importExitCode == 0) {
@@ -520,7 +593,9 @@ public final class FramaCRunner {
             if (badToken == null || PROTECTED_ACSL_STRUCTURAL_WORDS.contains(badToken)) {
                 PreVerificationErrorDialog.show(
                         projectName, "Frama-C -acsl-import", String.join(" ", importCmd), importOutput);
-                return importExitCode;
+                return outcome(
+                        importExitCode, VerificationStatus.IMPORT_ERROR, reportData, wpStartNanos,
+                        mergedCode, importOutput);
             }
             System.out.println(
                     "[B2ACSL] '"
@@ -534,7 +609,9 @@ public final class FramaCRunner {
         if (importExitCode != 0) {
             PreVerificationErrorDialog.show(
                     projectName, "Frama-C -acsl-import", String.join(" ", importCmd), importOutput);
-            return importExitCode;
+            return outcome(
+                    importExitCode, VerificationStatus.IMPORT_ERROR, reportData, wpStartNanos,
+                    mergedCode, importOutput);
         }
 
         // Cadeia ordenada de pós-processamento de merged_code.c — ver
@@ -618,8 +695,9 @@ public final class FramaCRunner {
                         "timed out (" + wpOptions.functionTimeoutSeconds() + "s)");
                 progress.finish(false);
                 showVerificationReport(
-                        projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);
-                return 6;
+                        projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress,
+                        showReportDialog);
+                return outcome(6, VerificationStatus.WP_TIMEOUT, reportData, wpStartNanos, mergedCode, "");
             }
             if (wpResult.exitCode() != 0) {
                 reportData.addFailure(
@@ -643,13 +721,27 @@ public final class FramaCRunner {
         if (failingExitCode != 0) {
             progress.finish(false);
             showVerificationReport(
-                    projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);
-            return failingExitCode;
+                    projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress,
+                    showReportDialog);
+            return outcome(
+                    failingExitCode, VerificationStatus.WP_ERROR, reportData, wpStartNanos, mergedCode, "");
         }
         progress.finish(true);
         showVerificationReport(
-                projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress);
-        return 0;
+                projectName, mergedCode.getFileName().toString(), wpStartNanos, reportData, progress,
+                showReportDialog);
+        return outcome(0, VerificationStatus.COMPLETED, reportData, wpStartNanos, mergedCode, "");
+    }
+
+    private static VerificationOutcome outcome(
+            int exitCode,
+            VerificationStatus status,
+            VerificationReportData reportData,
+            long startNanos,
+            Path mergedCode,
+            String importOutput) {
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        return new VerificationOutcome(exitCode, status, reportData, elapsedMs, mergedCode, importOutput);
     }
 
     private static String wpSourceName(Path mergedCode, String functionName, String cSourcesLabel) {
@@ -808,8 +900,12 @@ public final class FramaCRunner {
             String analyzedFileName,
             long startNanos,
             VerificationReportData reportData,
-            VerificationProgressDialog progress) {
+            VerificationProgressDialog progress,
+            boolean showReportDialog) {
         progress.close();
+        if (!showReportDialog) {
+            return;
+        }
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
         FormalVerificationReportDialog.show(projectName, analyzedFileName, elapsedMs, reportData);
     }

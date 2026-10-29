@@ -112,23 +112,128 @@ public final class B2ACSLPipeline {
     private B2ACSLPipeline() {}
 
     /**
+     * Resultado da fase de geração ({@link #generate}): tudo o que o passo de verificação
+     * (Frama-C) precisa, sem ainda o ter executado. {@code exitCode != 0} indica que a geração
+     * parou antes do fim (mesmos códigos de {@link #run}) e os demais campos podem estar vazios.
+     */
+    public record GenerationResult(
+            int exitCode,
+            Path bdp,
+            Path cDir,
+            Path acslDir,
+            List<Path> topLevelAcslFiles,
+            List<Path> acslFiles,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            List<Path> cFiles,
+            List<String> specificationUsedTypes,
+            String projectName) {
+
+        static GenerationResult failed(int exitCode, Path bdp) {
+            return new GenerationResult(
+                    exitCode, bdp, null, null, List.of(), List.of(), null, null, List.of(), List.of(),
+                    inferProjectNameFromBdp(bdp));
+        }
+    }
+
+    /**
+     * Estrutura de um projeto B lida dos {@code .bxml} (grafos SEES/IMPORTS e máquinas abstratas
+     * raiz), sem gerar nada — para quem precisa ordenar/verificar {@code .acsl} produzidos por outra
+     * ferramenta a partir da mesma entrada BXML.
+     */
+    public record ProjectStructure(
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            List<String> topLevelMachineNames,
+            List<Element> abstractMachineRoots) {}
+
+    /** Lê a estrutura (SEES/IMPORTS, máquinas abstratas raiz) dos {@code .bxml} de {@code bdp}. */
+    public static ProjectStructure loadProjectStructure(Path bdpPath) throws Exception {
+        Path bdp = bdpPath.toAbsolutePath().normalize();
+        List<Path> bxmlFiles = findBxmlFiles(bdp);
+        BxmlSeesGraph seesGraph = BxmlSeesGraph.fromBxmlDirectory(bdp);
+        BxmlImportsGraph importsGraph =
+                BxmlImportsGraph.fromBxmlDirectory(bdp, buildAbstractionParentMap(bxmlFiles));
+        List<Element> abstractMachineRoots = new ArrayList<>();
+        Set<String> abstractMachineNames = new LinkedHashSet<>();
+        for (Path f : bxmlFiles) {
+            Element root = AcslGenerator.parseMachineElement(f);
+            if (AcslGenerator.getAbstractionReferenceName(root).isPresent()) {
+                continue;
+            }
+            abstractMachineRoots.add(root);
+            abstractMachineNames.add(root.getAttribute("name"));
+        }
+        List<String> topLevel =
+                topLevelImportMachineNames(
+                        abstractMachineNames, dependencyOnlyMachineNames(seesGraph, importsGraph));
+        return new ProjectStructure(
+                seesGraph, importsGraph, topLevel, List.copyOf(abstractMachineRoots));
+    }
+
+    /**
      * Executa o pipeline completo.
      *
      * @param bdpPath Caminho da pasta bdp (contém os .bxml)
      * @return Código de retorno para o Atelier B (0=sucesso, !=0=falha)
      */
     public static int run(Path bdpPath) throws Exception {
+        GenerationResult generation = generate(bdpPath);
+        if (generation.exitCode() != 0) {
+            return generation.exitCode();
+        }
+
+        // Step 3: Executar Frama-C (acsl-importer + WP)
+        int framaResult;
+        if (MOCK_MODE) {
+            framaResult =
+                    runMockFramaC(
+                            generation.topLevelAcslFiles(), generation.cFiles(), generation.cDir());
+        } else {
+            WpOptions wpOptions = WpOptionsDialog.promptWpOptions(generation.projectName());
+            if (wpOptions == null) {
+                System.err.println("[B2ACSL] Execution cancelled by user.");
+                return 7;
+            }
+            String selectedProjectName = wpOptions.projectName();
+            ExternalVerifierRunner verifierRunner = new FramaCVerifierRunner();
+            framaResult =
+                    verifierRunner.runFramaC(
+                            generation.topLevelAcslFiles(),
+                            generation.acslFiles(),
+                            generation.acslDir(),
+                            generation.seesGraph(),
+                            generation.importsGraph(),
+                            generation.cFiles(),
+                            generation.cDir(),
+                            generation.specificationUsedTypes(),
+                            wpOptions,
+                            selectedProjectName);
+        }
+
+        // Step 4: Retornar valor para Atelier B
+        return framaResult;
+    }
+
+    /**
+     * Fase de geração do pipeline (passos 1 a 2.1): BXML → {@code ghost_operations.ci} → {@code
+     * .acsl} → lista de tipos da especificação, gravados em {@code <proj>/lang/c}. Não executa o
+     * Frama-C — ver {@link #run} para o pipeline completo.
+     *
+     * @param bdpPath Caminho da pasta bdp (contém os .bxml)
+     */
+    public static GenerationResult generate(Path bdpPath) throws Exception {
         Path bdp = bdpPath.toAbsolutePath().normalize();
         if (!Files.isDirectory(bdp)) {
             System.err.println("[B2ACSL] Caminho inválido (não é diretório): " + bdp);
-            return 1;
+            return GenerationResult.failed(1, bdp);
         }
 
         // Step 1: Ler arquivos .bxml
         List<Path> bxmlFiles = findBxmlFiles(bdp);
         if (bxmlFiles.isEmpty()) {
             System.err.println("[B2ACSL] Nenhum arquivo .bxml encontrado em: " + bdp);
-            return 2;
+            return GenerationResult.failed(2, bdp);
         }
 
         List<MachineFile> machines = new ArrayList<>();
@@ -143,7 +248,7 @@ public final class B2ACSLPipeline {
 
         if (machines.isEmpty()) {
             System.err.println("[B2ACSL] Nenhuma máquina válida encontrada nos ficheiros .bxml.");
-            return 3;
+            return GenerationResult.failed(3, bdp);
         }
 
         Map<String, String> invariantGluingSubstitutions = BxmlGluingNormalizer.collectFromAllBxmlFiles(bxmlFiles);
@@ -409,38 +514,21 @@ public final class B2ACSLPipeline {
 
             if (cFiles.isEmpty() && !MOCK_MODE) {
                 System.err.println("[B2ACSL] Nenhum arquivo .c encontrado em: " + cDir);
-                return 4;
+                return GenerationResult.failed(4, bdp);
             }
 
-            // Step 3: Executar Frama-C (acsl-importer + WP)
-            int framaResult;
-            String projectName = inferProjectNameFromBdp(bdp);
-            if (MOCK_MODE) {
-                framaResult = runMockFramaC(topLevelAcslFiles, cFiles, cDir);
-            } else {
-                WpOptions wpOptions = WpOptionsDialog.promptWpOptions(projectName);
-                if (wpOptions == null) {
-                    System.err.println("[B2ACSL] Execution cancelled by user.");
-                    return 7;
-                }
-                String selectedProjectName = wpOptions.projectName();
-                ExternalVerifierRunner verifierRunner = new FramaCVerifierRunner();
-                framaResult =
-                        verifierRunner.runFramaC(
-                                topLevelAcslFiles,
-                                acslFiles,
-                                acslDir,
-                                seesGraph,
-                                importsGraph,
-                                cFiles,
-                                cDir,
-                                specificationUsedTypes,
-                                wpOptions,
-                                selectedProjectName);
-            }
-
-            // Step 4: Retornar valor para Atelier B
-            return framaResult;
+            return new GenerationResult(
+                    0,
+                    bdp,
+                    cDir,
+                    acslDir,
+                    List.copyOf(topLevelAcslFiles),
+                    List.copyOf(acslFiles),
+                    seesGraph,
+                    importsGraph,
+                    cFiles,
+                    specificationUsedTypes,
+                    inferProjectNameFromBdp(bdp));
         } finally {
         }
     }

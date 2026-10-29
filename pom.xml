@@ -18,6 +18,7 @@
     <module>translate</module>
     <module>frama-c</module>
     <module>cli</module>
+    <module>comparator</module>
   </modules>
 
   <properties>
@@ -26,6 +27,7 @@
     <b2acsl.mock>false</b2acsl.mock>
 
     <jackson.version>2.17.2</jackson.version>
+    <java.diff.utils.version>4.12</java.diff.utils.version>
     <graalvm.native.plugin.version>0.10.3</graalvm.native.plugin.version>
     <maven.shade.plugin.version>3.6.0</maven.shade.plugin.version>
     <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
@@ -64,6 +66,16 @@
         <groupId>com.example</groupId>
         <artifactId>b2acsl-frama-c</artifactId>
         <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.example</groupId>
+        <artifactId>xml-reader</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.java-diff-utils</groupId>
+        <artifactId>java-diff-utils</artifactId>
+        <version>${java.diff.utils.version}</version>
       </dependency>
 
       <dependency>
@@ -144,6 +156,10 @@
         |          depende de core (ui/analysis) e de translate (bxml, AcslLibraryResolver)
         |
       cli         (Main, B2ACSLPipeline) — depende de core, translate e frama-c
+        ^
+        |
+      comparator  (com.example.comparator.*) — compara as especificações e os resultados WP do
+                   B2ACSLPlugin e do B2ACSLRules (submodule rules/); depende de cli
 
     Achado do split: havia uma dependência circular real entre o pacote raiz com.example e
     com.example.bxml (algumas classes de bxml importavam AcslGenerator/AcslLibIncludes/etc.,

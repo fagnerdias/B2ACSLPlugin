@@ -133,6 +133,8 @@ O projeto é um reactor Maven multi-módulo (`pom.xml` na raiz, `packaging=pom`)
 - `translate/`: tradução BXML → ACSL (`com.example.bxml.*`, `AcslGenerator`), resolução da biblioteca (`AcslLibIncludes`, `AcslLibSymbolDependencyMap`); inclui o submódulo Git `translate/src/main/resources/lib/` (`B2ACSLLib/`), `translate/src/main/resources/b2acsl/symbol_dependency_map.json` e os testes JUnit (`translate/src/test/`)
 - `frama-c/`: invocação do Frama-C (`FramaCRunner`) e pós-processamento de `merged_code.c`
 - `cli/`: ponto de entrada (`Main.java`) e orquestração (`B2ACSLPipeline`) — artifactId mantido como `xml-reader` (não `b2acsl-cli`) e build redirecionado para `target/` na raiz, para preservar os caminhos que `scripts/run_examples.sh`, o `Makefile` e o `plugin.etool` do Atelier B já esperavam antes do split
+- `comparator/`: compara este plugin com o B2ACSLRules (especificações e resultados do WP, relatórios JSON) — ver [Comparação com o B2ACSLRules](#comparação-com-o-b2acslrules)
+- `rules/`: submodule Git [B2ACSLRules](https://github.com/fagnerdias/B2ACSLRules), o tradutor B → ACSL baseado em ATL usado pelo `comparator`
 - `pom.xml`: pai do reactor — propriedades compartilhadas, `<modules>`, versões de plugin
 - `Makefile`: automações `build-jar`, `build-native`, `build-installer`, `clean` (usa `mvn -pl cli help:evaluate` para descobrir `artifactId`/`version` do módulo final)
 
@@ -171,6 +173,18 @@ O `Makefile` escolhe o tipo com base no sistema:
 - Windows: `.exe` (pode requerer toolchain adicional dependendo do tipo escolhido)
 
 Os arquivos ficam em `target/installer/`.
+
+## Comparação com o B2ACSLRules
+
+O [B2ACSLRules](https://github.com/fagnerdias/B2ACSLRules) é um segundo tradutor B → ACSL, escrito como transformações de modelos ATL. Ele está incluído como o submodule Git `rules/`, que por sua vez fixa o mesmo submodule da biblioteca (ACSL2BMethodLib); por isso, clone com `--recurse-submodules`. O módulo `comparator` roda os dois tradutores sobre o mesmo exemplo e grava relatórios JSON. Ele compara as especificações (de forma estrutural e textual) e os resultados do Frama-C/WP, com os dois lados verificados pelo mesmo `FramaCRunner` e pelas mesmas opções de WP:
+
+```bash
+make build-rules                                  # rules/dist/b2acsl.jar (precisa dos jars ATL/EMF do Eclipse)
+make compare COMPARE_ARGS="--example AddRunner"   # comparator-out/<timestamp>/AddRunner/report.json
+make compare COMPARE_ARGS="--all --timeout 10"    # todos os exemplos + comparator-out/<timestamp>/summary.json
+```
+
+Arquitetura, formato do relatório e opções: [comparator/README.md](comparator/README.md).
 
 ## Notas sobre compatibilidade (jpackage + módulos)
 
