@@ -1106,11 +1106,15 @@ public final class AcslGenerator {
             String libIncludeScanRootMachineName,
             String extraLibScanText)
             throws Exception {
+        // Tipos-tupla ANTES da varredura da lib: o corpo desta máquina já está gerado, e a
+        // varredura pode traduzir o BXML de outra máquina (quando o .acsl dela ainda não existe),
+        // registando os tipos-tupla DELA no registo ativo, que é o desta máquina — o ficheiro de
+        // tipos-tupla desta máquina passava a redeclarar tipos de outra (Syntax error no import).
+        String tupleTypesInclude = writeTupleTypesFileIfNeeded(state);
         LibIncludeResolution libResolution =
                 resolveLibIncludesAndDependencyScan(
                         state, seesGraph, importsGraph, libIncludeScanRootMachineName, extraLibScanText);
         String machineDependencyIncludes = resolveMachineDependencyIncludes(state, seesGraph, importsGraph);
-        String tupleTypesInclude = writeTupleTypesFileIfNeeded(state);
 
         StringBuilder sb = state.sb;
         int headerLen = state.headerLen;

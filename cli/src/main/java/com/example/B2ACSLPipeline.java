@@ -432,9 +432,18 @@ public final class B2ACSLPipeline {
                     continue;
                 }
                 String machineName = mf.machine().getMachineName();
+                // Ordem de machinesForAcsl (não a de geração, que põe o portador da lib no fim):
+                // é ela que define as raízes e a ordem do -acsl-import (FramaCRunner).
+                abstractMachineNames.add(machineName);
                 if (!dependencyOnlyMachineNames.contains(machineName)) {
                     topLevelImportMachinesPreview.add(machineName);
                 }
+                // Apaga o .acsl (e o de tipos-tupla) de uma execução anterior, como o
+                // ghost_operations.ci acima: a varredura de símbolos da lib do portador lê o
+                // <M>.acsl de cada máquina quando ele existe, e um ficheiro antigo fazia a 1.ª
+                // execução e as seguintes gerarem includes diferentes.
+                Files.deleteIfExists(acslDir.resolve(machineName + ".acsl"));
+                Files.deleteIfExists(acslDir.resolve(machineName + "_tuple_types.acsl"));
             }
             String libIncludeScanRootMachineName =
                     topLevelImportMachinesPreview.isEmpty()
@@ -443,13 +452,13 @@ public final class B2ACSLPipeline {
             String libIncludeCarrierMachineName =
                     resolveLibIncludeCarrierMachineName(
                             libIncludeScanRootMachineName, seesGraph, importsGraph);
-            for (MachineFile mf : machinesForAcsl) {
+            Map<String, Path> acslByMachineName = new HashMap<>();
+            for (MachineFile mf : withLibIncludeCarrierLast(machinesForAcsl, libIncludeCarrierMachineName)) {
                 Element machineRoot = mf.machine().getMachineElement();
                 if (AcslGenerator.getAbstractionReferenceName(machineRoot).isPresent()) {
                     continue;
                 }
                 String machineName = mf.machine().getMachineName();
-                abstractMachineNames.add(machineName);
                 List<Path> mergePaths =
                         mergePathsByRootAbstract.getOrDefault(machineName, List.of());
                 Optional<Path> acsl =
@@ -477,7 +486,13 @@ public final class B2ACSLPipeline {
                         qualifyCollidingRealAcslNames(acsl.get(), machineName, collidingVars);
                     }
                 }
-                acsl.ifPresent(acslFiles::add);
+                acsl.ifPresent(p -> acslByMachineName.put(machineName, p));
+            }
+            for (String machineName : abstractMachineNames) {
+                Path p = acslByMachineName.get(machineName);
+                if (p != null) {
+                    acslFiles.add(p);
+                }
             }
             List<String> topLevelImportMachines =
                     topLevelImportMachineNames(abstractMachineNames, dependencyOnlyMachineNames);
@@ -837,6 +852,33 @@ public final class B2ACSLPipeline {
         ordered.addAll(dependencyFirst);
         ordered.addAll(rest);
         ordered.addAll(refinements);
+        return ordered;
+    }
+
+    /**
+     * Ordem de geração: a de {@code machinesForAcsl}, com o portador dos includes da {@code B2ACSLLib}
+     * por último. Os includes do portador vêm da varredura dos {@code .acsl} das outras máquinas
+     * (ver {@code AcslGenerator.resolveLibIncludesAndDependencyScan}); gerado antes delas, ele só via
+     * uma tradução reduzida do BXML (sem os blocos de variáveis da implementação, onde saem {@code
+     * array_to_function_*}, {@code is_total_function}, …) ou os {@code .acsl} de uma execução
+     * anterior.
+     */
+    private static List<MachineFile> withLibIncludeCarrierLast(
+            List<MachineFile> machinesForAcsl, String libIncludeCarrierMachineName) {
+        if (libIncludeCarrierMachineName == null || libIncludeCarrierMachineName.isBlank()) {
+            return machinesForAcsl;
+        }
+        String carrier = libIncludeCarrierMachineName.trim();
+        List<MachineFile> ordered = new ArrayList<>(machinesForAcsl.size());
+        List<MachineFile> carrierFiles = new ArrayList<>();
+        for (MachineFile mf : machinesForAcsl) {
+            if (carrier.equals(mf.machine().getMachineName())) {
+                carrierFiles.add(mf);
+            } else {
+                ordered.add(mf);
+            }
+        }
+        ordered.addAll(carrierFiles);
         return ordered;
     }
 
