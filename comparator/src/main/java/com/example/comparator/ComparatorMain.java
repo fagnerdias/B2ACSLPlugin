@@ -1,5 +1,6 @@
 package com.example.comparator;
 
+import com.example.comparator.report.HtmlReport;
 import com.example.comparator.report.Reports.RunConfig;
 import com.example.comparator.report.Reports.SpecSummary;
 import com.example.comparator.report.Reports.Summary;
@@ -43,6 +44,10 @@ public final class ComparatorMain {
             return;
         }
         try {
+            if (config.htmlDir() != null) {
+                System.out.println("[comparator] html: " + HtmlReport.write(config.htmlDir()));
+                System.exit(0);
+            }
             System.exit(config.side() != null ? SideRunner.run(config) : orchestrate(config));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -72,10 +77,21 @@ public final class ComparatorMain {
             Json.write(
                     ComparisonRunner.summaryFile(config),
                     new Summary(OffsetDateTime.now().toString(), runConfig, rows));
+            writeHtml(config.outDir());
         }
         printTable(rows);
         System.out.println("[comparator] summary: " + ComparisonRunner.summaryFile(config));
+        System.out.println("[comparator] html: " + config.outDir().resolve("index.html"));
         return 0;
+    }
+
+    /** The HTML view is a convenience: a failure to render it never stops the batch (the JSON is already written). */
+    private static void writeHtml(Path outDir) {
+        try {
+            HtmlReport.write(outDir);
+        } catch (IOException | RuntimeException e) {
+            System.err.println("[comparator] WARNING: HTML report not written: " + e);
+        }
     }
 
     private static List<String> allExamples(Path examplesDir) throws IOException {

@@ -10,7 +10,7 @@ The translators are:
 - **B2ACSLPlugin**, this repository, which translates in Java.
 - **B2ACSLRules**, the git submodule [`rules/`](../rules), which translates with ATL model transformations: BXML → ACSLImporter metamodel → text.
 
-All results are written as JSON.
+All results are written as JSON, together with an HTML view of them (`index.html` and one `report.html` per example).
 
 The comparison is designed so that **the translator is the only variable**. Both sides get:
 
@@ -33,7 +33,7 @@ flowchart TB
         GEN["gen: PluginSpecGenerator / RulesSpecGenerator"]
         SPEC["spec: AcslUnitExtractor, GhostCiExtractor,<br/>ClauseNormalizer, SpecDiff"]
         VER["verify: SharedVerifier"]
-        REP["report: Reports + Json"]
+        REP["report: Reports + Json, HtmlReport"]
         MAIN --> RUNNER --> SIDE
         SIDE --> GEN
         SIDE --> VER
@@ -81,7 +81,7 @@ flowchart TB
    - computes the same import order from the same BXML graphs.
 4. **Snapshot.** Each side copies its specification files to `<side>/spec/` before verification, because verification may rename symbols in place.
 5. **Verification.** `SharedVerifier` builds one set of `WpOptions` and calls `FramaCRunner.verifyWithReport(...)`. That runs `-acsl-import` → `merged_code.c` post-processing → `-wp`, and the structured result is written to `<side>/side-result.json`.
-6. **Comparison.** `SpecDiff` compares the two snapshots and `report.json` is written. After each example, `summary.json` is rewritten.
+6. **Comparison.** `SpecDiff` compares the two snapshots and `report.json` is written. After each example, `summary.json` is rewritten, and `HtmlReport` renders the HTML pages from the JSON files.
 
 Each side runs in its own JVM, just as the plugin does in a normal run, so static state of the translator never leaks between sides or examples. The sides run one after the other, so the provers never compete for CPU.
 
@@ -124,6 +124,7 @@ mvn -q -DskipTests package        # comparator/target/b2acsl-comparator-0.1.0-al
 
 make compare COMPARE_ARGS="--example AddRunner"
 make compare COMPARE_ARGS="--all --timeout 10"
+make compare COMPARE_ARGS="--html comparator-out/20261101_113133"   # rebuild only the HTML of an earlier run
 java -jar comparator/target/b2acsl-comparator-0.1.0-all.jar --help
 ```
 
@@ -140,6 +141,7 @@ Options:
 | `--whole-file` | off (one WP run per operation) | |
 | `--no-verify` | off | |
 | `--rules-timeout N` | `300` | |
+| `--html DIR` | | only (re)build the HTML pages of an existing output directory from its JSON files; nothing is translated or verified |
 
 Smoke tests, counterexamples, goal splitting and loop simplification follow the plugin's `-Db2acsl.wp.*` properties. Those properties are forwarded to both sides.
 
@@ -148,8 +150,10 @@ Smoke tests, counterexamples, goal splitting and loop simplification follow the 
 ```
 <out>/
 ├── summary.json                  one row per example (statuses, spec counts, proved/total per side)
+├── index.html                    HTML view of summary.json
 └── <example>/
     ├── report.json               config + commits, generation, spec (units, textDiff, filesOnlyIn), verification (per function)
+    ├── report.html               HTML view of report.json
     ├── plugin/  rules/
     │   ├── bdp/  lang/c/         isolated workspace (merged_code.c, .frama-c/ of that side)
     │   ├── spec/                 generated specification, before verification
@@ -158,6 +162,13 @@ Smoke tests, counterexamples, goal splitting and loop simplification follow the 
 ```
 
 `report.json` → `config.commits` records the revision of every component: plugin, rules, the plugin's B2ACSLLib and the rules' B2ACSLLib. A warning is added when the two library revisions differ.
+
+### HTML view
+
+The pages are self-contained (inline CSS and JavaScript, no network access), so they open straight from disk. They are rendered only from the JSON files, so they never show anything the JSON does not hold.
+
+- **`index.html`:** run settings and component revisions; one tile per outcome (verified by both, plugin only, rules only, partial, neither), which also filters the table; the goals proved by each side over the examples both sides verified; and one row per example with the unit agreement bar, each side's WP result and, when a side failed, the first error of its output (the generation message, the first Frama-C error, or the function that hit the WP time limit). Columns can be sorted.
+- **`<example>/report.html`:** for each side, the generation and verification status, the goal counts, the failure reason, the translator warnings, the Frama-C output and links to `run.log`, `spec/`, `merged_code.c` and `side-result.json`; the per-function WP results of both sides; the units, which can be filtered by status, kind and name, with the clauses only in the plugin, only in the rules, and in both; and the text diff of each file.
 
 ## Threats to validity
 
