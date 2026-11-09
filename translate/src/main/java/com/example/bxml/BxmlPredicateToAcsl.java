@@ -758,11 +758,31 @@ public final class BxmlPredicateToAcsl {
      * quando a testemunha é univocamente determinada — ver
      * {@link #tryExistsLetElimination(String, Element, BxmlTranslateContext)}.
      */
+    /**
+     * Tipo ACSL do binder {@code varId} de um {@code !x.(...)}/{@code #x.(...)}: o mesmo resolvedor
+     * dos binders de ANY ({@link #acslQuantifierLogicTypeForAnyVariable}: tipagem {@code x : A --> B}
+     * no corpo, senão o {@code typref}). Antes era sempre {@code integer}, e uma bijeção como em
+     * {@code #bij.(bij : IDX >->> IDX & rr = (bij ; array))} saía {@code \exists integer bij}
+     * ("incompatible types integer and Function"). Só um tipo não escalar substitui o {@code
+     * integer}, para não mudar os binders escalares que já funcionavam.
+     */
+    private static String quantifiedBinderType(Element bodyEl, Element varId, BxmlTranslateContext ctx) {
+        if (bodyEl == null) {
+            return "integer";
+        }
+        String t = acslQuantifierLogicTypeForAnyVariable(bodyEl, varId, ctx);
+        if (t == null || t.isBlank() || "integer".equals(t) || "boolean".equals(t) || "real".equals(t)) {
+            return "integer";
+        }
+        return BxmlComprehensionRegistry.isBinderSafeType(t) ? t : "integer";
+    }
+
     private static String translateQuantifiedPred(Element qp, BxmlTranslateContext ctx) {
         String type = qp.getAttribute("type");
         String quant = "!".equals(type) ? "\\forall" : "\\exists";
 
         Element varsEl = childByName(qp, "Variables");
+        Element bodyEl = childByName(qp, "Body");
         List<String> varDecls = new ArrayList<>();
         List<String> varNames = new ArrayList<>();
         if (varsEl != null) {
@@ -773,12 +793,11 @@ public final class BxmlPredicateToAcsl {
                 Element e = (Element) n;
                 if ("Attr".equals(e.getLocalName()) || !"Id".equals(e.getLocalName())) continue;
                 varNames.add(e.getAttribute("value"));
-                varDecls.add("integer " + e.getAttribute("value"));
+                varDecls.add(quantifiedBinderType(bodyEl, e, ctx) + " " + e.getAttribute("value"));
             }
         }
         if (varDecls.isEmpty()) return "/* quantified pred */";
 
-        Element bodyEl = childByName(qp, "Body");
         if (bodyEl == null) return "/* quantified pred */";
         Element bodyPred = BxmlDomUtils.firstPredChild(bodyEl);
         if (bodyPred == null) return "/* quantified pred */";
