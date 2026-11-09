@@ -1467,7 +1467,7 @@ public final class BxmlOperationsTranslator {
         }
     }
 
-    private static String rewriteAcslStringForArrayBackedParams(
+    static String rewriteAcslStringForArrayBackedParams(
             String s, Map<String, ArrayFunctionParamInfo> infoByParam) {
         if (s == null || s.isBlank() || infoByParam == null || infoByParam.isEmpty()) return s;
         for (Map.Entry<String, ArrayFunctionParamInfo> e : infoByParam.entrySet()) {

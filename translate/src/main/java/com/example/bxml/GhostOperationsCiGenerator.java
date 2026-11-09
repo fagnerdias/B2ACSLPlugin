@@ -449,10 +449,18 @@ public final class GhostOperationsCiGenerator {
                 Set<String> assigned = new LinkedHashSet<>();
                 collectAssignedAbstractVarsInBody(body, abstractSet, assigned);
 
+                // Entrada que é um array C (B: "p : A --> B" na pré-condição): como no contrato real
+                // (BxmlOperationsTranslator#rewriteEnsuresAndLoopsForArrayBackedParams), o texto lê
+                // array_to_function_*((int*)(p), len), não o ponteiro p. A prefixação abaixo leva o
+                // símbolo e as constantes para dummy_.
+                Map<String, BxmlOperationsTranslator.ArrayFunctionParamInfo> arrayParams =
+                        BxmlOperationsTranslator.inferArrayFunctionParamLengths(op, ctx);
+
                 Element anySub = BxmlInitialisationTranslator.findTopLevelAnySub(body);
                 if (anySub != null) {
                     String existsForm = BxmlInitialisationTranslator.translateAnySubAsExists(anySub, ctx);
                     if (existsForm == null || existsForm.isBlank()) continue;
+                    existsForm = BxmlOperationsTranslator.rewriteAcslStringForArrayBackedParams(existsForm, arrayParams);
                     // Antes da reescrita abaixo (que só troca dummy_/DRelation, a FORMA continua
                     // "\exists <Tipo> v; ..."): se o lado REAL (não-ghost) precisar de um marcador
                     // para esta cláusula (binder não-escalar, rejeitado pelo mini-DSL "function X:
@@ -492,6 +500,7 @@ public final class GhostOperationsCiGenerator {
                         GhostParamTypeResolver.appendOutputParametersAsPointers(GhostParamTypeResolver.listInputParameters(op), op, false);
                 List<String> ensures = new ArrayList<>();
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
+                BxmlOperationsTranslator.rewriteAcslListForArrayBackedParams(ensures, arrayParams);
                 List<String> ghostEnsures = new ArrayList<>();
                 for (String e : ensures) {
                     String ge =
