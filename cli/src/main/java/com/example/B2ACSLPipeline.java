@@ -633,15 +633,7 @@ public final class B2ACSLPipeline {
     }
 
     private static List<Path> findCFiles(Path root) throws IOException {
-        if (!Files.isDirectory(root)) return List.of();
-        try (var stream = Files.walk(root)) {
-            return stream
-                    .filter(Files::isRegularFile)
-                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".c"))
-                    .filter(p -> !FramaCRunner.MERGED_CODE_FILE_NAME.equalsIgnoreCase(p.getFileName().toString()))
-                    .sorted(Comparator.comparing(Path::toString))
-                    .toList();
-        }
+        return CSourceFiles.list(root, ".c");
     }
 
     /**

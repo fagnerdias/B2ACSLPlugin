@@ -1,6 +1,7 @@
 package com.example.comparator.gen;
 
 import com.example.B2ACSLPipeline;
+import com.example.CSourceFiles;
 import com.example.B2ACSLPipeline.ProjectStructure;
 import com.example.FramaCRunner;
 import com.example.SpecificationTypesCollector;
@@ -107,10 +108,7 @@ public final class RulesSpecGenerator implements SpecGenerator {
         List<String> types = SpecificationTypesCollector.collectUsedTypes(texts, structure.abstractMachineRoots());
         SpecificationTypesCollector.writeTypesList(cDir.resolve(SpecificationTypesCollector.OUTPUT_FILE_NAME), types);
 
-        List<Path> cFiles =
-                FileTrees.listFiles(cDir, FileTrees.hasExtension(".c")).stream()
-                        .filter(p -> !p.getFileName().toString().equals(FramaCRunner.MERGED_CODE_FILE_NAME))
-                        .toList();
+        List<Path> cFiles = CSourceFiles.list(cDir, ".c");
         Set<String> topLevelNames = new LinkedHashSet<>(structure.topLevelMachineNames());
         List<Path> topLevel = mainAcsl.stream().filter(p -> topLevelNames.contains(baseName(p))).toList();
         if (topLevel.isEmpty()) {
