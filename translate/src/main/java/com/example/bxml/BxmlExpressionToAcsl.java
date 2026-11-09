@@ -936,7 +936,17 @@ public final class BxmlExpressionToAcsl {
         }
         String pred = BxmlPredicateToAcsl.translateBodyPredicate(body, ctx);
         String vs = String.join(", ", names);
-        return "comprehension(" + vs + ", " + pred + ")";
+        // Sem função nomeada não há forma ACSL válida: "comprehension(x, P)" não existe em ACSL nem
+        // na B2ACSLLib (antes saía assim e o Frama-C acusava "unbound logic variable x", sem pista
+        // da causa). O marcador explícito deixa a lacuna visível no .acsl e no log. O registo vazio
+        // de fingerprinting (BxmlComprehensionRegistry#emptyForFingerprinting) também passa aqui,
+        // só para calcular chaves de deduplicação: nesse caso não há aviso.
+        String text = "{ " + vs + " | " + pred + " }";
+        if (ctx.comprehensions().size() > 0) {
+            System.err.println("[B2ACSL] AVISO: compreensao sem traducao suportada em " + ctx.machineName()
+                    + ": " + text);
+        }
+        return "/* B2ACSL-UNSUPPORTED compreensao " + text.replace("*/", "* /") + " */";
     }
 
     private static String translateEmptySet(Element emptySet, BxmlTranslateContext ctx) {

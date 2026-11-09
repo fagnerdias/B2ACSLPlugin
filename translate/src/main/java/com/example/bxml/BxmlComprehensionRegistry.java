@@ -31,7 +31,7 @@ public final class BxmlComprehensionRegistry {
      * compreensão referenciando o alias de um {@code ANY} eliminado (ex. {@code ih} em {@code
      * ih(ii)}, RulerOfTheSeas's {@code InvestOnResources}) precisa que {@link
      * #freeVarsForComprehension} veja a variável REAL, não o alias transitório (sem tipo simples,
-     * seria rejeitado por {@link #allSimpleForallBinderTypes}).
+     * seria rejeitado por {@link #isBinderSafeType}).
      */
     private final Map<Element, Map<String, String>> elementAnyAliases = new IdentityHashMap<>();
     /**
@@ -372,9 +372,9 @@ public final class BxmlComprehensionRegistry {
         Map<String, String> anyAliases =
                 elementAnyAliases.getOrDefault(comprehensionElement, Map.of());
         List<String>[] free = freeVarsForComprehension(comprehensionElement, freeCtx, types, anyAliases);
-        if (!allSimpleForallBinderTypes(free[1])) {
+        if (!allBinderSafeTypes(free[1])) {
             // formatAxiomaticBlock omite esta compreensão inteira (ver o mesmo check lá) — não há
-            // símbolo nenhum para referenciar; o chamador tem de cair para tradução inline.
+            // símbolo nenhum para referenciar.
             return null;
         }
         // argumentos na forma do escopo de QUEM usa a compreensão (contrato, laço ou outro helper)
@@ -409,20 +409,82 @@ public final class BxmlComprehensionRegistry {
     }
 
     /**
-     * {@code true} sse todos os tipos forem aceites pelo {@code -acsl-import} em posição de
-     * vinculação {@code \forall} de um axioma NÃO genérico — confirmado empiricamente (testes
-     * isolados) que só {@code integer}/{@code boolean} (e tipos ponteiro, não relevantes aqui)
-     * passam; qualquer alias nomeado (ex. {@code Relation_int_int}) ou instanciação genérica (ex.
-     * {@code Set<Tuple<integer,integer> >}) é rejeitado com "[Syntax error]" logo no token do tipo/
-     * variável, mesmo sendo válido em posição de parâmetro de uma declaração {@code logic}.
+     * {@code true} se todos os tipos podem ser binder de {@code \\forall} no axioma e tipo de
+     * parâmetro da função lógica (ver {@link #isBinderSafeType}).
      */
-    private static boolean allSimpleForallBinderTypes(List<String> types) {
+    private static boolean allBinderSafeTypes(List<String> types) {
         for (String t : types) {
-            if (!"integer".equals(t) && !"boolean".equals(t)) {
+            if (!isBinderSafeType(t)) {
                 return false;
             }
         }
         return true;
+    }
+
+    /**
+     * Tipos que o {@code -acsl-import} aceita como binder de {@code \\forall} num axioma e como tipo
+     * de parâmetro (medido em 2026-11-09 num {@code .acsl} de topo): os escalares {@code integer},
+     * {@code boolean} e {@code real}, e as instâncias genéricas de {@code Set}, {@code Tuple},
+     * {@code Relation}, {@code Function} e {@code \\list} sobre tipos também aceitos, desde que dois
+     * {@code >} seguidos venham separados (ver {@link #normalizeTypeSpacing}). Não aceita os nomes
+     * achatados ({@code Relation_int_int}): sem declaração em {@code types.acsl}, dão "[Syntax error]".
+     */
+    static boolean isBinderSafeType(String type) {
+        if (type == null) {
+            return false;
+        }
+        String t = type.trim();
+        if (t.equals("integer") || t.equals("boolean") || t.equals("real")) {
+            return true;
+        }
+        int lt = t.indexOf('<');
+        if (lt <= 0 || !t.endsWith(">") || t.contains(">>")) {
+            return false;
+        }
+        String head = t.substring(0, lt).trim();
+        if (!List.of("Set", "Tuple", "Relation", "Function", "\\list").contains(head)) {
+            return false;
+        }
+        List<String> args = splitTopLevelTypeArgs(t.substring(lt + 1, t.length() - 1));
+        if (args.isEmpty()) {
+            return false;
+        }
+        for (String a : args) {
+            if (!isBinderSafeType(a)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Argumentos de tipo separados pelas vírgulas de nível zero ({@code "A, Tuple<B,C>"} → 2). */
+    private static List<String> splitTopLevelTypeArgs(String inner) {
+        List<String> out = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i < inner.length(); i++) {
+            char c = inner.charAt(i);
+            if (c == '<') depth++;
+            else if (c == '>') depth--;
+            else if (c == ',' && depth == 0) {
+                out.add(inner.substring(start, i).trim());
+                start = i + 1;
+            }
+        }
+        out.add(inner.substring(start).trim());
+        return out;
+    }
+
+    /** Separa {@code >>} em {@code > >}: o lexer ACSL lê {@code >>} como um operador só. */
+    static String normalizeTypeSpacing(String type) {
+        if (type == null) {
+            return null;
+        }
+        String t = type;
+        while (t.contains(">>")) {
+            t = t.replace(">>", "> >");
+        }
+        return t;
     }
 
     public int size() {
@@ -449,17 +511,11 @@ public final class BxmlComprehensionRegistry {
             BxmlTranslateContext ctx = comprehensionCtx(types, translateCtx);
             Map<String, String> anyAliases = elementAnyAliases.getOrDefault(qs, Map.of());
             List<String>[] free = freeVarsForComprehension(qs, ctx, types, anyAliases);
-            if (!allSimpleForallBinderTypes(free[1])) {
-                // Pelo menos uma variável livre precisa de um tipo composto/apelidado (ex.
-                // Relation_int_int para um `ih` de um ANY WHERE ih = f <+ ...) que o parser do
-                // -acsl-import categoricamente REJEITA em posição de vinculação `\forall` fora de um
-                // axioma genérico ("[Syntax error] <tipo/variável>", confirmado empiricamente com
-                // testes isolados — nem sequer a forma desaçucarada Set<Tuple<...>> passa, só
-                // integer/boolean/ponteiro são aceites nessa posição). Sem forma válida de
-                // axiomatizar, e como uma compreensão nesta situação só surge dentro de um
-                // ANY/lambda ENVOLVENTE cujo corpo já é traduzido inline (nunca por referência ao
-                // nome global — ver appendComprehensionAxiom), omite-se a compreensão inteira
-                // (nem logic nem axiom) em vez de emitir algo que nunca vai parsear.
+            if (!allBinderSafeTypes(free[1])) {
+                // Uma variável livre tem um tipo que o -acsl-import não aceita como binder nem como
+                // parâmetro (ver isBinderSafeType; ex. um nome achatado sem declaração). Sem forma
+                // válida de axiomatizar, a compreensão inteira é omitida, e a referência a ela vira
+                // o marcador B2ACSL-UNSUPPORTED (ver BxmlExpressionToAcsl#translateQuantifiedSet).
                 continue;
             }
             String setType = acslSetTypeForElement(qs, types);
@@ -619,7 +675,7 @@ public final class BxmlComprehensionRegistry {
             // corpo é reescrita para o nome real em texto (renameEliminatedAuxVars, no chamador que
             // constrói o ensures), então não precisa virar parâmetro nenhum aqui; tratá-la como
             // livre resolvia o seu tipo (via <+ desaçucarado) a algo composto (ex.
-            // Relation_int_int), sempre rejeitado por allSimpleForallBinderTypes — a compreensão
+            // Relation_int_int), rejeitado por isBinderSafeType — a compreensão
             // inteira nunca conseguia ser registada (ver o TODO logo abaixo do chamador).
             String realName = anyAliases.get(name);
             if (realName != null && ctx.variableLogicTypes().containsKey(realName)) {
@@ -628,7 +684,7 @@ public final class BxmlComprehensionRegistry {
             names.add(name);
             Integer typref = types != null ? findTyprefForIdName(body, name) : null;
             String t = typref != null ? types.acslVariableLogicTypeFromTypref(typref) : null;
-            resolvedTypes.add(t != null && !t.isBlank() ? t : ft[1].get(i));
+            resolvedTypes.add(normalizeTypeSpacing(t != null && !t.isBlank() ? t : ft[1].get(i)));
         }
         return new List[] {names, resolvedTypes};
     }
