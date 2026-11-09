@@ -360,9 +360,16 @@ public final class BxmlOperationsTranslator {
                             rootAbstractMachineName, machineEl, mergedRefinementChain, gluing,
                             useGhostAbstraction, varRhsOverrides, bxmlDirectory);
 
+            // Nos laços, uma saída escalar é lida e escrita através do ponteiro C: o contexto leva
+            // as saídas para que invariant, variant e loop assigns usem *p (BxmlAnnotationScope).
+            // As saídas tipadas como função (arrays C) seguem o caminho próprio de
+            // finalizeFunctionTypedOutputHandling abaixo, que espera o nome cru.
+            List<String> scalarOutputParams = new ArrayList<>(outputParams);
+            scalarOutputParams.removeAll(funcTypedOutputs);
             ImplementationLoopsResult implResult =
                     resolveImplementationLoops(
-                            opName, opCtx, machineEl, mergedRefinementChain, importedOpAssigns, bxmlDirectory);
+                            opName, opCtx.withOutputParams(scalarOutputParams), machineEl, mergedRefinementChain,
+                            importedOpAssigns, bxmlDirectory);
             Element implOp = implResult.implOp();
             List<BxmlLoopTranslator.LoopContract> loops = implResult.loops();
 

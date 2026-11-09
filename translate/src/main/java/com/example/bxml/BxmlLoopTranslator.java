@@ -231,7 +231,7 @@ public final class BxmlLoopTranslator {
             return;
         }
         if ("Operation_Call".equals(sub.getLocalName())) {
-            collectOperationCallAssigns(sub, out, importedOpAssigns, localVars);
+            collectOperationCallAssigns(sub, ctx, out, importedOpAssigns, localVars);
             return;
         }
         collectLoopAssignsFromChildren(
@@ -294,7 +294,8 @@ public final class BxmlLoopTranslator {
     }
 
     private static void collectOperationCallAssigns(
-            Element sub, Set<String> out, Map<String, List<String>> importedOpAssigns, Set<String> localVars) {
+            Element sub, BxmlTranslateContext ctx, Set<String> out, Map<String, List<String>> importedOpAssigns,
+            Set<String> localVars) {
         // Parâmetros de saída: variáveis locais C modificadas pela chamada.
         Element outParams = BxmlDomUtils.firstChildElement(sub, "Output_Parameters");
         if (outParams != null) {
@@ -302,7 +303,7 @@ public final class BxmlLoopTranslator {
                 if ("Id".equals(id.getLocalName())) {
                     String name = id.getAttribute("value");
                     if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
-                        out.add(name.trim());
+                        out.add(outputParamTarget(name.trim(), ctx));
                     }
                 }
             }
@@ -339,6 +340,17 @@ public final class BxmlLoopTranslator {
         }
     }
 
+    /**
+     * Um parâmetro de saída da operação é um ponteiro em C: o laço altera {@code *p}, não {@code p}
+     * (ver {@link BxmlAnnotationScope#outputParams()}). Outros nomes ficam como estão.
+     */
+    private static String outputParamTarget(String name, BxmlTranslateContext ctx) {
+        if (ctx != null && ctx.annotationScope().outputParams().contains(name)) {
+            return "*" + name;
+        }
+        return name;
+    }
+
     /** Nome da operação em {@code <Operation_Call><Name><Id value="..."/></Name>}. */
     private static String extractOperationCallName(Element opCall) {
         Element nameEl = BxmlDomUtils.firstChildElement(opCall, "Name");
@@ -363,6 +375,9 @@ public final class BxmlLoopTranslator {
     private static String qualify(
             String varName, BxmlTranslateContext ctx, Element abstractMachineEl,
             Element implementationMachineEl, Path bxmlDirectory) {
+        if (ctx != null && ctx.annotationScope().outputParams().contains(varName)) {
+            return outputParamTarget(varName, ctx);
+        }
         if (ctx == null || abstractMachineEl == null) {
             return varName;
         }
