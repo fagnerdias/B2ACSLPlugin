@@ -587,7 +587,8 @@ public final class BxmlExpressionToAcsl {
         }
         if (translated.startsWith("(integer)")
                 || translated.startsWith("(boolean)")
-                || translated.startsWith("\\old(")) {
+                || translated.startsWith("\\old(")
+                || translated.startsWith("\\at(")) {
             return translated;
         }
         return "(integer)" + translated;
@@ -842,7 +843,7 @@ public final class BxmlExpressionToAcsl {
                         String bTypeName = ctx.types().getRawType(Integer.parseInt(tr.trim()));
                         if (ctx.enumeratedSetNames().contains(bTypeName)) {
                             base = "(integer)" + translateBNamedConstant(idVal);
-                            yield isPreState ? "\\old(" + base + ")" : base;
+                            yield ctx.annotationScope().render(idVal, base, isPreState);
                         }
                     }
                 }
@@ -856,10 +857,10 @@ public final class BxmlExpressionToAcsl {
                 // to Tuple<integer,...>" ao entrar num slot ACSL genérico (ex. couple<A,B>).
                 if (ctx.deferredSetTypedParameterNames().contains(idVal)) {
                     base = "(integer)" + translateBNamedConstant(idVal);
-                    yield isPreState ? "\\old(" + base + ")" : base;
+                    yield ctx.annotationScope().render(idVal, base, isPreState);
                 }
                 base = translateBNamedConstant(idVal);
-                yield isPreState ? "\\old(" + base + ")" : base;
+                yield ctx.annotationScope().render(idVal, base, isPreState);
             }
             case "Integer_Literal" -> exp.getAttribute("value");
             case "Boolean_Literal" -> translateBooleanLiteral(exp.getAttribute("value"));
