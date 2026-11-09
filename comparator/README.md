@@ -31,7 +31,7 @@ flowchart TB
         RUNNER["ComparisonRunner + Workspace"]
         SIDE["SideRunner<br/>(one child JVM per side)"]
         GEN["gen: PluginSpecGenerator / RulesSpecGenerator"]
-        SPEC["spec: AcslUnitExtractor, GhostCiExtractor,<br/>ClauseNormalizer, SpecDiff"]
+        SPEC["spec: AcslUnitExtractor, GhostCiExtractor,<br/>ClauseNormalizer, SpecDiff<br/>spec.meaning: MeaningComparator"]
         VER["verify: SharedVerifier"]
         REP["report: Reports + Json, HtmlReport"]
         MAIN --> RUNNER --> SIDE
@@ -115,6 +115,42 @@ Each unit is then `EQUAL`, `DIFFERENT`, `ONLY_PLUGIN` or `ONLY_RULES`. Reports s
 
 A whitespace-normalized unified diff of the files with the same name is kept in `spec.textDiff` for context.
 
+### Form or meaning
+
+Most textual differences between the two translators do not change what the specification says: `requires A && B` against two `requires`, `Goods_GOODS` against `GOODS`, `c ? A : B` against two implications. `MeaningComparator` (package `spec.meaning`) separates these from the differences that change the meaning:
+
+1. Each clause is parsed (ACSL terms and predicates, with the precedence of the ACSL manual) and rewritten into a canonical form by the rules below, then split into **atoms**: its conjuncts, or its locations for `assigns`. Axioms and lemmas lose their names. Includes, axiomatic blocks and type-alias declarations give no atoms.
+2. A clause has the **same meaning** when every atom is also an atom of the other side's unit. Axioms and lemmas are matched against all axioms and lemmas of the other side, since their names and grouping carry no meaning.
+3. A unit that differs only in clauses with the same meaning is `difference: FORM`; otherwise `difference: MEANING`. Units only one side has are paired when the renamings below map their names to the same key (`logic:Goods_GOODS` with `logic:GOODS`; the rules key is kept in `rulesKey`).
+4. The rules that explain a unit's form differences (`formRules`) are found by ablation: a rule is listed when turning it off leaves fewer atoms matched.
+
+| rule | equivalence |
+|---|---|
+| `conjunction` | `requires A && B` ≡ `requires A; requires B`; order, repetition and `\true` ignored; `\forall` and `==>` distribute over `&&` |
+| `assigns-list` | `assigns a, b` ≡ `assigns a; assigns b` |
+| `symmetry` | `a == b` ≡ `b == a`, `a > b` ≡ `b < a`, `a \|\| b` ≡ `b \|\| a` |
+| `relation-chain` | `a <= x <= b` ≡ `a <= x && x <= b` |
+| `negation` | `!(a == b)` ≡ `a != b`, `!(a < b)` ≡ `a >= b`, `!!P` ≡ `P` |
+| `if-form` | predicate `c ? A : B` ≡ `(c ==> A) && (!c ==> B)`; `P ==> (Q ==> R)` ≡ `P && Q ==> R` |
+| `integer-cast` | `(integer)e` ≡ `e` |
+| `pointer-index` | `*(p + i)` ≡ `p[i]` |
+| `arithmetic` | linear integer expressions in normal form: `10 - (0) + 1` ≡ `11` |
+| `machine-prefix` | `Goods_GOODS`, `Airlock__ACQ` ≡ `GOODS`, `ACQ`, when each name is used by one side only and the pairing is unique |
+| `invariant-name` | `M_invariant` ≡ `M_invariant_1`, same condition |
+| `state-parameter` | `f(numbers, x)` ≡ `f(x)` when one side's helper takes the state variable as an extra parameter and the other reads it; axioms quantified over that parameter are taken at the variable. `f(\old(numbers), x)` is not rewritten |
+| `type-alias` | `Relation<A,B>`, `Function<A,B>` and declared aliases ≡ `Set<Tuple<A,B> >` |
+| `list-literal` | `[\| a, b \|]` ≡ `\Cons(a, \Cons(b, \Nil))`; `\concat` of two literal lists |
+| `set-union` | `set_union` associative and commutative; `pair(a, b)` ≡ `set_union(singleton(a), singleton(b))` |
+| `set-equality` | `equals(s, t)` ≡ `s == t` (B set semantics; B2ACSLLib has no axiom from `equals` to `==`) |
+| `empty-witness` | `empty(NAT)` ≡ `empty(INT)` |
+| `set-valuation` | `\forall integer x; belongs(x, S) <==> lo <= x <= hi` ≡ `equals(S, interval_set(lo, hi))` |
+| `card-valuation` | `card(S)` ≡ `hi - lo + 1` outside axioms, when both sides value `S` as `interval_set(lo, hi)` |
+| `constant-value` | `C` ≡ `n` outside axioms, when both sides state `C == n` |
+
+Three tags name the other reasons: `axiom-grouping` (an axiom matched in another axiom of the other side), `organization` (includes, axiomatic blocks, type aliases) and `layout` (spacing, parentheses, bound-variable names: no rule is needed).
+
+In `ghost_operations.ci` every name loses its `dummy_` prefix before anything else, on both sides, and renamings are computed separately from the `.acsl` files. Clauses the parser does not understand are compared as token lists, with names resolved; they are listed in `spec.unparsedClauses`.
+
 ## Usage
 
 ```bash
@@ -125,6 +161,7 @@ mvn -q -DskipTests package        # comparator/target/b2acsl-comparator-0.1.0-al
 make compare COMPARE_ARGS="--example AddRunner"
 make compare COMPARE_ARGS="--all --timeout 10"
 make compare COMPARE_ARGS="--html comparator-out/20261101_113133"   # rebuild only the HTML of an earlier run
+make compare COMPARE_ARGS="--respec comparator-out/20261101_113133" # compare its specifications again (no translation, no WP)
 java -jar comparator/target/b2acsl-comparator-0.1.0-all.jar --help
 ```
 
@@ -142,6 +179,7 @@ Options:
 | `--no-verify` | off | |
 | `--rules-timeout N` | `300` | |
 | `--html DIR` | | only (re)build the HTML pages of an existing output directory from its JSON files; nothing is translated or verified |
+| `--respec DIR` | | compare again the `<example>/{plugin,rules}/spec` snapshots of an existing output directory, rewrite the `spec` part of its JSON files and rebuild its HTML; generation and verification results are kept |
 
 Smoke tests, counterexamples, goal splitting and loop simplification follow the plugin's `-Db2acsl.wp.*` properties. Those properties are forwarded to both sides.
 
@@ -152,7 +190,8 @@ Smoke tests, counterexamples, goal splitting and loop simplification follow the 
 ├── summary.json                  one row per example (statuses, spec counts, proved/total per side)
 ├── index.html                    HTML view of summary.json
 └── <example>/
-    ├── report.json               config + commits, generation, spec (units, textDiff, filesOnlyIn), verification (per function)
+    ├── report.json               config + commits, generation, spec (units, textDiff, filesOnlyIn, formRules,
+    │                             renamings, unparsedClauses), verification (per function)
     ├── report.html               HTML view of report.json
     ├── plugin/  rules/
     │   ├── bdp/  lang/c/         isolated workspace (merged_code.c, .frama-c/ of that side)
@@ -161,17 +200,20 @@ Smoke tests, counterexamples, goal splitting and loop simplification follow the 
     │   └── run.log               full log of the side (translation, Frama-C, WP)
 ```
 
+In `report.json` → `spec.units`, a unit that differs has `difference` (`FORM` or `MEANING`) and `formRules`; its `clauses` keep the textual sets (`equal`, `onlyPlugin`, `onlyRules`) and add `meaningPlugin`/`meaningRules`, the clauses whose meaning the other side lacks, each with the conjuncts that have no counterpart. The rest of `onlyPlugin`/`onlyRules` differ only in form. `spec.summary` counts both views (`sameMeaningUnits`, `meaningBothUnits`, `meaningOnlyPluginUnits`, `meaningOnlyRulesUnits`, `clausesSameMeaning`, ...).
+
 `report.json` → `config.commits` records the revision of every component: plugin, rules, the plugin's B2ACSLLib and the rules' B2ACSLLib. A warning is added when the two library revisions differ.
 
 ### HTML view
 
 The pages are self-contained (inline CSS and JavaScript, no network access), so they open straight from disk. They are rendered only from the JSON files, so they never show anything the JSON does not hold.
 
-- **`index.html`:** run settings and component revisions; one tile per outcome (verified by both, plugin only, rules only, partial, neither), which also filters the table; the goals proved by each side over the examples both sides verified; and one row per example with the unit agreement bar, each side's WP result and, when a side failed, the first error of its output (the generation message, the first Frama-C error, or the function that hit the WP time limit). Columns can be sorted.
-- **`<example>/report.html`:** for each side, the generation and verification status, the goal counts, the failure reason, the translator warnings, the Frama-C output and links to `run.log`, `spec/`, `merged_code.c` and `side-result.json`; the per-function WP results of both sides; the units, which can be filtered by status, kind and name, with the clauses only in the plugin, only in the rules, and in both; and the text diff of each file.
+- **`index.html`:** run settings and component revisions; one tile per outcome (verified by both, plugin only, rules only, partial, neither), which also filters the table; the goals proved by each side over the examples both sides verified; the units by kind of difference (identical, same meaning, different meaning, only in one side) over the examples both translators generated, with the rewrites that explain the form differences; and one row per example with the unit bar, each side's WP result and, when a side failed, the first error of its output (the generation message, the first Frama-C error, or the function that hit the WP time limit). Columns can be sorted.
+- **`<example>/report.html`:** for each side, the generation and verification status, the goal counts, the failure reason, the translator warnings, the Frama-C output and links to `run.log`, `spec/`, `merged_code.c` and `side-result.json`; the per-function WP results of both sides; the units, which can be filtered by kind of difference (different meaning, same meaning, identical), by side, by kind and by name; for each unit, the clauses whose meaning only one side has (with the conjuncts that lack a counterpart), the clauses with the same meaning written differently (with the rules that relate them) and the identical clauses; and the text diff of each file.
 
 ## Threats to validity
 
 - **Shared post-processing.** The 16 `merged_code.c` post-processing stages of `FramaCRunner` were written for the plugin's output: ghost patterns, the `dummy_` prefix, and so on. B2ACSLRules mimics that output on purpose and already depended on these stages before this module existed. Still, a difference in WP results may come from a stage that does not recognize a form produced by the rules translator, rather than from the meaning of the specification. Inspect `<side>/lang/c/merged_code.c` in that case.
 - **Library include table.** The ATL rules choose which library files to include from a hand-written table (`libTable` in `BXML2ACSL.atl`). That table follows B2ACSLRules' own copy of the library, not the plugin's.
+- **Form or meaning is decided by rewriting, not by proof.** Two clauses are "same meaning" only when the rules above make their atoms equal, so that category is sound with respect to those rules (`set-equality` relies on B's set semantics, not on an axiom of B2ACSLLib). "Different meaning" also holds equivalences the rules cannot see, such as helper functions numbered differently on each side (`sigma_func01` against `sigma_func02`) or the same fact encoded differently (`IS_VALID(d, m, a)` against `function_apply(IS_VALID, couple(couple(d, m), a))`).
 - **Fresh runs.** Every workspace starts empty. So the plugin side shows how the plugin behaves on a first run, without `.acsl` files left in `lang/c` by an earlier run.

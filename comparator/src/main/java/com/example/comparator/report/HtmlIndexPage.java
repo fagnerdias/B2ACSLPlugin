@@ -38,10 +38,14 @@ final class HtmlIndexPage {
         if (verify) {
             b.append(tiles(summary.examples())).append(proofHeadline(summary.examples()));
         }
+        boolean meaning = summary.examples().stream().anyMatch(r -> r.spec() != null && r.spec().hasMeaning());
+        if (meaning) {
+            b.append(specHeadline(summary.examples(), reports));
+        }
         b.append("<h2>Examples</h2>\n")
                 .append("<div class=\"controls\"><input type=\"search\" data-search placeholder=\"Filter examples\" ")
                 .append("aria-label=\"Filter examples by name\"><span class=\"shown\" data-shown></span></div>\n")
-                .append(Html.unitsLegend())
+                .append(Html.unitsLegend(meaning))
                 .append(table(summary.examples(), reports, config, verify));
         b.append("</section>\n");
         return Html.page("B2ACSL comparison", b.toString());
@@ -73,6 +77,60 @@ final class HtmlIndexPage {
         return "<button type=\"button\" class=\"tile\" data-value=\"" + value + "\" aria-pressed=\"" + pressed + "\">"
                 + "<div class=\"label\">" + swatches + esc(label) + "</div><div class=\"value\">" + num(count)
                 + "</div><div class=\"hint\">" + esc(hint) + "</div></button>\n";
+    }
+
+    /**
+     * Units by kind of difference, summed over the examples both translators generated (an example
+     * one side could not translate would count every unit of the other side as a difference), and
+     * the rewrites that explain the units with the same meaning.
+     */
+    private static String specHeadline(List<SummaryRow> rows, Map<String, ExampleReport> reports) {
+        int examples = 0;
+        int[] t = new int[6]; // units, identical, same meaning, different, only plugin, only rules
+        Map<String, Integer> rules = new java.util.TreeMap<>();
+        for (SummaryRow r : rows) {
+            SpecSummary s = r.spec();
+            if (s == null || !s.hasMeaning() || !"OK".equals(r.pluginGeneration()) || !"OK".equals(r.rulesGeneration())) {
+                continue;
+            }
+            examples++;
+            t[0] += s.units();
+            t[1] += s.equalUnits();
+            t[2] += s.sameMeaningUnits();
+            t[3] += s.meaningBothUnits();
+            t[4] += s.meaningOnlyPluginUnits();
+            t[5] += s.meaningOnlyRulesUnits();
+            ExampleReport report = reports.get(r.example());
+            if (report != null && report.spec() != null && report.spec().formRules() != null) {
+                report.spec().formRules().forEach((rule, n) -> rules.merge(rule, n, Integer::sum));
+            }
+        }
+        if (examples == 0) {
+            return "";
+        }
+        SpecSummary total = new SpecSummary(t[0], t[1], 0, 0, 0, 0, 0, 0, t[2], t[3], t[4], t[5], 0, 0, 0);
+        StringBuilder b = new StringBuilder("<h2>Specification differences on the ").append(examples)
+                .append(" examples both translators generated</h2>\n<div class=\"card\">")
+                .append(Html.unitsBar(total, true)).append(Html.unitsLegend(true))
+                .append("<div class=\"muted small\">").append(num(t[0])).append(" units: ")
+                .append(num(t[1])).append(" identical, ").append(num(t[2])).append(" with the same meaning written differently, ")
+                .append(num(t[3] + t[4] + t[5])).append(" with a different meaning (").append(num(t[3])).append(" on both sides, ")
+                .append(num(t[4])).append(" only in plugin, ").append(num(t[5])).append(" only in rules).</div>");
+        if (!rules.isEmpty()) {
+            b.append("<details class=\"block\"><summary>Rewrites that explain the units with the same meaning</summary>")
+                    .append("<div class=\"tablewrap\"><table class=\"rules-table\"><tbody>");
+            rules.entrySet().stream()
+                    .sorted(Map.Entry.<String, Integer>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()))
+                    .forEach(e -> {
+                        com.example.comparator.spec.meaning.MeaningRule rule =
+                                com.example.comparator.spec.meaning.MeaningRule.byId(e.getKey());
+                        b.append("<tr><td>").append(esc(rule == null ? e.getKey() : rule.label()))
+                                .append("</td><td class=\"n\">").append(num(e.getValue())).append("</td><td class=\"d\">")
+                                .append(esc(rule == null ? "" : rule.description())).append("</td></tr>");
+                    });
+            b.append("</tbody></table></div></details>");
+        }
+        return b.append("</div>\n").toString();
     }
 
     /** Goals proved by each side, summed over the examples both sides verified. */
@@ -151,7 +209,7 @@ final class HtmlIndexPage {
                 + (verify ? "<td data-v=\"" + outcome.ordinal() + "\"><span class=\"outcome\">" + outcome.swatches()
                         + esc(outcome.shortLabel) + "</span></td>" : "")
                 + "<td data-v=\"" + unitRatio(spec) + "\"><span class=\"wp\">" + Html.unitsBar(spec, false)
-                + "<span class=\"counts tabnum\">" + (spec == null ? "" : num(spec.equalUnits()) + "/" + num(spec.units()) + " equal")
+                + "<span class=\"counts tabnum\">" + unitCounts(spec)
                 + "</span></span></td>"
                 + sides
                 + "<td class=\"note\">" + notes(report, functionTimeout) + "</td></tr>\n";
@@ -190,8 +248,23 @@ final class HtmlIndexPage {
         return b.toString();
     }
 
+    private static String unitCounts(SpecSummary spec) {
+        if (spec == null) {
+            return "";
+        }
+        if (spec.hasMeaning()) {
+            return num(spec.equalUnits() + spec.sameMeaningUnits()) + "/" + num(spec.units()) + " same meaning";
+        }
+        return num(spec.equalUnits()) + "/" + num(spec.units()) + " equal";
+    }
+
+    /** Share of units with the same meaning (identical or written differently). */
     private static double unitRatio(SpecSummary spec) {
-        return spec == null || spec.units() == 0 ? -1 : ratio(spec.equalUnits(), spec.units());
+        if (spec == null || spec.units() == 0) {
+            return -1;
+        }
+        int same = spec.equalUnits() + (spec.hasMeaning() ? spec.sameMeaningUnits() : 0);
+        return ratio(same, spec.units());
     }
 
     private static double ratio(long part, long whole) {

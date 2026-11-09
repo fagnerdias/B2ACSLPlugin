@@ -1,6 +1,7 @@
 package com.example.comparator.report;
 
 import com.example.comparator.report.Reports.SpecSummary;
+import com.example.comparator.spec.meaning.MeaningRule;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -103,33 +104,65 @@ final class Html {
                 + String.format(Locale.ROOT, "%.2f", width) + "%\"></span></span>";
     }
 
-    /** Stacked bar of unit statuses: equal, different, only plugin, only rules. */
+    /**
+     * Stacked bar of units: identical, same meaning (form only), different meaning on both sides,
+     * only in plugin, only in rules. Reports written before the meaning comparison show the textual
+     * statuses instead (equal, different, only plugin, only rules).
+     */
     static String unitsBar(SpecSummary s, boolean wide) {
         if (s == null || s.units() == 0) {
             return "<span class=\"muted\">no units</span>";
         }
-        String tip = "Units: " + num(s.units())
-                + "\nEqual: " + num(s.equalUnits())
-                + "\nDifferent: " + num(s.differentUnits())
-                + "\nOnly plugin: " + num(s.onlyPluginUnits())
-                + "\nOnly rules: " + num(s.onlyRulesUnits());
+        String tip;
+        String segments;
+        if (s.hasMeaning()) {
+            tip = "Units: " + num(s.units())
+                    + "\nIdentical: " + num(s.equalUnits())
+                    + "\nSame meaning, different form: " + num(s.sameMeaningUnits())
+                    + "\nDifferent meaning: " + num(s.meaningBothUnits())
+                    + "\nOnly in plugin: " + num(s.meaningOnlyPluginUnits())
+                    + "\nOnly in rules: " + num(s.meaningOnlyRulesUnits());
+            segments = segment("equal", s.equalUnits())
+                    + segment("form", s.sameMeaningUnits())
+                    + segment("different", s.meaningBothUnits())
+                    + segment("plugin", s.meaningOnlyPluginUnits())
+                    + segment("rules", s.meaningOnlyRulesUnits());
+        } else {
+            tip = "Units: " + num(s.units())
+                    + "\nEqual: " + num(s.equalUnits())
+                    + "\nDifferent: " + num(s.differentUnits())
+                    + "\nOnly plugin: " + num(s.onlyPluginUnits())
+                    + "\nOnly rules: " + num(s.onlyRulesUnits());
+            segments = segment("equal", s.equalUnits())
+                    + segment("different", s.differentUnits())
+                    + segment("plugin", s.onlyPluginUnits())
+                    + segment("rules", s.onlyRulesUnits());
+        }
         return "<span class=\"ubar" + (wide ? " wide" : "") + "\" data-tip=\"" + esc(tip) + "\" role=\"img\" aria-label=\""
-                + esc(tip.replace('\n', ',')) + "\">"
-                + segment("equal", s.equalUnits())
-                + segment("different", s.differentUnits())
-                + segment("plugin", s.onlyPluginUnits())
-                + segment("rules", s.onlyRulesUnits())
-                + "</span>";
+                + esc(tip.replace('\n', ',')) + "\">" + segments + "</span>";
     }
 
     private static String segment(String kind, int count) {
         return count == 0 ? "" : "<span class=\"seg-" + kind + "\" style=\"flex-grow:" + count + "\"></span>";
     }
 
-    static String unitsLegend() {
+    static String unitsLegend(boolean meaning) {
+        if (meaning) {
+            return "<div class=\"legend\"><span>" + swatch("equal") + "Identical</span><span>" + swatch("form")
+                    + "Same meaning, different form</span><span>" + swatch("different") + "Different meaning</span><span>"
+                    + swatch("plugin") + "Only in plugin</span><span>" + swatch("rules") + "Only in rules</span></div>";
+        }
         return "<div class=\"legend\"><span>" + swatch("equal") + "Equal</span><span>" + swatch("different")
                 + "Different</span><span>" + swatch("plugin") + "Only plugin</span><span>" + swatch("rules")
                 + "Only rules</span></div>";
+    }
+
+    /** Label of a form rule id, with its description as a tooltip. */
+    static String formRule(String id) {
+        MeaningRule rule = MeaningRule.byId(id);
+        return rule == null
+                ? "<span class=\"rule\">" + esc(id) + "</span>"
+                : "<span class=\"rule\" data-tip=\"" + esc(rule.description()) + "\">" + esc(rule.label()) + "</span>";
     }
 
     static String label(String side) {

@@ -9,11 +9,14 @@ import com.example.comparator.report.Reports.ExampleReport;
 import com.example.comparator.report.Reports.FunctionComparison;
 import com.example.comparator.report.Reports.FunctionResult;
 import com.example.comparator.report.Reports.GenerationReport;
+import com.example.comparator.report.Reports.MeaningClause;
 import com.example.comparator.report.Reports.SpecComparison;
 import com.example.comparator.report.Reports.SpecSummary;
 import com.example.comparator.report.Reports.SummaryRow;
 import com.example.comparator.report.Reports.UnitComparison;
 import com.example.comparator.report.Reports.VerificationReport;
+import com.example.comparator.spec.meaning.MeaningComparator;
+import com.example.comparator.spec.meaning.MeaningRule;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -188,8 +191,230 @@ final class HtmlExamplePage {
             return "";
         }
         SpecSummary s = spec.summary();
+        if (!s.hasMeaning()) {
+            return textualSpec(spec);
+        }
         StringBuilder b = new StringBuilder("<h2>Specification</h2>\n<div class=\"card\">")
-                .append(Html.unitsBar(s, true)).append(Html.unitsLegend())
+                .append(Html.unitsBar(s, true)).append(Html.unitsLegend(true))
+                .append("<div class=\"muted small\">").append(num(s.units())).append(" units: ")
+                .append(num(s.equalUnits())).append(" identical, ")
+                .append(num(s.sameMeaningUnits())).append(" with the same meaning written differently, ")
+                .append(num(s.meaningUnits())).append(" with a different meaning (")
+                .append(num(s.meaningBothUnits())).append(" on both sides, ")
+                .append(num(s.meaningOnlyPluginUnits())).append(" only in plugin, ")
+                .append(num(s.meaningOnlyRulesUnits())).append(" only in rules). Clauses: ")
+                .append(num(s.clausesEqual())).append(" identical, ")
+                .append(num(s.clausesSameMeaning())).append(" written differently with the same meaning, ")
+                .append(num(s.clausesMeaningPlugin())).append(" in plugin and ")
+                .append(num(s.clausesMeaningRules())).append(" in rules with a meaning the other side lacks.</div>")
+                .append("<p class=\"muted small\">Same meaning: every conjunct of the clause, after the rewrites below, ")
+                .append("is also stated by the other side. Different meaning: no rewrite relates them, so this also holds ")
+                .append("equivalences the rewrites cannot show.</p>")
+                .append(formRules(spec.formRules(), s.sameMeaningUnits()))
+                .append(renamings(spec.renamings()))
+                .append("</div>\n");
+        List<UnitComparison> units = spec.units() == null ? List.of() : spec.units();
+        if (units.isEmpty()) {
+            return b.toString();
+        }
+        b.append("<div data-filter-root>\n<div class=\"controls\">")
+                .append(differenceFilter(s))
+                .append(whereSelect(units))
+                .append(kindSelect(units))
+                .append("<input type=\"search\" data-search placeholder=\"Filter by name\" aria-label=\"Filter units by name\">")
+                .append("<button type=\"button\" class=\"link\" data-toggle-all=\".units details.unit\">Expand all</button>")
+                .append("<span class=\"shown\" data-shown></span></div>\n<div class=\"units\">\n");
+        units.forEach(u -> b.append(meaningUnit(u)));
+        return b.append("</div>\n</div>\n").toString();
+    }
+
+    /** The rewrites that explain the units with the same meaning, most used first. */
+    private static String formRules(Map<String, Integer> rules, int sameMeaningUnits) {
+        if (rules == null || rules.isEmpty()) {
+            return "";
+        }
+        StringBuilder b = new StringBuilder("<details class=\"block\"><summary>Why ").append(num(sameMeaningUnits))
+                .append(" unit").append(sameMeaningUnits == 1 ? "" : "s")
+                .append(" differ only in form</summary><div class=\"tablewrap\"><table class=\"rules-table\"><tbody>");
+        rules.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()))
+                .forEach(e -> {
+                    MeaningRule rule = MeaningRule.byId(e.getKey());
+                    b.append("<tr><td>").append(esc(rule == null ? e.getKey() : rule.label())).append("</td><td class=\"n\">")
+                            .append(num(e.getValue())).append("</td><td class=\"d\">")
+                            .append(esc(rule == null ? "" : rule.description())).append("</td></tr>");
+                });
+        return b.append("</tbody></table></div><p class=\"muted small\">A unit counts for each rewrite it needs: ")
+                .append("turning that rewrite off leaves some of its clauses without a counterpart.</p></details>").toString();
+    }
+
+    private static String renamings(Map<String, String> renamings) {
+        if (renamings == null || renamings.isEmpty()) {
+            return "";
+        }
+        StringBuilder b = new StringBuilder("<details class=\"block\"><summary>Names taken to be the same symbol (")
+                .append(num(renamings.size())).append(")</summary><ul class=\"plain mono\">");
+        renamings.forEach((from, to) -> b.append("<li>").append(esc(from)).append(" (plugin) = ").append(esc(to)).append("</li>"));
+        return b.append("</ul></details>").toString();
+    }
+
+    private static String differenceFilter(SpecSummary s) {
+        int meaning = s.meaningUnits();
+        return "<div class=\"seg-ctl\" data-group=\"difference\" role=\"group\" aria-label=\"Kind of difference\">"
+                + statusButton("MEANING", Html.swatch("different"), "Different meaning", meaning, meaning > 0)
+                + statusButton("FORM", Html.swatch("form"), "Same meaning", s.sameMeaningUnits(), false)
+                + statusButton("NONE", Html.swatch("equal"), "Identical", s.equalUnits(), false)
+                + statusButton("*", "", "All", s.units(), meaning == 0)
+                + "</div>";
+    }
+
+    private static String whereSelect(List<UnitComparison> units) {
+        Map<String, Integer> counts = new TreeMap<>();
+        units.forEach(u -> counts.merge(u.status(), 1, Integer::sum));
+        return "<select data-select=\"status\" aria-label=\"Where the unit is\"><option value=\"\">Both or one side</option>"
+                + whereOption("DIFFERENT", "On both sides, different", counts)
+                + whereOption("ONLY_PLUGIN", "Only in plugin", counts)
+                + whereOption("ONLY_RULES", "Only in rules", counts)
+                + "</select>";
+    }
+
+    private static String whereOption(String value, String label, Map<String, Integer> counts) {
+        return "<option value=\"" + value + "\">" + esc(label) + " (" + num(counts.getOrDefault(value, 0)) + ")</option>";
+    }
+
+    private static String meaningUnit(UnitComparison u) {
+        String kind = kind(u.key());
+        int colon = u.key().indexOf(':');
+        String name = u.key().substring(colon + 1);
+        String difference = u.difference() == null ? "NONE" : u.difference();
+        String text = (u.key() + (u.rulesKey() == null ? "" : " " + u.rulesKey())).toLowerCase(Locale.ROOT);
+        String attrs = " data-item data-difference=\"" + difference + "\" data-status=\"" + esc(u.status()) + "\" data-kind=\""
+                + esc(kind) + "\" data-text=\"" + esc(text) + "\"";
+        String renamed = u.rulesKey() == null ? ""
+                : "<span class=\"renamed\">rules: " + esc(u.rulesKey().substring(u.rulesKey().indexOf(':') + 1)) + "</span>";
+        String head = "<span class=\"ustat\">" + meaningLabel(u) + "</span><span class=\"ukey mono\">"
+                + (colon < 0 ? "" : "<span class=\"kind\">" + esc(kind) + ":</span>") + esc(name) + renamed
+                + "</span><span class=\"ucount\">" + meaningCounts(u) + "</span>";
+        if (u.clauses() == null) {
+            return "<div class=\"unit\"" + attrs + "><div class=\"row\">" + head + "</div></div>\n";
+        }
+        return "<details class=\"unit\"" + attrs + "><summary>" + head + "</summary><div class=\"ubody\">" + meaningClauses(u)
+                + "</div></details>\n";
+    }
+
+    private static String meaningLabel(UnitComparison u) {
+        if ("EQUAL".equals(u.status())) {
+            return Html.swatch("equal") + "Identical";
+        }
+        if (MeaningComparator.FORM.equals(u.difference())) {
+            return Html.swatch("form") + "Same meaning";
+        }
+        return switch (u.status()) {
+            case "ONLY_PLUGIN" -> Html.swatch("plugin") + "Only plugin";
+            case "ONLY_RULES" -> Html.swatch("rules") + "Only rules";
+            default -> Html.swatch("different") + "Different";
+        };
+    }
+
+    private static String meaningCounts(UnitComparison u) {
+        ClauseSets c = u.clauses();
+        if (c == null) {
+            return num(u.clauseCount()) + (u.clauseCount() == 1 ? " clause" : " clauses");
+        }
+        int meaning = size(c.meaningPlugin()) + size(c.meaningRules());
+        int form = size(c.onlyPlugin()) + size(c.onlyRules()) - meaning;
+        List<String> parts = new ArrayList<>();
+        if (meaning > 0) {
+            parts.add(num(meaning) + " meaning");
+        }
+        if (form > 0) {
+            parts.add(num(form) + " form");
+        }
+        if (size(c.equal()) > 0) {
+            parts.add(num(size(c.equal())) + " identical");
+        }
+        return String.join(" · ", parts);
+    }
+
+    private static String meaningClauses(UnitComparison u) {
+        ClauseSets c = u.clauses();
+        StringBuilder b = new StringBuilder();
+        boolean plugin = size(c.meaningPlugin()) > 0;
+        boolean rules = size(c.meaningRules()) > 0;
+        if (plugin || rules) {
+            b.append("<div class=\"cols\">");
+            if (plugin) {
+                b.append(meaningList("c-plugin", Html.swatch("plugin") + "Meaning only in plugin", c.meaningPlugin()));
+            }
+            if (rules) {
+                b.append(meaningList("c-rules", Html.swatch("rules") + "Meaning only in rules", c.meaningRules()));
+            }
+            b.append("</div>");
+        }
+        List<String> formPlugin = formOnly(c.onlyPlugin(), c.meaningPlugin());
+        List<String> formRules = formOnly(c.onlyRules(), c.meaningRules());
+        if (!formPlugin.isEmpty() || !formRules.isEmpty() || (u.formRules() != null && !u.formRules().isEmpty())) {
+            boolean open = MeaningComparator.FORM.equals(u.difference());
+            int n = formPlugin.size() + formRules.size();
+            b.append("<details class=\"more\"").append(open ? " open" : "").append("><summary class=\"muted small\">")
+                    .append(num(n)).append(" clause").append(n == 1 ? "" : "s")
+                    .append(" with the same meaning, written differently</summary>");
+            if (u.formRules() != null && !u.formRules().isEmpty()) {
+                b.append("<div class=\"rules\">");
+                u.formRules().forEach(id -> b.append(Html.formRule(id)));
+                b.append("</div>");
+            }
+            if (n > 0) {
+                b.append("<div class=\"cols\">");
+                if (!formPlugin.isEmpty()) {
+                    b.append(clauseList("c-form", Html.swatch("plugin") + "Plugin", formPlugin));
+                }
+                if (!formRules.isEmpty()) {
+                    b.append(clauseList("c-form", Html.swatch("rules") + "Rules", formRules));
+                }
+                b.append("</div>");
+            }
+            b.append("</details>");
+        }
+        if (size(c.equal()) > 0) {
+            b.append("<details class=\"more\"><summary class=\"muted small\">").append(num(size(c.equal())))
+                    .append(" identical clause").append(size(c.equal()) == 1 ? "" : "s").append("</summary>")
+                    .append(clauseList("c-equal", "", c.equal())).append("</details>");
+        }
+        return b.toString();
+    }
+
+    private static List<String> formOnly(List<String> only, List<MeaningClause> meaning) {
+        if (only == null) {
+            return List.of();
+        }
+        java.util.Set<String> different = new java.util.HashSet<>();
+        if (meaning != null) {
+            meaning.forEach(m -> different.add(m.clause()));
+        }
+        return only.stream().filter(c -> !different.contains(c)).toList();
+    }
+
+    private static String meaningList(String css, String titleHtml, List<MeaningClause> clauses) {
+        StringBuilder b = new StringBuilder("<div class=\"clauses " + css + "\"><h4>").append(titleHtml)
+                .append(" <span class=\"muted\">").append(num(clauses.size())).append("</span></h4><ol>");
+        for (MeaningClause c : clauses) {
+            b.append("<li class=\"mono\">").append(esc(c.clause()));
+            if (c.conjuncts() != null && !c.conjuncts().isEmpty()) {
+                b.append("<span class=\"conj-label\">without a counterpart:</span><ul class=\"conj\">");
+                c.conjuncts().forEach(x -> b.append("<li>").append(esc(x)).append("</li>"));
+                b.append("</ul>");
+            }
+            b.append("</li>");
+        }
+        return b.append("</ol></div>").toString();
+    }
+
+    /** Reports written before the meaning comparison: units by textual status only. */
+    private static String textualSpec(SpecComparison spec) {
+        SpecSummary s = spec.summary();
+        StringBuilder b = new StringBuilder("<h2>Specification</h2>\n<div class=\"card\">")
+                .append(Html.unitsBar(s, true)).append(Html.unitsLegend(false))
                 .append("<div class=\"muted small\">").append(num(s.units())).append(" units: ")
                 .append(num(s.equalUnits())).append(" equal, ").append(num(s.differentUnits())).append(" different, ")
                 .append(num(s.onlyPluginUnits())).append(" only plugin, ").append(num(s.onlyRulesUnits())).append(" only rules · clauses: ")
@@ -386,7 +611,7 @@ final class HtmlExamplePage {
         return colon < 0 ? "other" : key.substring(0, colon);
     }
 
-    private static int size(List<String> list) {
+    private static int size(List<?> list) {
         return list == null ? 0 : list.size();
     }
 

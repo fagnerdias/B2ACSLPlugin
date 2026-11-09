@@ -48,6 +48,11 @@ public final class ComparatorMain {
                 System.out.println("[comparator] html: " + HtmlReport.write(config.htmlDir()));
                 System.exit(0);
             }
+            if (config.respecDir() != null) {
+                Respec.run(config.respecDir());
+                System.out.println("[comparator] html: " + HtmlReport.write(config.respecDir()));
+                System.exit(0);
+            }
             System.exit(config.side() != null ? SideRunner.run(config) : orchestrate(config));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -138,7 +143,7 @@ public final class ComparatorMain {
     private static void printTable(List<SummaryRow> rows) {
         String format = "%-28s %-17s %-17s %-23s %-14s %-14s%n";
         System.out.println();
-        System.out.printf(format, "example", "plugin gen", "rules gen", "units eq/diff/P/R", "plugin WP", "rules WP");
+        System.out.printf(format, "example", "plugin gen", "rules gen", "units eq/form/meaning", "plugin WP", "rules WP");
         for (SummaryRow row : rows) {
             SpecSummary s = row.spec();
             System.out.printf(
@@ -146,7 +151,7 @@ public final class ComparatorMain {
                     row.example(),
                     row.pluginGeneration(),
                     row.rulesGeneration(),
-                    s.equalUnits() + "/" + s.differentUnits() + "/" + s.onlyPluginUnits() + "/" + s.onlyRulesUnits(),
+                    s.equalUnits() + "/" + s.sameMeaningUnits() + "/" + s.meaningUnits(),
                     wp(row.pluginVerification(), row.pluginProved(), row.pluginTotal()),
                     wp(row.rulesVerification(), row.rulesProved(), row.rulesTotal()));
         }

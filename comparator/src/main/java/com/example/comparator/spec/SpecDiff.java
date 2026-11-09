@@ -4,6 +4,9 @@ import com.example.comparator.report.Reports.ClauseSets;
 import com.example.comparator.report.Reports.SpecComparison;
 import com.example.comparator.report.Reports.SpecSummary;
 import com.example.comparator.report.Reports.UnitComparison;
+import com.example.comparator.spec.meaning.MeaningComparator;
+import com.example.comparator.spec.meaning.MeaningContext;
+import com.example.comparator.spec.meaning.MeaningRule;
 import com.example.comparator.util.FileTrees;
 import com.github.difflib.DiffUtils;
 import com.github.difflib.UnifiedDiffUtils;
@@ -14,9 +17,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
@@ -25,6 +31,9 @@ import java.util.TreeSet;
  * AcslUnitExtractor}/{@link GhostCiExtractor}) and textually (whitespace-normalized unified diff
  * of files with the same name).
  *
+ * <p>Each unit that differs is classified by {@link MeaningComparator}: either it differs only in
+ * form (the same meaning, written differently) or in meaning.
+ *
  * <p>Units of all files of one side are merged before comparing, because B2ACSLPlugin spreads
  * content across auxiliary files ({@code _M_lib_includes.acsl}, {@code M_tuple_types.acsl}, ...)
  * that B2ACSLRules does not have.
@@ -32,6 +41,9 @@ import java.util.TreeSet;
 public final class SpecDiff {
 
     public static final String GHOST_CI = "ghost_operations.ci";
+
+    /** Unparsed clauses kept in a report (the rest only count). */
+    private static final int MAX_UNPARSED = 200;
 
     private static final List<String> KIND_ORDER =
             List.of("include", "type", "logic", "predicate", "inductive", "axiom", "lemma", "axiomatic", "function");
@@ -45,67 +57,178 @@ public final class SpecDiff {
     }
 
     public static SpecComparison compare(Path pluginSpecDir, Path rulesSpecDir) throws IOException {
+        return compare(pluginSpecDir, rulesSpecDir, Set.of());
+    }
+
+    /**
+     * @param machineNames names of the B machines of the project (they qualify names on one side and
+     *     not on the other, see {@link MeaningRule#MACHINE_PREFIX})
+     */
+    public static SpecComparison compare(Path pluginSpecDir, Path rulesSpecDir, Set<String> machineNames)
+            throws IOException {
         List<Path> pluginFiles = specFiles(pluginSpecDir);
         List<Path> rulesFiles = specFiles(rulesSpecDir);
         Map<String, SpecUnit> plugin = extractUnits(pluginFiles);
         Map<String, SpecUnit> rules = extractUnits(rulesFiles);
-
-        TreeSet<String> keys = new TreeSet<>(SpecDiff::compareKeys);
-        keys.addAll(plugin.keySet());
-        keys.addAll(rules.keySet());
+        MeaningContext context = MeaningContext.build(plugin.values(), rules.values(), machineNames);
+        MeaningComparator meaning = new MeaningComparator(context, plugin.values(), rules.values());
 
         List<UnitComparison> units = new ArrayList<>();
-        int[] unitCounts = new int[4]; // equal, different, onlyPlugin, onlyRules
-        int clausesEqual = 0;
-        int clausesOnlyPlugin = 0;
-        int clausesOnlyRules = 0;
-        for (String key : keys) {
-            Map<String, String> p = plugin.containsKey(key) ? plugin.get(key).clauses() : Map.of();
-            Map<String, String> r = rules.containsKey(key) ? rules.get(key).clauses() : Map.of();
-            List<String> equal = new ArrayList<>();
-            List<String> onlyPlugin = new ArrayList<>();
-            List<String> onlyRules = new ArrayList<>();
-            p.forEach((canonical, display) -> (r.containsKey(canonical) ? equal : onlyPlugin).add(display));
-            r.forEach((canonical, display) -> {
-                if (!p.containsKey(canonical)) {
-                    onlyRules.add(display);
-                }
-            });
-            clausesEqual += equal.size();
-            clausesOnlyPlugin += onlyPlugin.size();
-            clausesOnlyRules += onlyRules.size();
-
-            String status;
-            if (!rules.containsKey(key)) {
-                status = "ONLY_PLUGIN";
-                unitCounts[2]++;
-            } else if (!plugin.containsKey(key)) {
-                status = "ONLY_RULES";
-                unitCounts[3]++;
-            } else if (onlyPlugin.isEmpty() && onlyRules.isEmpty()) {
-                status = "EQUAL";
-                unitCounts[0]++;
-            } else {
-                status = "DIFFERENT";
-                unitCounts[1]++;
+        Counts counts = new Counts();
+        Map<String, Integer> formRules = new TreeMap<>();
+        for (String[] pair : pairUnits(plugin, rules, meaning)) {
+            UnitComparison unit = compareUnit(plugin.get(pair[0]), rules.get(pair[1]), meaning, counts);
+            units.add(unit);
+            if (MeaningComparator.FORM.equals(unit.difference())) {
+                unit.formRules().forEach(rule -> formRules.merge(rule, 1, Integer::sum));
             }
-            int clauseCount = equal.size() + onlyPlugin.size() + onlyRules.size();
-            ClauseSets clauses = "EQUAL".equals(status) ? null : new ClauseSets(equal, onlyPlugin, onlyRules);
-            units.add(new UnitComparison(key, status, clauseCount, clauses));
         }
 
-        SpecSummary summary =
-                new SpecSummary(
-                        keys.size(),
-                        unitCounts[0],
-                        unitCounts[1],
-                        unitCounts[2],
-                        unitCounts[3],
-                        clausesEqual,
-                        clausesOnlyPlugin,
-                        clausesOnlyRules);
+        Map<String, String> unparsed = new TreeMap<>();
+        context.parseFailures().entrySet().stream()
+                .limit(MAX_UNPARSED)
+                .forEach(e -> unparsed.put(e.getKey(), e.getValue()));
         return new SpecComparison(
-                summary, units, textDiffs(pluginFiles, rulesFiles), filesOnlyIn(pluginFiles, rulesFiles));
+                counts.summary(units.size()),
+                units,
+                textDiffs(pluginFiles, rulesFiles),
+                filesOnlyIn(pluginFiles, rulesFiles),
+                formRules,
+                context.renamings(),
+                unparsed);
+    }
+
+    /**
+     * Pairs of keys {@code [pluginKey, rulesKey]} (one of them {@code null} for a unit only one side
+     * has), in report order: units with the same key, then units only one side has whose names the
+     * renamings map to the same key ({@code logic:Goods_GOODS} and {@code logic:GOODS}).
+     */
+    private static List<String[]> pairUnits(Map<String, SpecUnit> plugin, Map<String, SpecUnit> rules, MeaningComparator meaning) {
+        Map<String, List<String>> pluginOnly = new HashMap<>();
+        Map<String, List<String>> rulesOnly = new HashMap<>();
+        plugin.forEach((key, unit) -> {
+            if (!rules.containsKey(key)) {
+                pluginOnly.computeIfAbsent(meaning.mappedKey(unit), k -> new ArrayList<>()).add(key);
+            }
+        });
+        rules.forEach((key, unit) -> {
+            if (!plugin.containsKey(key)) {
+                rulesOnly.computeIfAbsent(meaning.mappedKey(unit), k -> new ArrayList<>()).add(key);
+            }
+        });
+        Map<String, String> renamedRules = new HashMap<>(); // plugin key → rules key
+        pluginOnly.forEach((mapped, keys) -> {
+            List<String> other = rulesOnly.get(mapped);
+            if (keys.size() == 1 && other != null && other.size() == 1) {
+                renamedRules.put(keys.get(0), other.get(0));
+            }
+        });
+        Set<String> pairedRules = new HashSet<>(renamedRules.values());
+
+        TreeMap<String, String[]> ordered = new TreeMap<>(SpecDiff::compareKeys);
+        plugin.keySet().forEach(key ->
+                ordered.put(key, new String[] {key, rules.containsKey(key) ? key : renamedRules.get(key)}));
+        rules.keySet().forEach(key -> {
+            if (!plugin.containsKey(key) && !pairedRules.contains(key)) {
+                ordered.put(key, new String[] {null, key});
+            }
+        });
+        return new ArrayList<>(ordered.values());
+    }
+
+    private static UnitComparison compareUnit(SpecUnit p, SpecUnit r, MeaningComparator meaning, Counts counts) {
+        Map<String, String> pc = p == null ? Map.of() : p.clauses();
+        Map<String, String> rc = r == null ? Map.of() : r.clauses();
+        List<String> equal = new ArrayList<>();
+        List<String> onlyPlugin = new ArrayList<>();
+        List<String> onlyRules = new ArrayList<>();
+        pc.forEach((canonical, display) -> (rc.containsKey(canonical) ? equal : onlyPlugin).add(display));
+        rc.forEach((canonical, display) -> {
+            if (!pc.containsKey(canonical)) {
+                onlyRules.add(display);
+            }
+        });
+        counts.clausesEqual += equal.size();
+        counts.clausesOnlyPlugin += onlyPlugin.size();
+        counts.clausesOnlyRules += onlyRules.size();
+
+        String key = p != null ? p.key() : r.key();
+        String rulesKey = p != null && r != null && !p.key().equals(r.key()) ? r.key() : null;
+        String status;
+        if (r == null) {
+            status = "ONLY_PLUGIN";
+        } else if (p == null) {
+            status = "ONLY_RULES";
+        } else if (rulesKey == null && onlyPlugin.isEmpty() && onlyRules.isEmpty()) {
+            status = "EQUAL";
+        } else {
+            status = "DIFFERENT";
+        }
+        counts.byStatus.merge(status, 1, Integer::sum);
+        int clauseCount = equal.size() + onlyPlugin.size() + onlyRules.size();
+        if ("EQUAL".equals(status)) {
+            return new UnitComparison(key, status, clauseCount, null, null, null, null);
+        }
+
+        MeaningComparator.Result result = meaning.compare(p, r, onlyPlugin, onlyRules);
+        if (MeaningComparator.FORM.equals(result.difference())) {
+            counts.sameMeaning++;
+        } else {
+            counts.meaningByStatus.merge(status, 1, Integer::sum);
+        }
+        counts.clausesMeaningPlugin += result.meaningPlugin().size();
+        counts.clausesMeaningRules += result.meaningRules().size();
+        counts.clausesSameMeaning += onlyPlugin.size() - result.meaningPlugin().size()
+                + onlyRules.size() - result.meaningRules().size();
+        ClauseSets clauses = new ClauseSets(equal, onlyPlugin, onlyRules, result.meaningPlugin(), result.meaningRules());
+        return new UnitComparison(
+                key, status, clauseCount, clauses, rulesKey, result.difference(), result.formRules());
+    }
+
+    /** Running totals of {@link #compare}. */
+    private static final class Counts {
+        final Map<String, Integer> byStatus = new HashMap<>();
+        final Map<String, Integer> meaningByStatus = new HashMap<>();
+        int sameMeaning;
+        int clausesEqual;
+        int clausesOnlyPlugin;
+        int clausesOnlyRules;
+        int clausesSameMeaning;
+        int clausesMeaningPlugin;
+        int clausesMeaningRules;
+
+        SpecSummary summary(int units) {
+            return new SpecSummary(
+                    units,
+                    byStatus.getOrDefault("EQUAL", 0),
+                    byStatus.getOrDefault("DIFFERENT", 0),
+                    byStatus.getOrDefault("ONLY_PLUGIN", 0),
+                    byStatus.getOrDefault("ONLY_RULES", 0),
+                    clausesEqual,
+                    clausesOnlyPlugin,
+                    clausesOnlyRules,
+                    sameMeaning,
+                    meaningByStatus.getOrDefault("DIFFERENT", 0),
+                    meaningByStatus.getOrDefault("ONLY_PLUGIN", 0),
+                    meaningByStatus.getOrDefault("ONLY_RULES", 0),
+                    clausesSameMeaning,
+                    clausesMeaningPlugin,
+                    clausesMeaningRules);
+        }
+    }
+
+    /** Names of the B machines of a project: the {@code .bxml} files under its {@code bdp} folder. */
+    public static Set<String> machineNames(Path bdpDir) throws IOException {
+        Set<String> out = new TreeSet<>();
+        if (!Files.isDirectory(bdpDir)) {
+            return out;
+        }
+        try (java.util.stream.Stream<Path> files = Files.walk(bdpDir)) {
+            files.map(f -> f.getFileName().toString())
+                    .filter(n -> n.endsWith(".bxml"))
+                    .forEach(n -> out.add(n.substring(0, n.length() - ".bxml".length())));
+        }
+        return out;
     }
 
     static Map<String, SpecUnit> extractUnits(List<Path> files) throws IOException {

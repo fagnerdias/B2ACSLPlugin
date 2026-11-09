@@ -116,6 +116,10 @@ button.tile[aria-pressed="true"] { outline: 2px solid var(--ink-2); outline-offs
 .sw-rules { background: var(--rules); }
 .sw-equal { background: var(--equal); }
 .sw-different { background: var(--different); }
+/* same meaning, different form: the "equal" hue, hatched (never colour alone) */
+.sw-form, .ubar .seg-form {
+  background: repeating-linear-gradient(135deg, var(--equal) 0 2px, color-mix(in srgb, var(--equal) 28%, var(--surface)) 2px 4px);
+}
 .sw-none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--axis); }
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
@@ -259,6 +263,15 @@ ul.plain li { overflow-wrap: anywhere; }
 .clauses.c-plugin li { border-left-color: var(--plugin); }
 .clauses.c-rules li { border-left-color: var(--rules); }
 .clauses.c-equal li { border-left-color: var(--equal); }
+.clauses.c-form li { border-left-color: var(--equal); border-left-style: dashed; }
+.clauses li .conj { margin: 6px 0 0; padding: 0 0 0 14px; color: var(--ink); }
+.clauses li .conj li { background: none; border: 0; padding: 0; list-style: "→ "; white-space: pre-wrap; }
+.clauses li .conj-label { display: block; margin-top: 6px; font-size: 11.5px; color: var(--muted); font-family: system-ui, sans-serif; }
+.rules { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 4px 0 8px; }
+.rule { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--ink-2); white-space: nowrap; }
+.renamed { color: var(--muted); font-size: 12px; margin-left: 6px; }
+table.rules-table td.n { text-align: right; font-variant-numeric: tabular-nums; width: 1%; white-space: nowrap; }
+table.rules-table td.d { color: var(--ink-2); font-size: 12.5px; }
 .more { margin-top: 8px; }
 button.link {
   font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer;

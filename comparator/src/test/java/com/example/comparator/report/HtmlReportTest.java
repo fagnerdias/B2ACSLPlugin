@@ -10,6 +10,7 @@ import com.example.comparator.report.Reports.ExampleReport;
 import com.example.comparator.report.Reports.FunctionComparison;
 import com.example.comparator.report.Reports.FunctionResult;
 import com.example.comparator.report.Reports.GenerationReport;
+import com.example.comparator.report.Reports.MeaningClause;
 import com.example.comparator.report.Reports.RunConfig;
 import com.example.comparator.report.Reports.SpecComparison;
 import com.example.comparator.report.Reports.SpecSummary;
@@ -86,18 +87,24 @@ class HtmlReportTest {
     @Test
     void writesIndexAndExamplePagesFromTheJsonReports(@TempDir Path out) throws Exception {
         RunConfig config = new RunConfig("CVC5", 10, 600, true, true, Map.of("plugin", "abc1234"), List.of());
-        SpecSummary spec = new SpecSummary(2, 1, 1, 0, 0, 1, 1, 1);
+        SpecSummary spec = new SpecSummary(2, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1);
         List<UnitComparison> units = List.of(
-                new UnitComparison("logic:x", "EQUAL", 1, null),
+                new UnitComparison("logic:x", "EQUAL", 1, null, null, null, null),
                 new UnitComparison(
                         "function:M__op", "DIFFERENT", 3,
-                        new ClauseSets(List.of("requires a < b"), List.of("ensures <script>"), List.of("ensures c"))));
+                        new ClauseSets(
+                                List.of("requires a < b"), List.of("ensures <script>"), List.of("ensures c"),
+                                List.of(new MeaningClause("ensures <script>", List.of())),
+                                List.of(new MeaningClause("ensures c", List.of()))),
+                        null, "MEANING", List.of()));
         VerificationReport plugin = completed(4, 5);
         VerificationReport rules = completed(5, 5);
         ExampleReport report = new ExampleReport(
                 "Demo", "2026-11-01T12:41:17-03:00", config,
                 Map.of("plugin", GEN_OK, "rules", GEN_OK),
-                new SpecComparison(spec, units, Map.of("M.acsl", "--- plugin/M.acsl\n+++ rules/M.acsl\n-a\n+b"), Map.of()),
+                new SpecComparison(
+                        spec, units, Map.of("M.acsl", "--- plugin/M.acsl\n+++ rules/M.acsl\n-a\n+b"), Map.of(),
+                        Map.of(), Map.of(), Map.of()),
                 new VerificationComparison(plugin, rules, List.of(new FunctionComparison("M__op", null, null))));
         Json.write(out.resolve("Demo").resolve("report.json"), report);
         Json.write(

@@ -49,7 +49,8 @@ final class ComparisonRunner {
         SideResult plugin = results.get(Side.PLUGIN);
         SideResult rules = results.get(Side.RULES);
 
-        SpecComparison spec = SpecDiff.compare(ws.specSnapshot(Side.PLUGIN), ws.specSnapshot(Side.RULES));
+        SpecComparison spec = SpecDiff.compare(
+                ws.specSnapshot(Side.PLUGIN), ws.specSnapshot(Side.RULES), SpecDiff.machineNames(ws.bdp(Side.PLUGIN)));
         Map<String, GenerationReport> generation = new LinkedHashMap<>();
         generation.put(Side.PLUGIN.id(), plugin.generation());
         generation.put(Side.RULES.id(), rules.generation());
