@@ -98,7 +98,7 @@ final class GeneralizedQuantifierTranslator {
         String[] intervalBounds = boundVarNames.size() == 1
                 ? intervalDomainBounds(guardPred, boundVarNames.get(0), ctx)
                 : null;
-        if (intervalBounds != null && !Boolean.FALSE.equals(targetIsExplicitlySequenceTyped(qe))) {
+        if (intervalBounds != null && useSequenceBuilder(qe, intervalBounds[0], ctx)) {
             return translateSequenceBuilderLambda(
                     boundVarNames.get(0), intervalBounds[0], intervalBounds[1], bodyExp, guardPred, ctx);
         }
@@ -209,7 +209,119 @@ final class GeneralizedQuantifierTranslator {
         String[] intervalBounds =
                 intervalDomainBounds(guardPred, boundVarIds.get(0).getAttribute("value"), ctx);
         if (intervalBounds == null) return true;
-        return Boolean.FALSE.equals(targetIsExplicitlySequenceTyped(lambdaEl));
+        return !useSequenceBuilder(lambdaEl, intervalBounds[0], ctx);
+    }
+
+    /**
+     * Decide se uma lambda {@code %x.(x : lo..hi | E)} é uma sequência B ({@code \list}) ou uma
+     * função (modelo de mapa), pelo tipo do ALVO — o outro lado de {@code V = %...} ou a variável
+     * atribuída em {@code V := %...}:
+     * <ol>
+     *   <li>tipagem explícita do alvo em PROPERTIES/INVARIANT ({@code seq}/{@code iseq}/... ou não);
+     *   <li>tipo lógico conhecido do alvo (desta máquina ou de outra): {@code \list} ou não;
+     *   <li>alvo sem tipo conhecido (ex. {@code aseq} de {@code #aseq.(aseq = %ii.(ii : 1..n | ...))}):
+     *       sequência só se {@code lo} for {@code 1}, porque o domínio de uma sequência B começa em 1
+     *       ({@code list_to_function} da biblioteca também é 1-based);
+     *   <li>sem alvo (lambda como argumento): sequência, como antes.
+     * </ol>
+     * Antes só o passo 1 existia, e uma atribuição como {@code array := %ii.(ii : 0..n | ii)} a uma
+     * função saía como {@code \list}: "incompatible types \list<integer> and Function".
+     */
+    private static boolean useSequenceBuilder(Element lambdaEl, String lo, BxmlTranslateContext ctx) {
+        String target = lambdaTargetName(lambdaEl);
+        if (target == null) {
+            return true;
+        }
+        Boolean explicit = targetIsExplicitlySequenceTyped(lambdaEl);
+        if (explicit != null) {
+            return explicit;
+        }
+        String t = ctx.variableLogicTypes().get(target);
+        if (t == null || t.isBlank()) {
+            t = ctx.crossMachineVariableLogicTypes().get(target);
+        }
+        if (t != null && !t.isBlank()) {
+            return t.startsWith("\\list");
+        }
+        return lo != null && "1".equals(lo.trim());
+    }
+
+    /**
+     * Nome do alvo de uma lambda: o {@code Id} do outro lado de {@code Id = %...}, ou a variável
+     * na mesma posição de {@code Variables} quando a lambda é um valor de {@code Assignement_Sub};
+     * {@code null} se não houver.
+     */
+    static String lambdaTargetName(Element lambdaEl) {
+        Node parent = lambdaEl.getParentNode();
+        if (!(parent instanceof Element parentEl)) {
+            return null;
+        }
+        if ("Exp_Comparison".equals(parentEl.getLocalName()) && "=".equals(parentEl.getAttribute("op"))) {
+            Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(parentEl);
+            if (pair[0] == null || pair[1] == null) return null;
+            Element other = pair[0] == lambdaEl ? pair[1] : pair[0];
+            return "Id".equals(other.getLocalName()) ? other.getAttribute("value").trim() : null;
+        }
+        if ("Values".equals(parentEl.getLocalName())
+                && parentEl.getParentNode() instanceof Element assign
+                && "Assignement_Sub".equals(assign.getLocalName())) {
+            List<Element> values = BxmlDomUtils.directExpChildren(parentEl);
+            int idx = values.indexOf(lambdaEl);
+            Element vars = BxmlDomUtils.firstChildElement(assign, "Variables");
+            if (idx < 0 || vars == null) return null;
+            List<Element> lhs = BxmlDomUtils.directExpChildren(vars);
+            if (idx >= lhs.size() || !"Id".equals(lhs.get(idx).getLocalName())) return null;
+            return lhs.get(idx).getAttribute("value").trim();
+        }
+        return null;
+    }
+
+    /**
+     * {@code V := %x.(G | E)} quando a lambda é uma função (modelo de mapa): a forma pontual
+     * inline {@code (\forall x; (G) ==> function_apply(V, x) == E) && (\forall x; belongs(x,
+     * dom(V)) <==> (G))}, sem função lógica auxiliar. Inline porque o corpo pode ler o próprio
+     * {@code V} (ex. {@code array := %ii.(... | array(max_IDX - ii))}), que no lado direito é o
+     * PRÉ-estado: {@code rhsCtx} traz {@code V} em {@link BxmlAnnotationScope#preStateNames()} e
+     * sai {@code \old(V)}; dentro de um axioma global isso seria impossível. {@code null} se a
+     * lambda não tiver esta forma (corpo booleano, ou sequência).
+     */
+    static String lambdaAssignmentPointwise(
+            Element varEl, Element lambdaEl, BxmlTranslateContext lhsCtx, BxmlTranslateContext rhsCtx) {
+        if (varEl == null || lambdaEl == null
+                || !"Quantified_Exp".equals(lambdaEl.getLocalName()) || !"%".equals(lambdaEl.getAttribute("type"))) {
+            return null;
+        }
+        List<Element> boundVarIds = lambdaBoundVarIdElements(lambdaEl);
+        if (boundVarIds.isEmpty()) return null;
+        Element bodyEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Body");
+        Element bodyExp = bodyEl != null ? BxmlExpressionToAcsl.firstExpChild(bodyEl) : null;
+        if (bodyExp == null || "Boolean_Exp".equals(bodyExp.getLocalName())) {
+            return null;
+        }
+        if (!isMapModelLambda(lambdaEl, lhsCtx)) {
+            return null;
+        }
+        Element guardEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Pred");
+        Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
+
+        List<String> boundVarDecls = new ArrayList<>();
+        String point = null;
+        for (Element boundIdEl : boundVarIds) {
+            String boundVar = boundIdEl.getAttribute("value");
+            String trAttr = boundIdEl.getAttribute("typref");
+            int typref = trAttr.isBlank() ? -1 : Integer.parseInt(trAttr.trim());
+            boundVarDecls.add(lhsCtx.types().acslLogicTypeForValueTypref(typref) + " " + boundVar);
+            point = point == null ? boundVar : "couple(" + point + ", " + boundVar + ")";
+        }
+        String decls = String.join(", ", boundVarDecls);
+        String v = BxmlExpressionToAcsl.translate(varEl, lhsCtx);
+        String guard = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, rhsCtx) : "\\true";
+        String body = BxmlExpressionToAcsl.translate(bodyExp, rhsCtx);
+        String value = "Quantified_Set".equals(bodyExp.getLocalName())
+                ? "equals(function_apply(" + v + ", " + point + "), " + body + ")"
+                : "(function_apply(" + v + ", " + point + ") == " + body + ")";
+        return "(\\forall " + decls + "; (" + guard + ") ==> " + value + ") && (\\forall " + decls
+                + "; belongs(" + point + ", dom(" + v + ")) <==> (" + guard + "))";
     }
 
     /**

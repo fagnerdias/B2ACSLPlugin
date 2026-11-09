@@ -1377,8 +1377,25 @@ public final class BxmlInitialisationTranslator {
         }
         lhsNames.addAll(extraLhsVarNames);
 
+        // B: o lado direito lê o pré-estado. A forma pontual de uma lambda é montada direto com
+        // esse escopo (\old dentro do \forall), em vez do texto pós-processado abaixo.
+        Set<String> lhsBNames = new LinkedHashSet<>();
+        for (Element l : lhs) {
+            if ("Id".equals(l.getLocalName()) && !l.getAttribute("value").isBlank()) {
+                lhsBNames.add(l.getAttribute("value").trim());
+            }
+        }
+        lhsBNames.addAll(extraLhsVarNames);
+        BxmlTranslateContext rhsCtx = ctx.plusPreStateNames(lhsBNames);
+
         int n = Math.min(lhs.size(), rhs.size());
         for (int i = 0; i < n; i++) {
+            String pointwise =
+                    GeneralizedQuantifierTranslator.lambdaAssignmentPointwise(lhs.get(i), rhs.get(i), ctx, rhsCtx);
+            if (pointwise != null) {
+                ensures.add(pointwise);
+                continue;
+            }
             String e = BxmlExpressionToAcsl.formatEquality(lhs.get(i), rhs.get(i), ctx);
             if (!lhsNames.isEmpty()) {
                 e = wrapLhsVarsInRhsWithOld(e, lhsNames);
