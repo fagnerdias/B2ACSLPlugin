@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -137,6 +138,17 @@ public final class GhostOperationsCiGenerator {
                         .filter(v -> !collapsedVariableNames.contains(v))
                         .toList();
         Set<String> abstractSet = new LinkedHashSet<>(abstractVarNames);
+        // Variáveis de estado SEM gêmeo ghost que o texto ghost pode ler: as abstratas colapsadas
+        // na implementação e as CONCRETE_VARIABLES da própria máquina abstrata (ex. "array" de
+        // HeapSort, um array C). Não têm ghost_<v> nem assigns, mas um corpo como "ANY rr WHERE ...
+        // THEN array := rr" lê \old(array), e o .ci é um front-end isolado: elas precisam virar
+        // dummy_<v> e ser declaradas como logic. No merged_code.c a declaração cai com o bloco
+        // dummy_ghost e dummy_<v> volta a <v>, a definição real (ex. array_to_function_int).
+        Set<String> logicOnlyVars = new LinkedHashSet<>(collapsedVariableNames);
+        logicOnlyVars.addAll(BxmlMachineVariables.declaredVariableNames(abstractMachineEl));
+        logicOnlyVars.removeAll(abstractSet);
+        Set<String> ghostLogicVars = new LinkedHashSet<>(abstractSet);
+        ghostLogicVars.addAll(logicOnlyVars);
         Map<String, String> varTypes =
                 BxmlMachineVariables.inferVariableLogicTypes(abstractMachineEl, ctx);
         Set<String> concreteConstants = new LinkedHashSet<>(concreteConstantNames(abstractMachineEl));
@@ -170,6 +182,7 @@ public final class GhostOperationsCiGenerator {
                 buildGhostOperations(
                         abstractMachineEl,
                         abstractSet,
+                        logicOnlyVars,
                         ctx,
                         varTypes,
                         concreteConstants,
@@ -212,7 +225,7 @@ public final class GhostOperationsCiGenerator {
         String lambdaBlock = lambdaRegistry != null && !lambdaRegistry.isEmpty()
                 ? GhostNamespacePrefixer.prefixLocalAxiomaticBlockForGhost(
                         GhostNamespacePrefixer.renameGhostAxiomaticBlock(lambdaRegistry.formatAxiomaticBlock(), "lambda_functions"),
-                        ctx, concreteConstants, abstractSet)
+                        ctx, concreteConstants, ghostLogicVars)
                 : null;
         if (lambdaBlock != null) allGhostEnsureLines.add(lambdaBlock);
 
@@ -221,7 +234,7 @@ public final class GhostOperationsCiGenerator {
                 ? GhostNamespacePrefixer.prefixLocalAxiomaticBlockForGhost(
                         GhostNamespacePrefixer.renameGhostAxiomaticBlock(
                                 sigmaRegistry.formatAxiomaticBlock(), "generalized_quantifier_functions"),
-                        ctx, concreteConstants, abstractSet)
+                        ctx, concreteConstants, ghostLogicVars)
                 : null;
         if (sigmaBlock != null) allGhostEnsureLines.add(sigmaBlock);
 
@@ -230,7 +243,7 @@ public final class GhostOperationsCiGenerator {
                 ? GhostNamespacePrefixer.prefixLocalAxiomaticBlockForGhost(
                         GhostNamespacePrefixer.renameGhostAxiomaticBlock(
                                 unionInterRegistry.formatAxiomaticBlock(), "generalized_union_inter_functions"),
-                        ctx, concreteConstants, abstractSet)
+                        ctx, concreteConstants, ghostLogicVars)
                 : null;
         if (unionInterBlock != null) allGhostEnsureLines.add(unionInterBlock);
 
@@ -238,11 +251,17 @@ public final class GhostOperationsCiGenerator {
                 Math.max(
                         ctx.comprehensions().maxComprehensionIndex(),
                         maxSetComprehensionIndexInGhostText(allGhostEnsureLines));
+        List<String> dummyVarNames = new ArrayList<>(abstractVarNames);
+        for (String v : logicOnlyVars) {
+            if (mentionsDummyName(allGhostEnsureLines, v) || mentionsDummyName(ghostOps, v)) {
+                dummyVarNames.add(v);
+            }
+        }
         String axiomaticBlock =
                 new DummyGhostAxiomaticBuilder(AcslLibSymbolDependencyMap.instance())
                         .format(
                                 allGhostEnsureLines,
-                                abstractVarNames,
+                                dummyVarNames,
                                 varTypes,
                                 maxSetComp,
                                 abstractMachineEl,
@@ -367,9 +386,26 @@ public final class GhostOperationsCiGenerator {
         return false;
     }
 
+    /** {@code true} se {@code dummy_<v>} aparece como palavra em alguma linha. */
+    private static boolean mentionsDummyName(List<String> lines, String v) {
+        Pattern p = Pattern.compile("\\bdummy_" + Pattern.quote(v) + "\\b");
+        for (String l : lines) {
+            if (l != null && p.matcher(l).find()) return true;
+        }
+        return false;
+    }
+
+    private static boolean mentionsDummyName(Collection<GhostOp> ops, String v) {
+        for (GhostOp op : ops) {
+            if (mentionsDummyName(op.ghostEnsures(), v)) return true;
+        }
+        return false;
+    }
+
     private static List<GhostOp> buildGhostOperations(
             Element abstractMachineEl,
             Set<String> abstractSet,
+            Set<String> logicOnlyVars,
             BxmlTranslateContext ctx,
             Map<String, String> varTypes,
             Set<String> concreteConstants,
@@ -390,6 +426,7 @@ public final class GhostOperationsCiGenerator {
                 ge = ghostDummyConcreteRefs(ge, concreteConstants);
                 ge = stripBTypingCommentsForGhost(ge);
                 ge = normalizeBooleanLiteralsForGhost(ge);
+                ge = GhostNamespacePrefixer.prefixAbstractVarsForGhost(ge, logicOnlyVars);
                 prefixedInitEnsures.add(ge);
             }
             String initSlug = abstractMachineEl.getAttribute("name").toLowerCase() + "__initialisation";
@@ -428,9 +465,11 @@ public final class GhostOperationsCiGenerator {
                     boolean needsMarker = com.example.AnySubMarkerSpec.isNonScalarQuantifiedClause(existsForm);
                     List<Param> params =
                             GhostParamTypeResolver.appendOutputParametersAsPointers(GhostParamTypeResolver.listInputParameters(op), op, false);
+                    Set<String> ghostLogicVars = new LinkedHashSet<>(abstractSet);
+                    ghostLogicVars.addAll(logicOnlyVars);
                     existsForm =
                             GhostNamespacePrefixer.rewriteAnySubEnsureForGhost(
-                                    existsForm, abstractSet, concreteConstants, op, anySub, ctx,
+                                    existsForm, ghostLogicVars, concreteConstants, op, anySub, ctx,
                                     abstractConstParams);
                     existsForm = rewriteBoolOutputPredicateTernary(existsForm);
                     existsForm = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(existsForm, params);
@@ -469,6 +508,7 @@ public final class GhostOperationsCiGenerator {
                     ge = ghostDummyConcreteRefs(ge, concreteConstants);
                     ge = stripBTypingCommentsForGhost(ge);
                     ge = normalizeBooleanLiteralsForGhost(ge);
+                    ge = GhostNamespacePrefixer.prefixAbstractVarsForGhost(ge, logicOnlyVars);
                     ge = GhostNamespacePrefixer.dereferenceScalarOutputParams(ge, op);
                     ge = rewriteBoolOutputPredicateTernary(ge);
                     ge = rewriteIntegerTernaryPredicateConditionForGhost(ge);
