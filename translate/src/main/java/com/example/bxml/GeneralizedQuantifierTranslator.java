@@ -419,7 +419,8 @@ final class GeneralizedQuantifierTranslator {
                 return new DomainClassification(DomainKind.INTERVAL, lo, hi, null, null);
             }
             java.util.List<String> parts = new java.util.ArrayList<>();
-            for (Element r : rest) parts.add(BxmlPredicateToAcsl.translatePropertyPred(r, ctx));
+            // o filtro entra no CORPO da função gerada (filterTemplate), não no ponto de chamada
+            for (Element r : rest) parts.add(BxmlPredicateToAcsl.translatePropertyPred(r, ctx.forHelperBody()));
             return new DomainClassification(DomainKind.INTERVAL, lo, hi, String.join(" && ", parts), null);
         }
 
@@ -474,11 +475,21 @@ final class GeneralizedQuantifierTranslator {
         return out;
     }
 
+    /**
+     * Argumentos livres de uma chamada a uma função gerada, com vírgula final ({@code ""} se não
+     * houver): cada parâmetro na forma do escopo do chamador — o pré-estado para {@code x__0}
+     * ({@code \old(x)} ou {@code \at(x, Pre)}) e {@code *p} para uma saída (ver {@link
+     * BxmlAnnotationScope#helperArg}).
+     */
+    private static String callFreeArgs(java.util.List<String> freeVarNames, BxmlTranslateContext ctx) {
+        return freeVarNames.isEmpty() ? "" : ctx.annotationScope().helperArgs(freeVarNames) + ", ";
+    }
+
     /** §2/§2b: domínio-intervalo — recursão (SIGMA/PI) ou declaração+axiomas guardados (MIN/MAX). */
     private static String registerIntervalDomainSum(
             SigmaFunctionRegistry.Op op, String boundVarName, DomainClassification dc, Element bodyExp,
             Element guardPred, String sourceComment, BxmlTranslateContext ctx, SigmaFunctionRegistry registry) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         String bodyForLo = replaceWordBoundary(bodyStr, boundVarName, "lo");
         String bodyForHi = replaceWordBoundary(bodyStr, boundVarName, "hi");
         String filterForLo = dc.filterTemplate() != null
@@ -503,8 +514,7 @@ final class GeneralizedQuantifierTranslator {
         String name = registry.registerInterval(
                 op, freeVarNames, freeVarTypes, sourceComment, bodyForLo, bodyForHi, filterForLo, filterForHi,
                 congrVar, congrType);
-        String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
-        return name + "(" + freeArgs + dc.lo() + ", " + dc.hi() + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + dc.lo() + ", " + dc.hi() + ")";
     }
 
     /** §3: domínio-conjunto qualquer — axiomatização estrutural sobre {@code empty}/{@code singleton+union}. */
@@ -512,7 +522,7 @@ final class GeneralizedQuantifierTranslator {
             SigmaFunctionRegistry.Op op, String boundVarName, int boundVarTypref, DomainClassification dc,
             Element bodyExp, Element guardPred, String sourceComment, BxmlTranslateContext ctx,
             SigmaFunctionRegistry registry) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         String bodyForX = replaceWordBoundary(bodyStr, boundVarName, "x");
 
         // NÃO escanear guardPred aqui: para DomainKind.SET, classifyDomain exige que TODOS os
@@ -535,8 +545,7 @@ final class GeneralizedQuantifierTranslator {
 
         String name = registry.registerSet(
                 op, freeVarNames, freeVarTypes, sourceComment, boundVarType, bodyForX, dc.domainExprText());
-        String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
-        return name + "(" + freeArgs + dc.domainExprText() + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + dc.domainExprText() + ")";
     }
 
     /**
@@ -577,11 +586,12 @@ final class GeneralizedQuantifierTranslator {
                     + ":lo..hi' (sem filtro extra) */";
         }
 
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         java.util.List<String>[] ft = freeVarsAndTypes(
                 java.util.List.of(outerVar, innerVar), ctx, bodyExp, guardPred);
         java.util.List<String> freeVarNames = ft[0];
         java.util.List<String> freeVarTypes = ft[1];
+        // dentro do corpo da função externa: os próprios nomes de parâmetro
         String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
 
         // Interna: parâmetro extra "x" representa o valor corrente da variável externa.
@@ -610,7 +620,7 @@ final class GeneralizedQuantifierTranslator {
         String outerName = registry.registerInterval(
                 op, freeVarNames, freeVarTypes, outerComment, outerBodyForLo, outerBodyForHi, null, null,
                 null, null);
-        return outerName + "(" + freeArgs + outerBounds[0] + ", " + outerBounds[1] + ")";
+        return outerName + "(" + callFreeArgs(freeVarNames, ctx) + outerBounds[0] + ", " + outerBounds[1] + ")";
     }
 
     // ══════════════ UNION / INTER (Quantified_Exp type='UNION'/'INTER') ══════════════
@@ -760,7 +770,7 @@ final class GeneralizedQuantifierTranslator {
             UnionInterFunctionRegistry.Op op, String boundVarName, DomainClassification dc, Element bodyExp,
             Element guardPred, String elementType, String sourceComment, BxmlTranslateContext ctx,
             UnionInterFunctionRegistry registry) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         String bodyForLo = replaceWordBoundary(bodyStr, boundVarName, "lo");
         String bodyForHi = replaceWordBoundary(bodyStr, boundVarName, "hi");
         String filterForLo = dc.filterTemplate() != null
@@ -808,8 +818,7 @@ final class GeneralizedQuantifierTranslator {
         String name = registry.registerInterval(
                 op, freeVarNames, freeVarTypes, sourceComment, elementType, bodyForLo, bodyForHi,
                 filterForLo, filterForHi, hasUniverse, universeExpr, congrVar, congrType);
-        String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
-        return name + "(" + freeArgs + dc.lo() + ", " + dc.hi() + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + dc.lo() + ", " + dc.hi() + ")";
     }
 
     /** §4: domínio-conjunto qualquer. */
@@ -817,7 +826,7 @@ final class GeneralizedQuantifierTranslator {
             UnionInterFunctionRegistry.Op op, String boundVarName, int boundVarTypref, DomainClassification dc,
             Element bodyExp, Element guardPred, String elementType, String sourceComment,
             BxmlTranslateContext ctx, UnionInterFunctionRegistry registry) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         String bodyForX = replaceWordBoundary(bodyStr, boundVarName, "x");
 
         // NÃO escanear guardPred — mesmo motivo de registerSetDomainSum (SIGMA): para
@@ -840,8 +849,7 @@ final class GeneralizedQuantifierTranslator {
         String name = registry.registerSet(
                 op, freeVarNames, freeVarTypes, sourceComment, elementType, boundVarType, bodyForX,
                 dc.domainExprText());
-        String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
-        return name + "(" + freeArgs + dc.domainExprText() + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + dc.domainExprText() + ")";
     }
 
     /**
@@ -852,7 +860,7 @@ final class GeneralizedQuantifierTranslator {
     private static String translateSequenceBuilderLambda(
             String boundVarName, String loExpr, String hiExpr, Element bodyExp, Element guardPred,
             BxmlTranslateContext ctx) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
 
         // Variáveis livres: IDs no corpo E na guarda (que contém lo/hi, ex. card(array)) que não
         // são a variável ligada nem estado da PRÓPRIA máquina (reads directo, sem parametrizar).
@@ -883,10 +891,7 @@ final class GeneralizedQuantifierTranslator {
         }
         String name = registry.registerSequenceBuilder(
                 freeVarNames, freeVarTypes, "integer", bodyForLo, bodyForLoPlusK);
-        java.util.List<String> args = new java.util.ArrayList<>(freeVarNames);
-        args.add(loExpr);
-        args.add(hiExpr);
-        return name + "(" + String.join(", ", args) + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + loExpr + ", " + hiExpr + ")";
     }
 
     /**
@@ -898,7 +903,8 @@ final class GeneralizedQuantifierTranslator {
     private static String translateMapLambda(
             java.util.List<String> boundVarNames, Element guardPred, Element bodyExp,
             BxmlTranslateContext ctx) {
-        String guardStr = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx) : null;
+        String guardStr = guardPred != null
+                ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx.forHelperBody()) : null;
 
         boolean isBooleanBody = "Boolean_Exp".equals(bodyExp.getLocalName());
         // % x.(P | {y|Q}): o corpo E é ele próprio uma compreensão — o valor por x é um CONJUNTO,
@@ -913,10 +919,10 @@ final class GeneralizedQuantifierTranslator {
         if (isBooleanBody) {
             Element innerPred = BxmlExpressionToAcsl.firstExpChild(bodyExp);
             if (innerPred == null) return "/* TODO: lambda body */";
-            bodyStr = BxmlPredicateToAcsl.translatePropertyPred(innerPred, ctx);
+            bodyStr = BxmlPredicateToAcsl.translatePropertyPred(innerPred, ctx.forHelperBody());
             scanRoot = innerPred;
         } else {
-            bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+            bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
             scanRoot = bodyExp;
         }
 
@@ -951,9 +957,7 @@ final class GeneralizedQuantifierTranslator {
                 name = registry.registerFunction(
                         freeVarNames, freeVarTypes, boundVarNames, bodyStr, returnType, guardStr);
             }
-            java.util.List<String> args = new java.util.ArrayList<>(freeVarNames);
-            args.addAll(boundVarNames);
-            return name + "(" + String.join(", ", args) + ")";
+            return name + "(" + callFreeArgs(freeVarNames, ctx) + String.join(", ", boundVarNames) + ")";
         }
         // Fallback inline (sem registro disponível no contexto)
         java.util.List<String> decls = new java.util.ArrayList<>();
@@ -1107,7 +1111,11 @@ final class GeneralizedQuantifierTranslator {
         if ("Id".equals(localName)) {
             String v = e.getAttribute("value");
             if (v != null && !v.isBlank() && !childScope.contains(v.trim())) {
-                String key = v.trim();
+                // x$0 (pré-estado) é outra variável livre, mesmo que x seja estado da máquina: dentro
+                // de uma função gerada ele vira o parâmetro x__0 (BxmlAnnotationScope#PRE_STATE_PARAM_SUFFIX).
+                String key = "0".equals(e.getAttribute("suffix"))
+                        ? v.trim() + BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX
+                        : v.trim();
                 out.add(key);
                 if (typrefsOut != null && !typrefsOut.containsKey(key)) {
                     String tr = e.getAttribute("typref");
@@ -1145,6 +1153,11 @@ final class GeneralizedQuantifierTranslator {
     private static String resolveFreeVarType(
             String v, BxmlTranslateContext ctx, java.util.Map<String, Integer> typrefs) {
         String t = ctx.variableLogicTypes().get(v);
+        if ((t == null || t.isBlank()) && v.endsWith(BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX)) {
+            String base = v.substring(0, v.length() - BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX.length());
+            t = ctx.variableLogicTypes().get(base);
+            if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(base);
+        }
         if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(v);
         if ((t == null || t.isBlank()) && typrefs != null && typrefs.containsKey(v)) {
             t = ctx.types().acslVariableLogicTypeFromTypref(typrefs.get(v));

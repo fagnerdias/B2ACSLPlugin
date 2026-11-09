@@ -345,6 +345,14 @@ public record BxmlTranslateContext(
                 scope);
     }
 
+    /**
+     * Cópia para traduzir o corpo de uma função lógica ou axioma gerado (compreensão, SIGMA,
+     * lambda, ...): sem saídas nem nomes de pré-estado, e {@code x$0} vira o parâmetro {@code x__0}.
+     */
+    public BxmlTranslateContext forHelperBody() {
+        return withAnnotationScope(BxmlAnnotationScope.HELPER);
+    }
+
     /** Cópia com o destino da cláusula trocado (ex. {@link BxmlAnnotationScope.Kind#LOOP}). */
     public BxmlTranslateContext withScopeKind(BxmlAnnotationScope.Kind kind) {
         return withAnnotationScope(annotationScope.withKind(kind));

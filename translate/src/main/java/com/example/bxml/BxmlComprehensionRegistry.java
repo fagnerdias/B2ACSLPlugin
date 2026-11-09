@@ -377,7 +377,8 @@ public final class BxmlComprehensionRegistry {
             // símbolo nenhum para referenciar; o chamador tem de cair para tradução inline.
             return null;
         }
-        return base + callSuffix(free[0]);
+        // argumentos na forma do escopo de QUEM usa a compreensão (contrato, laço ou outro helper)
+        return base + callSuffix(free[0], ctx);
     }
 
     /**
@@ -485,7 +486,8 @@ public final class BxmlComprehensionRegistry {
             BxmlTypeRegistry types, BxmlTranslateContext translateCtx) {
         Map<String, String> vt =
                 translateCtx != null ? translateCtx.variableLogicTypes() : Map.of();
-        BxmlTranslateContext ctx = new BxmlTranslateContext(types, this, vt);
+        // O corpo vira axioma global: x$0 é o parâmetro x__0, nunca \old(x) (BxmlAnnotationScope).
+        BxmlTranslateContext ctx = new BxmlTranslateContext(types, this, vt).forHelperBody();
         if (translateCtx != null) {
             // Necessário para #freeVarsForComprehension distinguir corretamente um nome de conjunto
             // diferido/enumerado (ex. ISLAND, sempre legítimo como referência global) de uma
@@ -669,6 +671,15 @@ public final class BxmlComprehensionRegistry {
     /** {@code "(nome1, nome2)"} para uma CHAMADA (sem tipos); vazio se sem livres. */
     private static String callSuffix(List<String> names) {
         return names.isEmpty() ? "" : "(" + String.join(", ", names) + ")";
+    }
+
+    /**
+     * Como {@link #callSuffix(List)}, mas cada argumento na forma do escopo do chamador: {@code
+     * \old(x)}/{@code \at(x, Pre)} para o parâmetro de pré-estado {@code x__0}, {@code *p} para uma
+     * saída (ver {@link BxmlAnnotationScope#helperArg}).
+     */
+    private static String callSuffix(List<String> names, BxmlTranslateContext callerCtx) {
+        return names.isEmpty() ? "" : "(" + callerCtx.annotationScope().helperArgs(names) + ")";
     }
 
     /** {@code "tipo1 nome1, "} para prefixar o {@code \\forall} do axioma; vazio se sem livres. */

@@ -184,10 +184,12 @@ public final class BxmlLoopTranslator {
             Element whileEl, BxmlTranslateContext ctx, Element abstractMachineEl,
             Element implementationMachineEl, int index, Map<String, List<String>> importedOpAssigns,
             Path bxmlDirectory) {
+        // Anotação de laço: x$0 é \at(x, Pre), não \old(x), que o ACSL proíbe aqui.
+        BxmlTranslateContext loopCtx = ctx.withScopeKind(BxmlAnnotationScope.Kind.LOOP);
         Element invEl = BxmlDomUtils.firstChildElement(whileEl, "Invariant");
         List<String> invariant = List.of();
         if (invEl != null) {
-            invariant = BxmlPredicateToAcsl.translateInvariantConjuncts(invEl, ctx).stream()
+            invariant = BxmlPredicateToAcsl.translateInvariantConjuncts(invEl, loopCtx).stream()
                     .map(String::trim)
                     .toList();
         }
@@ -197,7 +199,7 @@ public final class BxmlLoopTranslator {
         if (varEl != null) {
             Element exp = firstExpressionChild(varEl);
             if (exp != null) {
-                variant = BxmlExpressionToAcsl.translate(exp, ctx).trim();
+                variant = BxmlExpressionToAcsl.translate(exp, loopCtx).trim();
             }
         }
 

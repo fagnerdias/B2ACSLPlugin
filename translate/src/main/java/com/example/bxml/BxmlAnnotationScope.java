@@ -41,6 +41,17 @@ public record BxmlAnnotationScope(Kind kind, Set<String> outputParams, Set<Strin
     /** O escopo padrão: contrato, sem saídas e sem nomes de pré-estado. */
     public static final BxmlAnnotationScope CONTRACT = new BxmlAnnotationScope(Kind.CONTRACT, Set.of(), Set.of());
 
+    /** Corpo de uma função lógica ou axioma gerado: sem saídas e sem nomes de pré-estado. */
+    public static final BxmlAnnotationScope HELPER = new BxmlAnnotationScope(Kind.HELPER_BODY, Set.of(), Set.of());
+
+    /**
+     * Sufixo do parâmetro que leva o pré-estado ({@code x$0}) para dentro de uma função lógica ou
+     * axioma gerado. Um axioma global não tem estado de entrada, então {@code \old(x)} lá dentro
+     * é inválido: o valor vira o parâmetro {@code x__0} e quem chama passa {@code \old(x)} (num
+     * contrato) ou {@code \at(x, Pre)} (num laço) — ver {@link #helperArg}.
+     */
+    public static final String PRE_STATE_PARAM_SUFFIX = "__0";
+
     public BxmlAnnotationScope {
         kind = kind == null ? Kind.CONTRACT : kind;
         outputParams = outputParams == null ? Set.of() : Set.copyOf(outputParams);
@@ -76,6 +87,11 @@ public record BxmlAnnotationScope(Kind kind, Set<String> outputParams, Set<Strin
      * @param preState {@code true} para {@code x$0}
      */
     public String render(String bName, String acsl, boolean preState) {
+        if (preState && kind == Kind.HELPER_BODY) {
+            return acsl.endsWith(bName)
+                    ? acsl.substring(0, acsl.length() - bName.length()) + bName + PRE_STATE_PARAM_SUFFIX
+                    : acsl + PRE_STATE_PARAM_SUFFIX;
+        }
         if (preState || preStateNames.contains(bName)) {
             return preStateTerm(acsl);
         }
@@ -83,6 +99,28 @@ public record BxmlAnnotationScope(Kind kind, Set<String> outputParams, Set<Strin
             return dereference(acsl);
         }
         return acsl;
+    }
+
+    /**
+     * Argumento, no ponto de chamada, para o parâmetro {@code paramName} de uma função lógica ou
+     * axioma gerado: o pré-estado para {@code x__0} (ver {@link #PRE_STATE_PARAM_SUFFIX}), {@code *p}
+     * para uma saída, ou o próprio nome.
+     */
+    public String helperArg(String paramName) {
+        if (paramName.endsWith(PRE_STATE_PARAM_SUFFIX) && paramName.length() > PRE_STATE_PARAM_SUFFIX.length()) {
+            String base = paramName.substring(0, paramName.length() - PRE_STATE_PARAM_SUFFIX.length());
+            return kind == Kind.HELPER_BODY ? paramName : preStateTerm(base);
+        }
+        return render(paramName, paramName, false);
+    }
+
+    /** Lista de argumentos ({@link #helperArg}) separada por vírgula. */
+    public String helperArgs(java.util.List<String> paramNames) {
+        java.util.List<String> out = new java.util.ArrayList<>(paramNames.size());
+        for (String n : paramNames) {
+            out.add(helperArg(n));
+        }
+        return String.join(", ", out);
     }
 
     /** O valor de {@code acsl} no estado de entrada da função, na forma que este escopo aceita. */
