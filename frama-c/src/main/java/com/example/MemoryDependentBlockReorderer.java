@@ -51,8 +51,19 @@ final class MemoryDependentBlockReorderer {
         }
     }
 
-    /** Casa o nome declarado por um bloco {@code nome{L}= ...} impresso pelo Frama-C. */
-    private static final Pattern LABELED_DECL_NAME = Pattern.compile("([A-Za-z_]\\w*)\\{L\\}\\s*=");
+    /**
+     * Casa o nome declarado com label implícito {@code {L}} que outros blocos podem referenciar:
+     * {@code nome{L}= ...} (constante/predicado lógico) e {@code nome{L}(...)} (função/predicado com
+     * parâmetros) impressos pelo Frama-C.
+     */
+    private static final Pattern LABELED_DECL_NAME = Pattern.compile("([A-Za-z_]\\w*)\\{L\\}\\s*[=(]");
+
+    /**
+     * Casa qualquer declaração com label implícito {@code {L}}, inclusive {@code axiom nome{L}:} —
+     * o Frama-C só põe o label em quem lê memória, então o bloco inteiro depende dos globais e dos
+     * outros blocos {@code {L}} que ele cita.
+     */
+    private static final Pattern LABELED_ANY_DECL = Pattern.compile("([A-Za-z_]\\w*)\\{L\\}\\s*[=(:]");
 
     /** Casa a referência direta a um global C na forma {@code nome{L}= GLOBAL;}. */
     private static final Pattern LABELED_LOGIC_CONST_REF =
@@ -92,8 +103,42 @@ final class MemoryDependentBlockReorderer {
         return paramDecl.matcher(text).find();
     }
 
+    /**
+     * Declaração de global C no nível de topo do {@code merged_code.c} (coluna zero, como o Frama-C
+     * imprime), ex. {@code int32_t RemoveArray__array[7 + 1];} ou {@code static int32_t x;}. As
+     * declarações locais de função saem indentadas e não casam.
+     */
+    private static final Pattern TOP_LEVEL_C_GLOBAL_DECL =
+            Pattern.compile(
+                    "(?m)^(?:(?:static|extern|const|volatile)\\s+)*[A-Za-z_]\\w*(?:\\s*\\*)*\\s+\\**\\s*"
+                            + "([A-Za-z_]\\w*)\\s*(?:\\[[^\\]]*\\])*\\s*;");
+
+    /** Identificador C/ACSL (sem os precedidos por {@code \\}, ex. {@code \\at}). */
+    private static final Pattern IDENTIFIER = Pattern.compile("(?<![\\\\\\w])[A-Za-z_]\\w*");
+
+    /** Global C de topo → fim da sua última declaração fora de comentários ACSL. */
+    private static Map<String, Integer> topLevelCGlobals(String content, List<AcsCommentSpan> spans) {
+        Map<String, Integer> out = new HashMap<>();
+        Matcher m = TOP_LEVEL_C_GLOBAL_DECL.matcher(content);
+        while (m.find()) {
+            int start = m.start();
+            boolean insideAcsl = false;
+            for (AcsCommentSpan sp : spans) {
+                if (start >= sp.start && start < sp.end) {
+                    insideAcsl = true;
+                    break;
+                }
+            }
+            if (!insideAcsl) {
+                out.merge(m.group(1), m.end(), Math::max);
+            }
+        }
+        return out;
+    }
+
     private static String moveOneMemoryDependentVariableBlockIfNeeded(String content) {
         List<AcsCommentSpan> spans = AcslCommentSpanScanner.findAllAcsCommentSpans(content);
+        Map<String, Integer> cGlobals = topLevelCGlobals(content, spans);
         // Nome declarado {L}= -> span que o declara, para localizar dependências entre blocos
         // (ex.: "iter_services_i_invariant{L}=" depende de "index{L}=" declarado noutro bloco).
         Map<String, AcsCommentSpan> declaringSpan = new HashMap<>();
@@ -109,7 +154,7 @@ final class MemoryDependentBlockReorderer {
             }
         }
         for (AcsCommentSpan sp : spans) {
-            Matcher declMatcher = LABELED_DECL_NAME.matcher(sp.text);
+            Matcher declMatcher = LABELED_ANY_DECL.matcher(sp.text);
             if (!declMatcher.find()) {
                 continue; // só reordena blocos que o Frama-C marcou como dependentes de memória
             }
@@ -127,6 +172,16 @@ final class MemoryDependentBlockReorderer {
             while (arrayFnMatcher.find()) {
                 int end = lastStaticDeclEndOutsideSpan(content, arrayFnMatcher.group(1), spans);
                 if (end > latestDepEnd) {
+                    latestDepEnd = end;
+                }
+            }
+            // Qualquer outro global C de topo que o bloco leia, seja qual for a forma impressa pelo
+            // Frama-C: "&(X[0])" quando o array não precisa de cast (int32_t é int), array2d_*,
+            // campos "X.f", ... Os dois padrões acima só cobrem "nome{L}= X;" e "((cast)X, n)".
+            Matcher idMatcher = IDENTIFIER.matcher(sp.text);
+            while (idMatcher.find()) {
+                Integer end = cGlobals.get(idMatcher.group());
+                if (end != null && end > latestDepEnd && !isNameShadowedAsParameter(sp.text, idMatcher.group())) {
                     latestDepEnd = end;
                 }
             }
