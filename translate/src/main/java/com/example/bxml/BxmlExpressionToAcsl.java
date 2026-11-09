@@ -346,10 +346,40 @@ public final class BxmlExpressionToAcsl {
             case "EmptySeq" -> true;
             case "Binary_Exp" -> {
                 String bOp = exp.getAttribute("op");
-                yield isSequenceAppendOp(bOp) || isSequencePrependOp(bOp);
+                // restrict_front/restrict_tail devolvem \list mesmo sobre uma relação (ponte
+                // function_to_list); ^ só existe entre sequências em B
+                yield isSequenceAppendOp(bOp) || isSequencePrependOp(bOp) || isSequenceConcatOp(bOp)
+                        || isSequenceRestrictFrontOp(bOp) || isSequenceRestrictTailOp(bOp);
             }
+            // front/tail/rev/conc viram as funções de \list da biblioteca (caso default de translateUnary)
+            case "Unary_Exp" -> java.util.Set.of("front", "tail", "rev", "conc")
+                    .contains(exp.getAttribute("op").trim());
+            // extensão de sequência [a, b, ...]
+            case "Nary_Exp" -> "[".equals(exp.getAttribute("op").trim());
             default -> false;
         };
+    }
+
+    /**
+     * Como {@link #isListValued}, mas um {@code Id} só conta pelo tipo lógico conhecido (desta ou
+     * de outra máquina), sem o fallback por {@code typref}. Esse fallback nunca responde {@code
+     * \\list} (uma sequência B tem tipo bruto de relação), mas converter o {@code typref} de uma
+     * relação com domínio tupla registra um tipo de tupla para a máquina como efeito colateral; a
+     * aplicação {@code f(x)}, que consulta isto para TODA função, não pode disparar esse registro.
+     */
+    static boolean isKnownListValued(Element exp, BxmlTranslateContext ctx) {
+        if (exp == null || ctx == null) {
+            return false;
+        }
+        if ("Id".equals(exp.getLocalName())) {
+            String name = exp.getAttribute("value");
+            String t = ctx.variableLogicTypes().get(name);
+            if (t == null) {
+                t = ctx.crossMachineVariableLogicTypes().get(name);
+            }
+            return t != null && t.startsWith("\\list");
+        }
+        return isListValued(exp, ctx);
     }
 
     private static boolean isListValuedId(Element idEl, BxmlTranslateContext ctx) {
@@ -717,6 +747,12 @@ public final class BxmlExpressionToAcsl {
         if (op == null) return false;
         String o = op.trim();
         return "><".equals(o) || "&gt;&lt;".equals(o);
+    }
+
+    /** {@code e - 1}, com parênteses quando {@code e} não é um identificador ou literal simples. */
+    private static String minusOne(String e) {
+        String t = e == null ? "" : e.trim();
+        return t.matches("[A-Za-z_]\\w*|\\d+") ? t + " - 1" : "(" + t + ") - 1";
     }
 
     /** B append à sequência {@code s <- x} → {@code \\concat(s, [| x |])} (E-ACSL / listas). */
@@ -1129,9 +1165,15 @@ public final class BxmlExpressionToAcsl {
                 List<String> args = flattenMapletChain(pair[1], ctx);
                 return name + "(" + String.join(", ", args) + ")";
             }
-            // f(x) em B → function_apply(f, x) em ACSL
             String left = translate(pair[0], ctx);
             String right = translate(pair[1], ctx);
+            // s(i) sobre uma sequência B (1-based) → \nth(s, i - 1) (\list é 0-based). Antes saía
+            // sempre function_apply, que só aceita Function<A,B>: "incompatible types \list<integer>
+            // and DRelation" (lunh, SIGMA sobre a sequência num).
+            if (isKnownListValued(pair[0], ctx)) {
+                return "\\nth(" + left + ", " + minusOne(right) + ")";
+            }
+            // f(x) em B → function_apply(f, x) em ACSL
             return "function_apply(" + left + ", " + right + ")";
         }
         // B imagem relacional r[E]: r[{x}] (E singleton em extensão) → apply(r, x) — apply<A,B> só
