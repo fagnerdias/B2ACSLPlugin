@@ -90,6 +90,17 @@ public final class B2ACSLPipeline {
                     + "        loop variant op2 - i;\n";
 
     /** {@code true} se {@code node} (ou algum descendente) for {@code Binary_Exp op='**i'}. */
+    /** {@code true} se alguma fonte C do projeto ({@link CSourceFiles}) chama ou declara {@code name(...)}. */
+    private static boolean cSourcesCallFunction(Path cDir, String name) throws IOException {
+        java.util.regex.Pattern call = java.util.regex.Pattern.compile("\\b" + java.util.regex.Pattern.quote(name) + "\\s*\\(");
+        for (Path f : CSourceFiles.list(cDir, ".c", ".h")) {
+            if (call.matcher(Files.readString(f, StandardCharsets.ISO_8859_1)).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean containsIntegerPowerOperator(Node node) {
         if (node == null) return false;
         if (node.getNodeType() == Node.ELEMENT_NODE) {
@@ -498,11 +509,18 @@ public final class B2ACSLPipeline {
                     topLevelImportMachineNames(abstractMachineNames, dependencyOnlyMachineNames);
             List<Path> topLevelAcslFiles = new ArrayList<>(
                     filterAcslFilesByMachineNames(acslFiles, topLevelImportMachines));
-            if (usesIntegerPowerOperator) {
-                Path bPowAcsl = acslDir.resolve(INTEGER_POWER_HELPER_FUNCTION_NAME + ".acsl");
+            // O contrato de b_pow só pode ser importado se a função existir no C: o ** pode aparecer
+            // só na especificação (ex. "res = aa ** nn" numa máquina cuja implementação calcula a
+            // potência com um laço), e então o -acsl-import falha com "could not find function
+            // b_pow". Por isso a decisão olha também as fontes C.
+            Path bPowAcsl = acslDir.resolve(INTEGER_POWER_HELPER_FUNCTION_NAME + ".acsl");
+            if (usesIntegerPowerOperator
+                    && cSourcesCallFunction(cDir, INTEGER_POWER_HELPER_FUNCTION_NAME)) {
                 Files.writeString(bPowAcsl, INTEGER_POWER_HELPER_ACSL_SKETCH, StandardCharsets.UTF_8);
                 acslFiles.add(bPowAcsl);
                 topLevelAcslFiles.add(bPowAcsl);
+            } else {
+                Files.deleteIfExists(bPowAcsl);
             }
             if (!topLevelImportMachines.isEmpty()) {
                 System.out.println(
