@@ -124,8 +124,8 @@ public final class BxmlTypeRegistry {
         // POW(T) → T
         if (full.startsWith("POW(") && full.endsWith(")")) {
             String inner = full.substring(4, full.length() - 1).trim();
-            // B: NAT ⊆ ℤ; POW(NAT) para conjuntos de naturais
-            if ("INTEGER".equals(inner)) return "NAT";
+            // testemunha de tipo de empty(...): o mesmo conjunto da lib que o B2ACSLRules usa
+            if ("INTEGER".equals(inner)) return "INT";
             return inner;
         }
         return full;

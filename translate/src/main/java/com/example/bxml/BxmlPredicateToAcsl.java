@@ -674,11 +674,8 @@ public final class BxmlPredicateToAcsl {
             if (v == null) {
                 v = "";
             }
-            return switch (v.trim()) {
-                case "NAT", "INTEGER", "INT" -> "NAT";
-                case "BOOL" -> "BOOL";
-                default -> BxmlExpressionToAcsl.translate(codomainEl, ctx);
-            };
+            String lib = BxmlExpressionToAcsl.libSetForBTypeName(v);
+            return lib != null ? lib : BxmlExpressionToAcsl.translate(codomainEl, ctx);
         }
         return BxmlExpressionToAcsl.translate(codomainEl, ctx);
     }
@@ -716,17 +713,13 @@ public final class BxmlPredicateToAcsl {
         if (typeArg != null && "Id".equals(typeArg.getLocalName())) {
             String v = typeArg.getAttribute("value");
             if (v == null || v.isBlank()) return "NAT";
-            return switch (v) {
-                case "NAT", "INTEGER", "INT" -> "NAT";
-                case "BOOL" -> "BOOL";
-                default -> {
-                    if (ctx != null) {
-                        String renamed = ctx.enumeratedSetRenames().get(v);
-                        if (renamed != null) yield renamed;
-                    }
-                    yield v;
-                }
-            };
+            String lib = BxmlExpressionToAcsl.libSetForBTypeName(v);
+            if (lib != null) return lib;
+            if (ctx != null) {
+                String renamed = ctx.enumeratedSetRenames().get(v);
+                if (renamed != null) return renamed;
+            }
+            return v;
         }
         return "NAT";
     }

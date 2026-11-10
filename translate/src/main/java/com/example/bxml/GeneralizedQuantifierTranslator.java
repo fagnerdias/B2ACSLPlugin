@@ -22,7 +22,7 @@ final class GeneralizedQuantifierTranslator {
      * Filtrados durante a detecção de variáveis livres em {@link #translateQuantifiedExp}.
      */
     private static final java.util.Set<String> B_NON_PARAM_IDS = java.util.Set.of(
-            "NAT", "NAT1", "INTEGER", "INT", "BOOL", "REAL", "STRING",
+            "NAT", "NAT1", "INTEGER", "INT", "NATURAL", "NATURAL1", "BOOL", "REAL", "STRING",
             "TRUE", "FALSE", "MAXINT", "MININT");
 
     /**

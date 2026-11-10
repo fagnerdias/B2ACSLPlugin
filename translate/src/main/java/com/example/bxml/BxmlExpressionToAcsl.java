@@ -860,8 +860,27 @@ public final class BxmlExpressionToAcsl {
         return switch (id.trim()) {
             case "MAXINT" -> "2147483647"; // INT_MAX (32-bit int)
             case "MININT" -> "-2147483648"; // INT_MIN (32-bit int)
-            case "INTEGER" -> "INT";
-            default -> id;
+            default -> {
+                String lib = libSetForBTypeName(id);
+                yield lib != null ? lib : id;
+            }
+        };
+    }
+
+    /**
+     * Conjunto da B2ACSLLib para um conjunto B predefinido, como no B2ACSLRules ({@code predefIds}):
+     * {@code INT}/{@code INTEGER} → {@code INT}, {@code NAT}/{@code NATURAL} → {@code NAT},
+     * {@code NAT1}/{@code NATURAL1} → {@code NAT1}, {@code BOOL} → {@code BOOL}; {@code null} para os
+     * demais nomes. A lib só tem os conjuntos limitados a 32 bits (os valores C são {@code int32_t}).
+     */
+    static String libSetForBTypeName(String id) {
+        if (id == null) return null;
+        return switch (id.trim()) {
+            case "INT", "INTEGER" -> "INT";
+            case "NAT", "NATURAL" -> "NAT";
+            case "NAT1", "NATURAL1" -> "NAT1";
+            case "BOOL" -> "BOOL";
+            default -> null;
         };
     }
 
