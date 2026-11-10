@@ -282,6 +282,7 @@ public final class BxmlInitialisationTranslator {
             case "Becomes_Such_That" -> parseBecomesSuchThatSub(sub, ensures, ctx);
             case "Select" -> parseSelectAsConditionalEnsures(sub, ensures, ctx, oldNames);
             case "If_Sub" -> parseIfSubAsConditionalEnsures(sub, ensures, ctx, oldNames);
+            case "Operation_Call" -> parseOperationCall(sub, ensures, ctx, oldNames);
             default -> { /* outras substituições: extensão futura */ }
         }
     }
@@ -959,7 +960,20 @@ public final class BxmlInitialisationTranslator {
                 parseIfSubAsConditionalEnsures(ch, ensures, ctx, allLhsNames);
             } else if ("Select".equals(ch.getLocalName())) {
                 parseSelectAsConditionalEnsures(ch, ensures, ctx, allLhsNames);
+            } else if ("Operation_Call".equals(ch.getLocalName())) {
+                parseOperationCall(ch, ensures, ctx, allLhsNames);
             }
+        }
+    }
+
+    /**
+     * {@code pp <-- op(a)}: a saída definida pela operação chamada ({@code pp == E[a/x]}, ver
+     * {@link OperationCallOutputSpecs}); o lado direito lê o pré-estado das variáveis atribuídas.
+     */
+    private static void parseOperationCall(
+            Element call, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
+        for (String c : OperationCallOutputSpecs.outputClauses(call, ctx)) {
+            ensures.add(oldNames == null || oldNames.isEmpty() ? c : wrapLhsVarsInRhsWithOld(c, oldNames));
         }
     }
 
@@ -1019,6 +1033,17 @@ public final class BxmlInitialisationTranslator {
             case "Nary_Sub", "Bloc_Sub" -> collectChildSubAssignedLhsNames(sub, out);
             case "If_Sub" -> collectIfSubAssignedLhsNames(sub, out);
             case "Select" -> collectSelectAssignedLhsNames(sub, out);
+            // as saídas reais de pp <-- op(a) também são escritas
+            case "Operation_Call" -> {
+                Element outs = BxmlDomUtils.firstChildElement(sub, "Output_Parameters");
+                if (outs != null) {
+                    for (Element o : BxmlDomUtils.directExpChildren(outs)) {
+                        if ("Id".equals(o.getLocalName()) && !o.getAttribute("value").isBlank()) {
+                            out.add(o.getAttribute("value").trim());
+                        }
+                    }
+                }
+            }
             default -> { /* Skip, ANY_Sub, etc. — nada a coletar */ }
         }
     }

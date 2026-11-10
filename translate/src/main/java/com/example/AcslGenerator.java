@@ -564,7 +564,16 @@ public final class AcslGenerator {
                 }
             }
         }
-        List<OperationAcsl> operations =
+        // pp <-- op(a) no corpo abstrato: a saída definida pela operação chamada (só no contrato
+        // real; o ghost é traduzido fora deste intervalo — ver OperationCallOutputSpecs)
+        List<String> calleeMachineNames = new ArrayList<>(transitiveSeenMachineNames);
+        for (String m : transitiveImportedMachineNames) {
+            if (!calleeMachineNames.contains(m)) calleeMachineNames.add(m);
+        }
+        com.example.bxml.OperationCallOutputSpecs.bind(bxmlDirectory, calleeMachineNames);
+        List<OperationAcsl> operations;
+        try {
+        operations =
                 isAbstraction
                         ? new ArrayList<>(
                                 BxmlOperationsTranslator.translateOperations(
@@ -584,6 +593,9 @@ public final class AcslGenerator {
                                         new ArrayList<>(invariantSourceMachineNames),
                                         collapsedVariableNames))
                         : new ArrayList<>();
+        } finally {
+            com.example.bxml.OperationCallOutputSpecs.unbind();
+        }
         // LOCAL_OPERATIONS (ex. cv_struct_i's lclear): funções auxiliares privadas da
         // implementação, sem contraparte na máquina abstrata — translateOperations acima nunca as
         // visita (itera só <Operations> de machineEl, a máquina ABSTRATA). Ver
