@@ -280,11 +280,49 @@ public final class BxmlExpressionToAcsl {
                         || isDirectProductOp(op)
                         || "prj1".equals(op) || "prj2".equals(op)
                         || "<+".equals(op)
-                        || ";".equals(op == null ? "" : op.trim());
+                        || ";".equals(op == null ? "" : op.trim())
+                        // iterate(R, n) é uma relação
+                        || "iterate".equals(op)
+                        // f(x) com codomínio conjunto (ex. player_islands(pp) : POW(ISLAND))
+                        || ("(".equals(op == null ? "" : op.trim()) && hasPlainPowTypref(exp, ctx));
+            }
+            // UNION/INTER quantificados devolvem sempre um conjunto
+            case "Quantified_Exp" -> {
+                String type = exp.getAttribute("type");
+                yield "UNION".equals(type) || "INTER".equals(type);
             }
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
             default -> false;
         };
+    }
+
+    /**
+     * {@code true} se o tipo B cru do {@code typref} de {@code exp} é {@code POW(X)} sem produto no
+     * nível de topo de {@code X} — um conjunto, nunca uma relação nem uma sequência (que em B também é
+     * {@code POW(INTEGER*T)} e em ACSL é {@code \list}, comparada com {@code ==}). Lê só o tipo cru:
+     * {@code acslVariableLogicTypeFromTypref} registaria tipos de tupla como efeito colateral.
+     */
+    private static boolean hasPlainPowTypref(Element exp, BxmlTranslateContext ctx) {
+        String tr = exp.getAttribute("typref");
+        if (tr == null || tr.isBlank() || ctx == null) return false;
+        String raw;
+        try {
+            raw = ctx.types().getRawType(Integer.parseInt(tr.trim()));
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        if (raw == null) return false;
+        String t = raw.replace(" ", "");
+        if (!t.startsWith("POW(") || !t.endsWith(")")) return false;
+        String inner = t.substring(4, t.length() - 1);
+        int depth = 0;
+        for (int i = 0; i < inner.length(); i++) {
+            char c = inner.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == '*' && depth == 0) return false;
+        }
+        return true;
     }
 
     /**
