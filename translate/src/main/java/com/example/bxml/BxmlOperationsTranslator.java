@@ -963,7 +963,8 @@ public final class BxmlOperationsTranslator {
                     GhostDomainRestrictionRewriter.partialFunctionDomainFromPreconditionInPred(
                             predRoot, qName);
             if (domain == null) continue;
-            String len = GhostDomainRestrictionRewriter.arrayLengthAcslFromDomain(domain, ctx, Set.of());
+            // ultimo indice (o limite do \valid/assigns), nao o comprimento
+            String len = GhostDomainRestrictionRewriter.arrayLastIndexAcslFromDomain(domain, ctx);
             if (len == null || len.isBlank()) continue;
             for (String p : funcTypedOutputs) {
                 if (out.containsKey(p)) continue;
