@@ -149,6 +149,18 @@ public final class BxmlTypeRegistry {
     }
 
     /**
+     * Forma genérica ({@code Set<Tuple<...> >}, com {@code > >} separados) de um nome achatado
+     * registado por esta máquina ({@code Relation_integer_Set_integer}), ou {@code type} inalterado.
+     * Um nome achatado não serve de binder num {@code \forall} de axioma nem é reconhecido pelo
+     * universo ghost isolado; a forma genérica serve aos dois (o ghost troca Set/Tuple por DSet/DTuple).
+     */
+    public String expandTupleCodomainAlias(String type) {
+        if (type == null) return null;
+        String def = tupleCodomainTypes.definitionOf(type);
+        return def == null ? type : BxmlComprehensionRegistry.normalizeTypeSpacing(def);
+    }
+
+    /**
      * Converte o texto de tipo B (de {@link #getRawType}) num tipo de lógica ACSL para variáveis.
      */
     public String rawBTypeToAcslVariableLogicType(String raw) {

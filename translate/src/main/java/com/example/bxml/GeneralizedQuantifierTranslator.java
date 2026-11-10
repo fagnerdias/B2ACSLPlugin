@@ -574,7 +574,7 @@ final class GeneralizedQuantifierTranslator {
             if (root != null) collectIdValues(root, allIds, idTyprefs);
         }
         allIds.removeAll(boundVarNames);
-        allIds.removeAll(ctx.variableLogicTypes().keySet());
+        allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
@@ -985,7 +985,7 @@ final class GeneralizedQuantifierTranslator {
         collectIdValues(bodyExp, allIds, idTyprefs);
         if (guardPred != null) collectIdValues(guardPred, allIds, idTyprefs);
         allIds.remove(boundVarName);
-        allIds.removeAll(ctx.variableLogicTypes().keySet());
+        allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
@@ -1049,8 +1049,9 @@ final class GeneralizedQuantifierTranslator {
         collectIdValues(scanRoot, allIds, idTyprefs);
         if (guardPred != null) collectIdValues(guardPred, allIds, idTyprefs);
         allIds.removeAll(boundSet);
-        allIds.removeAll(ctx.variableLogicTypes().keySet());
-        allIds.removeAll(ctx.crossMachineVariableNames());
+        // Variáveis de estado (desta máquina ou de outra) viram parâmetro, como nos demais helpers:
+        // o axioma _def não tem rótulo e valeria para todo estado de memória.
+        allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
@@ -1274,7 +1275,15 @@ final class GeneralizedQuantifierTranslator {
         if ((t == null || t.isBlank()) && typrefs != null && typrefs.containsKey(v)) {
             t = ctx.types().acslVariableLogicTypeFromTypref(typrefs.get(v));
         }
-        return t == null || t.isBlank() ? "integer" : t;
+        if (t == null || t.isBlank()) return "integer";
+        String base = v.endsWith(BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX)
+                ? v.substring(0, v.length() - BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX.length())
+                : v;
+        if (ctx.stateVariableNames().contains(base) || ctx.crossMachineVariableNames().contains(base)) {
+            // parâmetro de estado: binder do axioma — forma genérica, não o nome achatado
+            t = ctx.types().expandTupleCodomainAlias(t);
+        }
+        return t;
     }
 
     /** Nomes das variáveis ligadas por um {@code Quantified_Exp}/{@code Quantified_Pred}, a partir do seu filho {@code Variables}. */

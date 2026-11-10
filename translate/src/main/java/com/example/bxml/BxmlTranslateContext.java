@@ -26,10 +26,12 @@ public record BxmlTranslateContext(
         SigmaFunctionRegistry sigmaRegistry,
         UnionInterFunctionRegistry unionInterRegistry,
         Set<String> deferredSetTypedParameterNames,
-        BxmlAnnotationScope annotationScope) {
+        BxmlAnnotationScope annotationScope,
+        Set<String> stateVariableNames) {
 
     public BxmlTranslateContext {
         annotationScope = annotationScope == null ? BxmlAnnotationScope.CONTRACT : annotationScope;
+        stateVariableNames = stateVariableNames == null ? Set.of() : stateVariableNames;
     }
 
     /** Sem registo de lambdas/sigma/union-inter nem renomeação de enumerados. */
@@ -38,12 +40,12 @@ public record BxmlTranslateContext(
             BxmlComprehensionRegistry comprehensions,
             Map<String, String> variableLogicTypes) {
         this(types, comprehensions, variableLogicTypes, null, Map.of(), Map.of(), Set.of(), Set.of(), "",
-                Set.of(), Map.of(), Set.of(), null, null, Set.of(), BxmlAnnotationScope.CONTRACT);
+                Set.of(), Map.of(), Set.of(), null, null, Set.of(), BxmlAnnotationScope.CONTRACT, Set.of());
     }
 
     public BxmlTranslateContext(BxmlTypeRegistry types, BxmlComprehensionRegistry comprehensions) {
         this(types, comprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), "", Set.of(),
-                Map.of(), Set.of(), null, null, Set.of(), BxmlAnnotationScope.CONTRACT);
+                Map.of(), Set.of(), null, null, Set.of(), BxmlAnnotationScope.CONTRACT, Set.of());
     }
 
     /** Retorna uma cópia deste contexto com o registo de lambdas substituído. */
@@ -64,7 +66,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /** Retorna uma cópia deste contexto com o registo de funções SIGMA/PI/MIN/MAX substituído. */
@@ -85,7 +88,8 @@ public record BxmlTranslateContext(
                 registry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /** Retorna uma cópia deste contexto com o registo de funções UNION/INTER substituído. */
@@ -106,7 +110,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 registry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /** Retorna uma cópia deste contexto com o mapa de renomeação de valores enumerados substituído. */
@@ -127,7 +132,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /** Retorna uma cópia com renomeação de conjuntos enumerados (ex. {@code ALARM_STATUS} → {@code ctx__ALARM_STATUS}). */
@@ -148,7 +154,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /** Retorna uma cópia deste contexto com os nomes de conjuntos enumerados substituídos. */
@@ -169,7 +176,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /**
@@ -197,7 +205,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /**
@@ -224,7 +233,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /**
@@ -251,7 +261,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /**
@@ -288,7 +299,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 names == null ? Set.of() : names,
-                annotationScope);
+                annotationScope,
+                stateVariableNames);
     }
 
     /**
@@ -305,6 +317,9 @@ public record BxmlTranslateContext(
         if (extra == null || extra.isEmpty()) return this;
         Map<String, String> merged = new LinkedHashMap<>(extra);
         merged.putAll(variableLogicTypes);
+        // extra são variáveis da cadeia de refinamento: também são estado (ver stateVariableNames)
+        java.util.LinkedHashSet<String> state = new java.util.LinkedHashSet<>(stateVariableNames);
+        state.addAll(extra.keySet());
         return new BxmlTranslateContext(
                 types,
                 comprehensions,
@@ -321,7 +336,47 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                annotationScope);
+                annotationScope,
+                state);
+    }
+
+    /**
+     * Cópia com {@link #stateVariableNames()} substituído — usado por quem recria um contexto a
+     * partir de {@link #variableLogicTypes()} (ex. o contexto do corpo de uma compreensão), para que
+     * a mesma divisão constante × variável de estado valha lá.
+     */
+    public BxmlTranslateContext withStateVariableNames(Set<String> names) {
+        return new BxmlTranslateContext(
+                types,
+                comprehensions,
+                variableLogicTypes,
+                lambdaRegistry,
+                enumValueRenames,
+                enumeratedSetRenames,
+                enumeratedSetNames,
+                multiArgLambdaConstantNames,
+                machineName,
+                crossMachineVariableNames,
+                crossMachineVariableLogicTypes,
+                declaredSetNames,
+                sigmaRegistry,
+                unionInterRegistry,
+                deferredSetTypedParameterNames,
+                annotationScope,
+                names == null ? Set.of() : names);
+    }
+
+    /**
+     * Nomes de {@link #variableLogicTypes()} que são globais legítimos dentro de uma função lógica
+     * ou axioma gerado: as constantes. As variáveis de estado ({@link #stateVariableNames()}) ficam
+     * de fora — um helper que lê estado tem de o receber como parâmetro, senão o axioma (sem rótulo)
+     * vale para todo estado de memória e contradiz qualquer operação que mude essa variável.
+     */
+    public Set<String> helperGlobalLogicNames() {
+        if (stateVariableNames.isEmpty()) return variableLogicTypes.keySet();
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>(variableLogicTypes.keySet());
+        out.removeAll(stateVariableNames);
+        return out;
     }
 
     /** Retorna uma cópia deste contexto com o escopo de anotação substituído (ver {@link BxmlAnnotationScope}). */
@@ -342,7 +397,8 @@ public record BxmlTranslateContext(
                 sigmaRegistry,
                 unionInterRegistry,
                 deferredSetTypedParameterNames,
-                scope);
+                scope,
+                stateVariableNames);
     }
 
     /**
@@ -395,16 +451,18 @@ public record BxmlTranslateContext(
         BxmlTranslateContext tmp =
                 new BxmlTranslateContext(
                         types, reg, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(), machineName,
-                        Set.of(), Map.of(), setNames, null, null, Set.of(), BxmlAnnotationScope.CONTRACT);
+                        Set.of(), Map.of(), setNames, null, null, Set.of(), BxmlAnnotationScope.CONTRACT, Set.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         merged.putAll(BxmlMachineVariables.inferAbstractConstantsLogicTypesFromProperties(machineEl, types));
-        merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
+        Map<String, String> variableTypes = BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp);
+        merged.putAll(variableTypes);
         Set<String> lambdaConstantNames =
                 BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet();
         return new BxmlTranslateContext(
                 types, reg, merged, null, Map.of(), Map.of(), Set.of(), lambdaConstantNames, machineName,
-                Set.of(), Map.of(), setNames, null, null, Set.of(), BxmlAnnotationScope.CONTRACT);
+                Set.of(), Map.of(), setNames, null, null, Set.of(), BxmlAnnotationScope.CONTRACT,
+                new java.util.LinkedHashSet<>(variableTypes.keySet()));
     }
 
     /**
@@ -444,13 +502,14 @@ public record BxmlTranslateContext(
         BxmlTranslateContext tmp =
                 new BxmlTranslateContext(
                         types, sharedComprehensions, Map.of(), null, Map.of(), Map.of(), Set.of(), Set.of(),
-                        machineName, Set.of(), Map.of(), setNames, null, null, Set.of(), BxmlAnnotationScope.CONTRACT);
+                        machineName, Set.of(), Map.of(), setNames, null, null, Set.of(), BxmlAnnotationScope.CONTRACT, Set.of());
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         merged.putAll(BxmlMachineVariables.inferConcreteConstantsLogicTypes(machineEl, types));
         merged.putAll(BxmlMachineVariables.inferAbstractConstantsLogicTypesFromProperties(machineEl, types));
         Set<String> lambdaConstantNames =
                 new java.util.LinkedHashSet<>(
                         BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet());
+        java.util.LinkedHashSet<String> stateNames = new java.util.LinkedHashSet<>();
         if (abstractMachineElForSharedVariableTypes != null) {
             BxmlTypeRegistry absTypes =
                     BxmlTypeRegistry.fromMachine(abstractMachineElForSharedVariableTypes);
@@ -472,17 +531,23 @@ public record BxmlTranslateContext(
                             null,
                             null,
                             Set.of(),
-                            BxmlAnnotationScope.CONTRACT);
-            merged.putAll(
+                            BxmlAnnotationScope.CONTRACT,
+                            Set.of());
+            Map<String, String> absVariableTypes =
                     BxmlMachineVariables.inferVariableLogicTypes(
-                            abstractMachineElForSharedVariableTypes, tmpAbs));
+                            abstractMachineElForSharedVariableTypes, tmpAbs);
+            merged.putAll(absVariableTypes);
+            stateNames.addAll(absVariableTypes.keySet());
             lambdaConstantNames.addAll(
                     BxmlConstantsAndProperties.collectLambdaDefsFromProperties(
                             abstractMachineElForSharedVariableTypes).keySet());
         }
-        merged.putAll(BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp));
+        Map<String, String> variableTypes = BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp);
+        merged.putAll(variableTypes);
+        stateNames.addAll(variableTypes.keySet());
         return new BxmlTranslateContext(
                 types, sharedComprehensions, merged, null, Map.of(), Map.of(), Set.of(),
-                lambdaConstantNames, machineName, Set.of(), Map.of(), setNames, null, null, Set.of(), BxmlAnnotationScope.CONTRACT);
+                lambdaConstantNames, machineName, Set.of(), Map.of(), setNames, null, null, Set.of(),
+                BxmlAnnotationScope.CONTRACT, stateNames);
     }
 }

@@ -558,7 +558,10 @@ public final class BxmlComprehensionRegistry {
                     .withCrossMachineVariableLogicTypes(translateCtx.crossMachineVariableLogicTypes())
                     .withEnumRenames(translateCtx.enumValueRenames())
                     .withEnumeratedSetRenames(translateCtx.enumeratedSetRenames())
-                    .withEnumeratedSetNames(translateCtx.enumeratedSetNames());
+                    .withEnumeratedSetNames(translateCtx.enumeratedSetNames())
+                    // mesma divisão constante × estado do chamador: as variáveis de estado viram
+                    // parâmetro da compreensão (ver BxmlTranslateContext#helperGlobalLogicNames)
+                    .withStateVariableNames(translateCtx.stateVariableNames());
         }
         return ctx;
     }
@@ -684,7 +687,16 @@ public final class BxmlComprehensionRegistry {
             names.add(name);
             Integer typref = types != null ? findTyprefForIdName(body, name) : null;
             String t = typref != null ? types.acslVariableLogicTypeFromTypref(typref) : null;
-            resolvedTypes.add(normalizeTypeSpacing(t != null && !t.isBlank() ? t : ft[1].get(i)));
+            t = t != null && !t.isBlank() ? t : ft[1].get(i);
+            if (ctx.stateVariableNames().contains(name)) {
+                // Parâmetro de estado: o tipo autoritativo é o da declaração da variável (o typref
+                // cru não distingue \list de relação — ex. numbers_s : seq(NAT) → POW(INTEGER*INTEGER)),
+                // na forma genérica (binder do axioma), não o nome achatado.
+                String declared = ctx.variableLogicTypes().get(name);
+                if (declared != null && !declared.isBlank()) t = declared;
+                if (types != null) t = types.expandTupleCodomainAlias(t);
+            }
+            resolvedTypes.add(normalizeTypeSpacing(t));
         }
         return new List[] {names, resolvedTypes};
     }

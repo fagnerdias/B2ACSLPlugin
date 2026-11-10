@@ -190,7 +190,7 @@ final class DummyGhostAxiomaticBuilder {
                         sb.append("(");
                         for (int i = 0; i < free[0].size(); i++) {
                             if (i > 0) sb.append(", ");
-                            sb.append(dummyAxiomaticLogicType(free[1].get(i)))
+                            sb.append(dummyComprehensionParamType(free[1].get(i)))
                                     .append(" ")
                                     .append(free[0].get(i));
                         }
@@ -533,6 +533,23 @@ final class DummyGhostAxiomaticBuilder {
      * declaradas no bloco {@code axiomatic <M>_ci_abstract_constants} (fora do {@code dummy_ghost}
      * principal, mas com a MESMA necessidade de tipos D-prefixados/genéricos do universo isolado).
      */
+    /**
+     * Tipo de um parâmetro de {@code dummy_<M>__set_comprehension_k}. Um parâmetro de estado tem
+     * tipo genérico aninhado (ex. {@code Set<Tuple<integer, Set<integer> > >}, ver {@link
+     * BxmlTypeRegistry#expandTupleCodomainAlias}), e o universo ghost isolado precisa de D-tipos em
+     * todos os níveis — {@link #dummyAxiomaticLogicType} só troca a cabeça do tipo.
+     */
+    static String dummyComprehensionParamType(String inferred) {
+        if (inferred == null || inferred.indexOf('<') < 0 || inferred.trim().startsWith("\\list")) {
+            return dummyAxiomaticLogicType(inferred);
+        }
+        String s = inferred.trim();
+        s = s.replaceAll("\\b(?:Relation|Function)<", "DRelation<");
+        s = s.replaceAll("(?<!D)\\bSet<", "DSet<");
+        s = s.replaceAll("(?<!D)\\bTuple<", "DTuple<");
+        return BxmlComprehensionRegistry.normalizeTypeSpacing(s);
+    }
+
     static String dummyAxiomaticLogicType(String inferred) {
         if (inferred == null || inferred.isBlank()) {
             return "integer";

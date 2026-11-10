@@ -885,7 +885,8 @@ public final class AcslGenerator {
         appendBlockWithSpacing(state.sb, varsMerged);
     }
 
-    private static void appendMergedConstantsPropertiesAndValuesBlocks(AcslGenerationState state) {
+    private static void appendMergedConstantsPropertiesAndValuesBlocks(AcslGenerationState state)
+            throws IOException {
         List<Element> mergedMachineElements = state.mergedMachineElements;
         BxmlTranslateContext ctx = state.ctx;
         StringBuilder sb = state.sb;
@@ -921,8 +922,17 @@ public final class AcslGenerator {
         // Compreensões: todas as variáveis e constantes já estão declaradas.
         // set_comprehension_k deve estar declarado antes de _i_values (que o referencia).
         if (!ctx.comprehensions().isEmpty()) {
-            sb.append(ctx.comprehensions().formatAxiomaticBlock(state.baseName, ctx));
-            sb.append("\n");
+            String comprehensionBlock = ctx.comprehensions().formatAxiomaticBlock(state.baseName, ctx);
+            if (hasGenericTypedBinder(comprehensionBlock)) {
+                // Binder Set<..>/Relation<..> (ex. uma variável de estado passada como parâmetro):
+                // só é aceito num ficheiro alcançado por include — mesma técnica do bloco SIGMA.
+                appendSigmaIncludeBlock(
+                        sb, state.outputDir, state.baseName + "_comprehension_sets.acsl",
+                        comprehensionBlock, state.libScanRemovedBodies);
+            } else {
+                sb.append(comprehensionBlock);
+                sb.append("\n");
+            }
         }
         for (String propsMerged : mergedPropertiesBlocks) {
             appendBlockWithSpacing(sb, propsMerged);
@@ -1022,7 +1032,11 @@ public final class AcslGenerator {
         if (lambdaNeedsSigmaFirst) {
             appendSigmaIncludeBlock(sb, outputDir, sigmaFileName, sigmaBlock, libScanRemovedBodies);
         }
-        if (lambdaBlock != null) {
+        if (lambdaBlock != null && hasGenericTypedBinder(lambdaBlock)) {
+            // idem às compreensões: binder genérico só num ficheiro incluído
+            appendSigmaIncludeBlock(
+                    sb, outputDir, baseName + "_lambda_functions.acsl", lambdaBlock, libScanRemovedBodies);
+        } else if (lambdaBlock != null) {
             sb.append("\n");
             sb.append(lambdaBlock);
             sb.append("\n");
@@ -1063,6 +1077,20 @@ public final class AcslGenerator {
      * #appendInvariantsAndQuantifierBlocks} para poder ser chamado antes OU depois do bloco lambda,
      * conforme a dependência detectada ali.
      */
+    private static final java.util.regex.Pattern GENERIC_TYPED_BINDER =
+            java.util.regex.Pattern.compile(
+                    "\\\\(?:forall|exists)\\s+[^;]*\\b(?:Set|Tuple|Relation|Function)\\s*<");
+
+    /**
+     * {@code true} se algum {@code \\forall}/{@code \\exists} de {@code block} liga uma variável de
+     * tipo genérico da lib ({@code Set<..>}, {@code Relation<..>}...). O {@code -acsl-import} rejeita
+     * esse binder num ficheiro de topo ({@code [Syntax error] <}), mas aceita-o num ficheiro
+     * incluído; {@code \\list<..>} e tipos genéricos em declarações passam nos dois.
+     */
+    static boolean hasGenericTypedBinder(String block) {
+        return block != null && GENERIC_TYPED_BINDER.matcher(block).find();
+    }
+
     private static void appendSigmaIncludeBlock(
             StringBuilder sb,
             Path outputDir,
