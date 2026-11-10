@@ -116,7 +116,13 @@ final class MemoryDependentBlockReorderer {
     /** Identificador C/ACSL (sem os precedidos por {@code \\}, ex. {@code \\at}). */
     private static final Pattern IDENTIFIER = Pattern.compile("(?<![\\\\\\w])[A-Za-z_]\\w*");
 
-    /** Global C de topo → fim da sua última declaração fora de comentários ACSL. */
+    /**
+     * Global C de topo → fim da sua PRIMEIRA declaração fora de comentários ACSL. Um bloco ACSL que
+     * lê o global só precisa vir depois dessa primeira declaração; o mesmo global pode ser
+     * declarado de novo mais adiante (ex.: {@code static int32_t Customer__limit[10 + 1];} repetido
+     * no trecho do {@code .c} da implementação), e ancorar na última levava o bloco para depois dos
+     * predicados que usam os OUTROS nomes que ele declara ({@code purchases} em Customer_estr).
+     */
     private static Map<String, Integer> topLevelCGlobals(String content, List<AcsCommentSpan> spans) {
         Map<String, Integer> out = new HashMap<>();
         Matcher m = TOP_LEVEL_C_GLOBAL_DECL.matcher(content);
@@ -130,7 +136,7 @@ final class MemoryDependentBlockReorderer {
                 }
             }
             if (!insideAcsl) {
-                out.merge(m.group(1), m.end(), Math::max);
+                out.merge(m.group(1), m.end(), Math::min);
             }
         }
         return out;
@@ -270,6 +276,7 @@ final class MemoryDependentBlockReorderer {
                                 + "\\s*(?:\\[[^\\]]*\\])?\\s*;\\s*$");
         Matcher dm = declPattern.matcher(content);
         int lastEnd = -1;
+        int firstTopLevelEnd = -1;
         while (dm.find()) {
             int matchStart = dm.start();
             boolean insideAcslComment = false;
@@ -283,7 +290,25 @@ final class MemoryDependentBlockReorderer {
                 continue;
             }
             lastEnd = dm.end();
+            // primeira declaração de topo (coluna zero, como o Frama-C imprime os globais); as
+            // indentadas podem ser locais de função com o mesmo nome
+            if (firstTopLevelEnd < 0 && startsAtColumnZero(content, matchStart, dm.end())) {
+                firstTopLevelEnd = dm.end();
+            }
         }
-        return lastEnd;
+        // ver topLevelCGlobals: basta vir depois da primeira declaração
+        return firstTopLevelEnd >= 0 ? firstTopLevelEnd : lastEnd;
+    }
+
+    /**
+     * {@code true} se o primeiro caractere não branco de {@code content[from, to)} está na coluna zero
+     * (o {@code ^\s*} do padrão também consome linhas em branco anteriores à declaração).
+     */
+    private static boolean startsAtColumnZero(String content, int from, int to) {
+        int p = from;
+        while (p < to && Character.isWhitespace(content.charAt(p))) {
+            p++;
+        }
+        return p == 0 || content.charAt(p - 1) == '\n';
     }
 }
