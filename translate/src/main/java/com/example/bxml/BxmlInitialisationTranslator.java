@@ -829,6 +829,14 @@ public final class BxmlInitialisationTranslator {
                 // sendo definida (pós-estado) e não pode levar \old — por isso wrapLhsVarsInRhsWithOld
                 // (que separa LHS/RHS) em vez de applyOldWrapping (que embrulharia os dois lados).
                 Element realIdEl = BxmlDomUtils.directExpChildren(BxmlDomUtils.firstChildElement(s, "Variables")).get(0);
+                // V := W <+ %z.(..): forma pontual já com o pré-estado resolvido (o pós-passe
+                // textual estragaria a segunda implicação — ver overwriteLambdaAssignmentPointwise)
+                String pointwise = GeneralizedQuantifierTranslator.overwriteLambdaAssignmentPointwise(
+                        realIdEl, definingExpr.get(auxHere), ctx, ctx.plusPreStateNames(assignedRealNames));
+                if (pointwise != null) {
+                    thenParts.add(renameEliminatedAuxVars(pointwise, eliminated, aliasRealName));
+                    continue;
+                }
                 String eq = BxmlExpressionToAcsl.formatEquality(realIdEl, definingExpr.get(auxHere), ctx);
                 thenParts.add(wrapLhsVarsInRhsWithOld(eq, assignedRealNames));
                 continue;
@@ -1392,6 +1400,10 @@ public final class BxmlInitialisationTranslator {
         for (int i = 0; i < n; i++) {
             String pointwise =
                     GeneralizedQuantifierTranslator.lambdaAssignmentPointwise(lhs.get(i), rhs.get(i), ctx, rhsCtx);
+            if (pointwise == null) {
+                pointwise = GeneralizedQuantifierTranslator.overwriteLambdaAssignmentPointwise(
+                        lhs.get(i), rhs.get(i), ctx, rhsCtx);
+            }
             if (pointwise != null) {
                 ensures.add(pointwise);
                 continue;

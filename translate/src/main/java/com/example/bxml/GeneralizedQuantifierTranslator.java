@@ -285,6 +285,59 @@ final class GeneralizedQuantifierTranslator {
      * sai {@code \old(V)}; dentro de um axioma global isso seria impossível. {@code null} se a
      * lambda não tiver esta forma (corpo booleano, ou sequência).
      */
+    /**
+     * {@code V := W <+ %z.(Q | E)} na forma pontual, com o pré-estado já resolvido (V no pós-estado,
+     * W/Q/E lidos com {@code rhsCtx}, que traz V em {@code preStateNames}):
+     * <pre>
+     *   (\forall T z; (Q ==> V(z) == E) && (!(Q) ==> V(z) == W(z)))
+     *   && (\forall T z; belongs(z, dom(V)) <==> (belongs(z, dom(W)) || (Q)))
+     * </pre>
+     * Montada aqui para não passar pelo pós-passe textual {@code wrapLhsVarsInRhsWithOld}, que corta
+     * no primeiro {@code " == "} e envolvia em {@code \old} também o {@code V(z)} da segunda
+     * implicação — o ramo "fora da lambda" virava a tautologia {@code \old(V)(z) == \old(V)(z)} e a
+     * especificação perdia que V não muda ali. {@code null} se a forma não for esta (uma variável
+     * ligada, guarda e corpo presentes).
+     */
+    static String overwriteLambdaAssignmentPointwise(
+            Element varEl, Element rhsEl, BxmlTranslateContext lhsCtx, BxmlTranslateContext rhsCtx) {
+        if (varEl == null || rhsEl == null || !"Binary_Exp".equals(rhsEl.getLocalName())
+                || !"<+".equals(rhsEl.getAttribute("op"))) {
+            return null;
+        }
+        Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(rhsEl);
+        Element lambda = pair[1];
+        if (pair[0] == null || lambda == null || !"Quantified_Exp".equals(lambda.getLocalName())
+                || !"%".equals(lambda.getAttribute("type"))) {
+            return null;
+        }
+        List<Element> boundVarIds = lambdaBoundVarIdElements(lambda);
+        if (boundVarIds.size() != 1) return null;
+        Element guardEl = BxmlExpressionToAcsl.childByLocalName(lambda, "Pred");
+        Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
+        Element bodyEl = BxmlExpressionToAcsl.childByLocalName(lambda, "Body");
+        Element bodyExp = bodyEl != null ? BxmlExpressionToAcsl.firstExpChild(bodyEl) : null;
+        if (guardPred == null || bodyExp == null || "Boolean_Exp".equals(bodyExp.getLocalName())) {
+            return null;
+        }
+        Element zEl = boundVarIds.get(0);
+        String z = zEl.getAttribute("value");
+        String trAttr = zEl.getAttribute("typref");
+        int typref = trAttr.isBlank() ? -1 : Integer.parseInt(trAttr.trim());
+        String decl = lhsCtx.types().acslVariableLogicTypeFromTypref(typref) + " " + z;
+        String v = BxmlExpressionToAcsl.translate(varEl, lhsCtx);
+        String w = BxmlExpressionToAcsl.translate(pair[0], rhsCtx);
+        String q = BxmlPredicateToAcsl.translatePropertyPred(guardPred, rhsCtx);
+        String e = BxmlExpressionToAcsl.translate(bodyExp, rhsCtx);
+        String vz = "function_apply(" + v + ", " + z + ")";
+        String wz = "function_apply(" + w + ", " + z + ")";
+        boolean setValued = BxmlExpressionToAcsl.isSetValued(bodyExp, rhsCtx);
+        String inLambda = setValued ? "equals(" + vz + ", " + e + ")" : "(" + vz + " == " + e + ")";
+        String outside = setValued ? "equals(" + vz + ", " + wz + ")" : "(" + vz + " == " + wz + ")";
+        return "(\\forall " + decl + "; ((" + q + ") ==> " + inLambda + ") && (!(" + q + ") ==> " + outside
+                + ")) && (\\forall " + decl + "; belongs(" + z + ", dom(" + v + ")) <==> (belongs(" + z
+                + ", dom(" + w + ")) || (" + q + ")))";
+    }
+
     static String lambdaAssignmentPointwise(
             Element varEl, Element lambdaEl, BxmlTranslateContext lhsCtx, BxmlTranslateContext rhsCtx) {
         if (varEl == null || lambdaEl == null
@@ -1163,7 +1216,10 @@ final class GeneralizedQuantifierTranslator {
         String pointwiseComparison = isSetValuedBody
                 ? "equals(function_apply(" + varStr + ", " + appliedArg + "), " + lambdaCall + ")"
                 : "(function_apply(" + varStr + ", " + appliedArg + ") == " + lambdaCall + ")";
-        return "(\\forall " + String.join(", ", boundVarDecls) + "; (" + guardStr + ") ==> " + pointwiseComparison + ")";
+        String decls = String.join(", ", boundVarDecls);
+        // B: V = %x.(G | E) também fixa o domínio, dom(V) = {x | G} (como lambdaAssignmentPointwise).
+        return "(\\forall " + decls + "; (" + guardStr + ") ==> " + pointwiseComparison + ") && (\\forall "
+                + decls + "; belongs(" + appliedArg + ", dom(" + varStr + ")) <==> (" + guardStr + "))";
     }
 
     /** Substitui {@code name} por {@code replacement} em {@code text}, por fronteira de palavra. */
