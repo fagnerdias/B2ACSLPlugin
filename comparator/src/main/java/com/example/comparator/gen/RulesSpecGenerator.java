@@ -36,6 +36,7 @@ public final class RulesSpecGenerator implements SpecGenerator {
     private static final Pattern WARNING = Pattern.compile("(?m)^AVISO:[ \\t]*([^\\n]*)");
     private static final Pattern ERROR = Pattern.compile("(?m)^ERRO.*$");
     private static final Pattern INCLUDE = Pattern.compile("include\\s+\"([^\"]+)\"");
+    private static final String B_POW_ACSL = "b_pow.acsl";
 
     private final Path rulesJar;
     private final Path libDir;
@@ -114,9 +115,16 @@ public final class RulesSpecGenerator implements SpecGenerator {
         if (topLevel.isEmpty()) {
             topLevel = mainAcsl;
         }
-        List<Path> importOrder =
+        List<Path> importOrder = new ArrayList<>(
                 FramaCRunner.orderAcslFilesForImport(
-                        cFiles, cDir, structure.seesGraph(), structure.importsGraph(), topLevel, mainAcsl);
+                        cFiles, cDir, structure.seesGraph(), structure.importsGraph(), topLevel, mainAcsl));
+        // Contrato de b_pow (a funcao C do **), gerado pelo rules como no plugin: importado por ultimo,
+        // depois das maquinas, cuja biblioteca traz integer_pow, belongs e INT.
+        Path bPow = cDir.resolve(B_POW_ACSL);
+        if (Files.isRegularFile(bPow)) {
+            importOrder.removeIf(p -> p.getFileName().toString().equals(B_POW_ACSL));
+            importOrder.add(bPow);
+        }
         return new GeneratedSpec(
                 GeneratedSpec.OK,
                 0,
