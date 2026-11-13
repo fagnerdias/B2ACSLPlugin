@@ -28,6 +28,10 @@ public final class BxmlExpressionToAcsl {
      * {@code card(…)}).
      */
     public static String formatEquality(Element leftExp, Element rightExp, BxmlTranslateContext ctx) {
+        String recordLiteral = formatRecordLiteralAssignment(leftExp, rightExp, ctx);
+        if (recordLiteral != null) {
+            return recordLiteral;
+        }
         String functionOverride = formatFunctionOverrideAssignment(leftExp, rightExp, ctx);
         if (functionOverride != null) {
             return functionOverride;
@@ -59,6 +63,42 @@ public final class BxmlExpressionToAcsl {
             return "equals(" + l + ", " + r + ")";
         }
         return l + " == " + r;
+    }
+
+    /**
+     * B {@code v := rec(fld1: E1, fld2: E2, ...)} (atribuição de literal de registo a uma variável
+     * de registo) → conjunção de igualdades POR-CAMPO ({@code v__fld1 == E1 && v__fld2 == E2}),
+     * nunca uma única igualdade struct-valorada: ACSL não suporta literais de struct agregados em
+     * termos lógicos (confirmado empiricamente: "unsupported aggregated field construct"), e mesmo
+     * que suportasse, {@code v} não é um único termo struct-valorado — é um espelho escalar por-campo
+     * (ver {@link MachineAxiomaticBlockFormatter#appendStructFieldMirrors}, mesma convenção de nome
+     * {@code v__campo} usada por {@link #translateRecordFieldAccess}). {@code null} (não um literal
+     * de registo) faz {@link #formatEquality} cair no caminho genérico.
+     *
+     * <p>O chamador ({@code BxmlInitialisationTranslator#parseAssignementSub}) envolve o resultado
+     * com {@code wrapLhsVarsInRhsWithOld}, que corta no PRIMEIRO {@code " == "} — inofensivo aqui:
+     * um literal de registo nunca referencia a própria variável sendo atribuída, então o "recorte"
+     * reconstrói o texto inalterado independentemente de quantos {@code " == "} existirem.
+     */
+    private static String formatRecordLiteralAssignment(
+            Element leftExp, Element rightExp, BxmlTranslateContext ctx) {
+        if (leftExp == null || rightExp == null || !"Record".equals(rightExp.getLocalName())) {
+            return null;
+        }
+        String base = translate(leftExp, ctx);
+        List<String> clauses = new ArrayList<>();
+        NodeList children = rightExp.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element item = (Element) n;
+            if (!"Record_Item".equals(item.getLocalName())) continue;
+            String label = item.getAttribute("label");
+            Element valueEl = BxmlDomUtils.firstNonAttrElementChild(item);
+            if (label == null || label.isBlank() || valueEl == null) continue;
+            clauses.add(base + "__" + label + " == " + translate(valueEl, ctx));
+        }
+        return clauses.isEmpty() ? null : String.join(" && ", clauses);
     }
 
     /**
@@ -239,11 +279,50 @@ public final class BxmlExpressionToAcsl {
                         || isIntervalBinaryExp(exp)
                         || isDirectProductOp(op)
                         || "prj1".equals(op) || "prj2".equals(op)
-                        || "<+".equals(op);
+                        || "<+".equals(op)
+                        || ";".equals(op == null ? "" : op.trim())
+                        // iterate(R, n) é uma relação
+                        || "iterate".equals(op)
+                        // f(x) com codomínio conjunto (ex. player_islands(pp) : POW(ISLAND))
+                        || ("(".equals(op == null ? "" : op.trim()) && hasPlainPowTypref(exp, ctx));
+            }
+            // UNION/INTER quantificados devolvem sempre um conjunto
+            case "Quantified_Exp" -> {
+                String type = exp.getAttribute("type");
+                yield "UNION".equals(type) || "INTER".equals(type);
             }
             case "Nary_Exp" -> "{".equals(exp.getAttribute("op"));
             default -> false;
         };
+    }
+
+    /**
+     * {@code true} se o tipo B cru do {@code typref} de {@code exp} é {@code POW(X)} sem produto no
+     * nível de topo de {@code X} — um conjunto, nunca uma relação nem uma sequência (que em B também é
+     * {@code POW(INTEGER*T)} e em ACSL é {@code \list}, comparada com {@code ==}). Lê só o tipo cru:
+     * {@code acslVariableLogicTypeFromTypref} registaria tipos de tupla como efeito colateral.
+     */
+    private static boolean hasPlainPowTypref(Element exp, BxmlTranslateContext ctx) {
+        String tr = exp.getAttribute("typref");
+        if (tr == null || tr.isBlank() || ctx == null) return false;
+        String raw;
+        try {
+            raw = ctx.types().getRawType(Integer.parseInt(tr.trim()));
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        if (raw == null) return false;
+        String t = raw.replace(" ", "");
+        if (!t.startsWith("POW(") || !t.endsWith(")")) return false;
+        String inner = t.substring(4, t.length() - 1);
+        int depth = 0;
+        for (int i = 0; i < inner.length(); i++) {
+            char c = inner.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == '*' && depth == 0) return false;
+        }
+        return true;
     }
 
     /**
@@ -305,10 +384,40 @@ public final class BxmlExpressionToAcsl {
             case "EmptySeq" -> true;
             case "Binary_Exp" -> {
                 String bOp = exp.getAttribute("op");
-                yield isSequenceAppendOp(bOp) || isSequencePrependOp(bOp);
+                // restrict_front/restrict_tail devolvem \list mesmo sobre uma relação (ponte
+                // function_to_list); ^ só existe entre sequências em B
+                yield isSequenceAppendOp(bOp) || isSequencePrependOp(bOp) || isSequenceConcatOp(bOp)
+                        || isSequenceRestrictFrontOp(bOp) || isSequenceRestrictTailOp(bOp);
             }
+            // front/tail/rev/conc viram as funções de \list da biblioteca (caso default de translateUnary)
+            case "Unary_Exp" -> java.util.Set.of("front", "tail", "rev", "conc")
+                    .contains(exp.getAttribute("op").trim());
+            // extensão de sequência [a, b, ...]
+            case "Nary_Exp" -> "[".equals(exp.getAttribute("op").trim());
             default -> false;
         };
+    }
+
+    /**
+     * Como {@link #isListValued}, mas um {@code Id} só conta pelo tipo lógico conhecido (desta ou
+     * de outra máquina), sem o fallback por {@code typref}. Esse fallback nunca responde {@code
+     * \\list} (uma sequência B tem tipo bruto de relação), mas converter o {@code typref} de uma
+     * relação com domínio tupla registra um tipo de tupla para a máquina como efeito colateral; a
+     * aplicação {@code f(x)}, que consulta isto para TODA função, não pode disparar esse registro.
+     */
+    static boolean isKnownListValued(Element exp, BxmlTranslateContext ctx) {
+        if (exp == null || ctx == null) {
+            return false;
+        }
+        if ("Id".equals(exp.getLocalName())) {
+            String name = exp.getAttribute("value");
+            String t = ctx.variableLogicTypes().get(name);
+            if (t == null) {
+                t = ctx.crossMachineVariableLogicTypes().get(name);
+            }
+            return t != null && t.startsWith("\\list");
+        }
+        return isListValued(exp, ctx);
     }
 
     private static boolean isListValuedId(Element idEl, BxmlTranslateContext ctx) {
@@ -353,7 +462,17 @@ public final class BxmlExpressionToAcsl {
         String ln = exp.getLocalName();
         return switch (ln) {
             case "Id" -> isRelationOrFunctionValuedId(exp, ctx);
-            case "Binary_Exp" -> isDomainRestrictionOp(exp.getAttribute("op"));
+            case "Binary_Exp" -> {
+                String bOp = exp.getAttribute("op");
+                // ";" (relation_composition) faltava aqui: "pred ; p_trame" (composição relacional)
+                // produz uma Relation/Function tal como "<|" (domain_restriction) já reconhecido —
+                // sem este caso, "(pred ; p_trame) /|\ n" (B front-restriction sobre uma relação
+                // composta, ver isSequenceRestrictFrontOp) não sabia que precisava de
+                // function_to_list(...) antes de restrict_front (esse só aceita \list<A>), e o
+                // -acsl-import rejeitava com "incompatible types Relation<integer,integer> and
+                // \list<A>".
+                yield isDomainRestrictionOp(bOp) || ";".equals(bOp == null ? "" : bOp.trim());
+            }
             default -> false;
         };
     }
@@ -536,7 +655,8 @@ public final class BxmlExpressionToAcsl {
         }
         if (translated.startsWith("(integer)")
                 || translated.startsWith("(boolean)")
-                || translated.startsWith("\\old(")) {
+                || translated.startsWith("\\old(")
+                || translated.startsWith("\\at(")) {
             return translated;
         }
         return "(integer)" + translated;
@@ -629,11 +749,48 @@ public final class BxmlExpressionToAcsl {
         return isRelationArrowOp(e.getAttribute("op"));
     }
 
+    /**
+     * {@code true} se {@code e} for qualquer forma de seta relação/função B ({@code <->}/{@code -->}/
+     * {@code +->}/{@code >->}/{@code >+>}/{@code -->>}/{@code +->>}/{@code >->>}) — só a FORMA
+     * (para extrair domínio/codomínio ao inferir o tipo lógico ACSL de uma constante, ver
+     * {@link com.example.bxml.BxmlMachineVariables#sequenceDomainRelationTypeIfAny}), não a
+     * totalidade/injetividade/sobrejetividade (essas viram predicados {@code is_total_function}/
+     * {@code is_injective}/… à parte, tratados em {@link BxmlPredicateToAcsl}).
+     */
+    private static boolean isAnyRelationOrFunctionArrowType(Element e) {
+        return isRelationArrowType(e)
+                || isFunctionArrowType(e)
+                || isPartialFunctionArrowType(e)
+                || isTotalSurjectionArrowType(e)
+                || isPartialInjectionArrowType(e)
+                || isTotalInjectionArrowType(e)
+                || isPartialSurjectionArrowType(e)
+                || isTotalBijectionArrowType(e);
+    }
+
+    /** Filho ESQUERDO (domínio) de {@code e} se for uma seta relação/função B; senão {@code null}. */
+    public static Element arrowTypeDomainIfAny(Element e) {
+        if (!isAnyRelationOrFunctionArrowType(e)) return null;
+        return twoDirectExpChildren(e)[0];
+    }
+
+    /** Filho DIREITO (codomínio) de {@code e} se for uma seta relação/função B; senão {@code null}. */
+    public static Element arrowTypeCodomainIfAny(Element e) {
+        if (!isAnyRelationOrFunctionArrowType(e)) return null;
+        return twoDirectExpChildren(e)[1];
+    }
+
     /** B produto direto {@code R1 >< R2} → {@code direct_product(R1, R2)} (ACSL_Lib/relation_functions/direct_product.acsl). */
     private static boolean isDirectProductOp(String op) {
         if (op == null) return false;
         String o = op.trim();
         return "><".equals(o) || "&gt;&lt;".equals(o);
+    }
+
+    /** {@code e - 1}, com parênteses quando {@code e} não é um identificador ou literal simples. */
+    private static String minusOne(String e) {
+        String t = e == null ? "" : e.trim();
+        return t.matches("[A-Za-z_]\\w*|\\d+") ? t + " - 1" : "(" + t + ") - 1";
     }
 
     /** B append à sequência {@code s <- x} → {@code \\concat(s, [| x |])} (E-ACSL / listas). */
@@ -682,10 +839,19 @@ public final class BxmlExpressionToAcsl {
     }
 
     /**
-     * Constantes nomeadas do B que não existem como símbolos ACSL — traduzem-se para literais
-     * {@code integer} compatíveis com {@code int} de 32 bits ({@code INT_MAX} / {@code INT_MIN}),
-     * coerentes com o limite superior de {@code NAT} usado na lib de exemplos
-     * ({@code 2147483647} em {@code Deck/code_commented.c}).
+     * Constantes/conjuntos nomeados do B que não existem tal-e-qual como símbolos ACSL — {@code
+     * MAXINT}/{@code MININT} traduzem-se para literais {@code integer} compatíveis com {@code int}
+     * de 32 bits, coerentes com o limite superior de {@code NAT} usado na lib de exemplos ({@code
+     * 2147483647} em {@code Deck/code_commented.c}); {@code INTEGER} (conjunto B de todos os
+     * inteiros) mapeia para {@code INT}, o único destes 4 que a lib declara com nome diferente
+     * ({@code set_functions/variables.acsl} só tem {@code NAT}/{@code NAT1}/{@code INT}/{@code
+     * BOOL} — sem entrada "INTEGER"). Já usado (duplicado) só dentro de {@link
+     * #buildEmptySetWitnessExpr}; faltava aqui, no dispatcher geral de {@code Id} — qualquer OUTRO
+     * uso de {@code INTEGER} como expressão bare (ex.: RHS de {@code ::}/{@code Becomes_In}, como em
+     * {@code v :: INTEGER}) ficava sem tradução, produzindo {@code becomes_element_of(v, INTEGER)}
+     * literal — "unbound logic variable INTEGER" no front-end isolado de {@code
+     * ghost_operations.ci} (1º a reportar, mas o mesmo texto cru sobrevive também no {@code .acsl}
+     * real gerado, ainda não validado nesse ponto do {@code -acsl-import}).
      */
     static String translateBNamedConstant(String id) {
         if (id == null) {
@@ -694,7 +860,27 @@ public final class BxmlExpressionToAcsl {
         return switch (id.trim()) {
             case "MAXINT" -> "2147483647"; // INT_MAX (32-bit int)
             case "MININT" -> "-2147483648"; // INT_MIN (32-bit int)
-            default -> id;
+            default -> {
+                String lib = libSetForBTypeName(id);
+                yield lib != null ? lib : id;
+            }
+        };
+    }
+
+    /**
+     * Conjunto da B2ACSLLib para um conjunto B predefinido, como no B2ACSLRules ({@code predefIds}):
+     * {@code INT}/{@code INTEGER} → {@code INT}, {@code NAT}/{@code NATURAL} → {@code NAT},
+     * {@code NAT1}/{@code NATURAL1} → {@code NAT1}, {@code BOOL} → {@code BOOL}; {@code null} para os
+     * demais nomes. A lib só tem os conjuntos limitados a 32 bits (os valores C são {@code int32_t}).
+     */
+    static String libSetForBTypeName(String id) {
+        if (id == null) return null;
+        return switch (id.trim()) {
+            case "INT", "INTEGER" -> "INT";
+            case "NAT", "NATURAL" -> "NAT";
+            case "NAT1", "NATURAL1" -> "NAT1";
+            case "BOOL" -> "BOOL";
+            default -> null;
         };
     }
 
@@ -750,7 +936,7 @@ public final class BxmlExpressionToAcsl {
                         String bTypeName = ctx.types().getRawType(Integer.parseInt(tr.trim()));
                         if (ctx.enumeratedSetNames().contains(bTypeName)) {
                             base = "(integer)" + translateBNamedConstant(idVal);
-                            yield isPreState ? "\\old(" + base + ")" : base;
+                            yield ctx.annotationScope().render(idVal, base, isPreState);
                         }
                     }
                 }
@@ -764,10 +950,10 @@ public final class BxmlExpressionToAcsl {
                 // to Tuple<integer,...>" ao entrar num slot ACSL genérico (ex. couple<A,B>).
                 if (ctx.deferredSetTypedParameterNames().contains(idVal)) {
                     base = "(integer)" + translateBNamedConstant(idVal);
-                    yield isPreState ? "\\old(" + base + ")" : base;
+                    yield ctx.annotationScope().render(idVal, base, isPreState);
                 }
                 base = translateBNamedConstant(idVal);
-                yield isPreState ? "\\old(" + base + ")" : base;
+                yield ctx.annotationScope().render(idVal, base, isPreState);
             }
             case "Integer_Literal" -> exp.getAttribute("value");
             case "Boolean_Literal" -> translateBooleanLiteral(exp.getAttribute("value"));
@@ -779,8 +965,47 @@ public final class BxmlExpressionToAcsl {
             case "Quantified_Set" -> translateQuantifiedSet(exp, ctx);
             case "Boolean_Exp" -> translateBooleanExp(exp, ctx);
             case "Quantified_Exp" -> GeneralizedQuantifierTranslator.translateQuantifiedExp(exp, ctx);
+            case "Record_Field_Access" -> translateRecordFieldAccess(exp, ctx);
             default -> "/* TODO: " + ln + " */";
         };
+    }
+
+    /**
+     * B {@code r'campo} (acesso a campo de registo). ACSL não suporta literais de struct agregados
+     * em termos lógicos ("unsupported aggregated field construct", confirmado empiricamente) — por
+     * isso não há um único termo struct-valorado "r" para aplicar {@code .campo}: se a base for
+     * ela própria um literal {@code Record} (ex. {@code rec(fld1:0,fld2:TRUE)'fld1}), reduz-se por
+     * constant-folding ao valor desse campo no literal; senão (variável de registo), usa-se o
+     * espelho logic escalar por-campo já declarado por
+     * {@link MachineAxiomaticBlockFormatter#appendStructFieldMirrors} ({@code var__campo}, mesma
+     * convenção de nome usada em {@link #formatRecordLiteralAssignment}).
+     */
+    private static String translateRecordFieldAccess(Element exp, BxmlTranslateContext ctx) {
+        String label = exp.getAttribute("label");
+        Element base = BxmlDomUtils.firstNonAttrElementChild(exp);
+        if (base == null || label == null || label.isBlank()) {
+            return "/* TODO: Record_Field_Access */";
+        }
+        if ("Record".equals(base.getLocalName())) {
+            Element item = recordItemByLabel(base, label);
+            Element valueEl = item == null ? null : BxmlDomUtils.firstNonAttrElementChild(item);
+            return valueEl == null ? "/* TODO: Record_Field_Access */" : translate(valueEl, ctx);
+        }
+        return translate(base, ctx) + "__" + label;
+    }
+
+    /** {@code Record_Item} de {@code recordEl} cujo {@code label} bate com {@code label}; {@code null} se nenhum. */
+    private static Element recordItemByLabel(Element recordEl, String label) {
+        NodeList children = recordEl.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element item = (Element) n;
+            if ("Record_Item".equals(item.getLocalName()) && label.equals(item.getAttribute("label"))) {
+                return item;
+            }
+        }
+        return null;
     }
 
     /**
@@ -804,7 +1029,17 @@ public final class BxmlExpressionToAcsl {
         }
         String pred = BxmlPredicateToAcsl.translateBodyPredicate(body, ctx);
         String vs = String.join(", ", names);
-        return "comprehension(" + vs + ", " + pred + ")";
+        // Sem função nomeada não há forma ACSL válida: "comprehension(x, P)" não existe em ACSL nem
+        // na B2ACSLLib (antes saía assim e o Frama-C acusava "unbound logic variable x", sem pista
+        // da causa). O marcador explícito deixa a lacuna visível no .acsl e no log. O registo vazio
+        // de fingerprinting (BxmlComprehensionRegistry#emptyForFingerprinting) também passa aqui,
+        // só para calcular chaves de deduplicação: nesse caso não há aviso.
+        String text = "{ " + vs + " | " + pred + " }";
+        if (ctx.comprehensions().size() > 0) {
+            System.err.println("[B2ACSL] AVISO: compreensao sem traducao suportada em " + ctx.machineName()
+                    + ": " + text);
+        }
+        return "/* B2ACSL-UNSUPPORTED compreensao " + text.replace("*/", "* /") + " */";
     }
 
     private static String translateEmptySet(Element emptySet, BxmlTranslateContext ctx) {
@@ -934,6 +1169,13 @@ public final class BxmlExpressionToAcsl {
             // general_inter<A>(Set<Set<A>>) : Set<A>.
             case "union" -> "general_union(" + a + ")";
             case "inter" -> "general_inter(" + a + ")";
+            // B unário -E (ex.: "-C_vitesseMax" num limite de interval_set) — MESMO token "-i" do
+            // operador BINÁRIO de subtração (ver isArithmeticOp/normalizeExpComparisonOp), mas aqui
+            // em Unary_Exp; sem caso próprio caía no default genérico "opname(arg)" e produzia
+            // literalmente "-i(C_vitesseMax)" — Frama-C lê isso como CHAMADA à função "i" (nunca
+            // declarada), "unbound logic function i", só descoberto ao corrigir a tipagem de
+            // variável livre deixar de mascarar este erro com um erro mais cedo no mesmo ficheiro.
+            case "-i" -> "(-" + a + ")";
             default -> opTrim + "(" + a + ")";
         };
     }
@@ -980,9 +1222,15 @@ public final class BxmlExpressionToAcsl {
                 List<String> args = flattenMapletChain(pair[1], ctx);
                 return name + "(" + String.join(", ", args) + ")";
             }
-            // f(x) em B → function_apply(f, x) em ACSL
             String left = translate(pair[0], ctx);
             String right = translate(pair[1], ctx);
+            // s(i) sobre uma sequência B (1-based) → \nth(s, i - 1) (\list é 0-based). Antes saía
+            // sempre function_apply, que só aceita Function<A,B>: "incompatible types \list<integer>
+            // and DRelation" (lunh, SIGMA sobre a sequência num).
+            if (isKnownListValued(pair[0], ctx)) {
+                return "\\nth(" + left + ", " + minusOne(right) + ")";
+            }
+            // f(x) em B → function_apply(f, x) em ACSL
             return "function_apply(" + left + ", " + right + ")";
         }
         // B imagem relacional r[E]: r[{x}] (E singleton em extensão) → apply(r, x) — apply<A,B> só
@@ -1024,6 +1272,12 @@ public final class BxmlExpressionToAcsl {
             // singleton(couple(x,y)) — aqui ambos os lados já são relações completas.
             return "overwrite(" + left + ", " + right + ")";
         }
+        if (";".equals(op == null ? "" : op.trim())) {
+            // B: q ; r — composição relacional (aplica q primeiro, depois r) → relation_composition
+            // (ACSL_Lib/relation_functions/composition.acsl): belongs((x,z), relation_composition(q,r))
+            // <==> \exists y; belongs((x,y),q) && belongs((y,z),r) — mesma ordem de operandos do B.
+            return "relation_composition(" + left + ", " + right + ")";
+        }
         if ("..".equals(op == null ? "" : op.trim())) {
             return "interval_set(" + left + ", " + right + ")";
         }
@@ -1038,11 +1292,21 @@ public final class BxmlExpressionToAcsl {
         }
         if (isSequenceRestrictFrontOp(op)) {
             // B: s /|\ n (mantém os primeiros n elementos) → restrict_front (ACSL_Lib/sequence_functions/restrict_front.acsl)
-            return "restrict_front(" + left + ", " + right + ")";
+            // restrict_front só aceita \list<A> — "s" pode ser uma RELAÇÃO em B (B não distingue
+            // "sequência" de "função de INTEGER" ao nível do tipo bruto; ver
+            // isRelationOrFunctionValued), ex.: "(pred ; p_trame) /|\ p_size" em
+            // csp_stdLib_crc__get_stdlib_CRC16Polynom3D65 (p_trame array-backed vira
+            // Function<integer,uint8_t> via array_to_function_int, "pred;p_trame" fica
+            // Relation<integer,integer> via relation_composition) — sem a ponte function_to_list,
+            // "incompatible types Relation<integer,integer> and \list<A>" no -acsl-import.
+            String seq = isRelationOrFunctionValued(pair[0], ctx) ? "function_to_list(" + left + ")" : left;
+            return "restrict_front(" + seq + ", " + right + ")";
         }
         if (isSequenceRestrictTailOp(op)) {
             // B: s \|/ n (descarta os primeiros n elementos) → restrict_tail (ACSL_Lib/sequence_functions/restrict_tail.acsl)
-            return "restrict_tail(" + left + ", " + right + ")";
+            // Mesma ponte function_to_list de restrict_front acima, mesmo motivo.
+            String seq = isRelationOrFunctionValued(pair[0], ctx) ? "function_to_list(" + left + ")" : left;
+            return "restrict_tail(" + seq + ", " + right + ")";
         }
         if ("mod".equals(op)) return "(" + left + " % " + right + ")";
         if ("**i".equals(op == null ? "" : op.trim())) {

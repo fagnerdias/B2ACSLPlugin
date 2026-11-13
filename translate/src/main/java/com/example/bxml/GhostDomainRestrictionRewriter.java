@@ -420,6 +420,24 @@ final class GhostDomainRestrictionRewriter {
         return raw == null ? null : GhostOperationsCiGenerator.ghostDummyConcreteRefs(raw, concreteConstantNames);
     }
 
+    /**
+     * Ultimo indice do array C que representa {@code domain} (para {@code \valid(p + (0 .. i))}
+     * e {@code assigns *(p + (0 .. i))}): {@code high} para {@code 0..high}, e o comprimento
+     * ({@link #arrayLengthAcslFromDomain}) menos 1 nos demais casos.
+     */
+    static String arrayLastIndexAcslFromDomain(Element domain, BxmlTranslateContext ctx) {
+        if (domain != null && ctx != null && BxmlExpressionToAcsl.isIntervalBinaryExp(domain)) {
+            Element[] lr = BxmlExpressionToAcsl.twoDirectExpChildren(domain);
+            if (lr[0] != null && lr[1] != null) {
+                String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
+                String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
+                return "0".equals(low) ? high : "(" + high + " - (" + low + "))";
+            }
+        }
+        String len = rawArrayLengthExprFromDomain(domain, ctx);
+        return len == null ? null : "(" + len + " - 1)";
+    }
+
     private static String rawArrayLengthExprFromDomain(Element domain, BxmlTranslateContext ctx) {
         if (domain == null || ctx == null) {
             return null;
@@ -431,9 +449,9 @@ final class GhostDomainRestrictionRewriter {
             }
             String low = BxmlExpressionToAcsl.translate(lr[0], ctx).trim();
             String high = BxmlExpressionToAcsl.translate(lr[1], ctx).trim();
-            if ("0".equals(low)) {
-                return high;
-            }
+            // cardinalidade de low..high, inclusive para low = 0: array_to_function_int(a, n)
+            // cobre [0, n), entao 0..maximum tem maximum + 1 elementos (devolver so "high" deixava
+            // o ensures de Registro.elements impossivel)
             return "(" + high + " - (" + low + ") + 1)";
         }
         if ("Binary_Exp".equals(domain.getLocalName())

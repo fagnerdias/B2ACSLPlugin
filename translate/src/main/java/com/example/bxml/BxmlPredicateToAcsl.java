@@ -303,6 +303,16 @@ public final class BxmlPredicateToAcsl {
 
     private static String translateMembershipComparison(
             Element leftEl, Element rightEl, BxmlTranslateContext ctx) {
+        // rv : struct(fld1: T1, fld2: T2, ...) → conjunção de pertenças POR-CAMPO
+        // (belongs(rv__fld1, T1) && belongs(rv__fld2, T2)), nunca uma pertença struct-valorada
+        // única: "rv" não é um termo struct-valorado — é um espelho logic escalar por-campo
+        // (ver MachineAxiomaticBlockFormatter#appendStructFieldMirrors, mesma convenção de nome
+        // "rv__campo" usada por BxmlExpressionToAcsl#translateRecordFieldAccess/
+        // #formatRecordLiteralAssignment).
+        if ("Struct".equals(rightEl.getLocalName())) {
+            String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
+            return translateStructMembership(left, rightEl, ctx);
+        }
         // ss : POW(S) → belongs(ss, pow_set(S)); ss : FIN(ss) → is_finite(ss)
         if ("Unary_Exp".equals(rightEl.getLocalName())) {
             String uop = rightEl.getAttribute("op");
@@ -482,6 +492,52 @@ public final class BxmlPredicateToAcsl {
         return "belongs(" + left + ", " + right + ")";
     }
 
+    /**
+     * Corpo de {@code rv : struct(fld1: T1, fld2: T2, ...)} — uma cláusula de pertença por campo,
+     * recorrendo a {@link #translateFieldTypeMembership} para o tipo de cada campo (incluindo
+     * registos aninhados, via recursão).
+     */
+    private static String translateStructMembership(
+            String leftText, Element structEl, BxmlTranslateContext ctx) {
+        List<String> clauses = new ArrayList<>();
+        NodeList children = structEl.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element item = (Element) n;
+            if (!"Record_Item".equals(item.getLocalName())) continue;
+            String label = item.getAttribute("label");
+            Element typeEl = BxmlDomUtils.firstNonAttrElementChild(item);
+            if (label == null || label.isBlank() || typeEl == null) continue;
+            clauses.add(translateFieldTypeMembership(leftText + "__" + label, typeEl, ctx));
+        }
+        return String.join(" && ", clauses);
+    }
+
+    /**
+     * Pertença de {@code fieldRef} (já o nome do espelho logic por-campo, ex. {@code rv__fld1}) ao
+     * tipo B {@code typeEl} de um {@code Record_Item} — mesma lógica de intervalo/tipo primitivo do
+     * final de {@link #translateMembershipComparison}, sem repetir os ramos de POW/sequência/relação
+     * (nunca aparecem como tipo de campo de registo nos exemplos atuais).
+     */
+    private static String translateFieldTypeMembership(
+            String fieldRef, Element typeEl, BxmlTranslateContext ctx) {
+        if ("Struct".equals(typeEl.getLocalName())) {
+            return translateStructMembership(fieldRef, typeEl, ctx);
+        }
+        if (BxmlExpressionToAcsl.isIntervalBinaryExp(typeEl)) {
+            String setRef = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(typeEl, ctx);
+            return "belongs(" + fieldRef + ", " + setRef + ")";
+        }
+        String typeText = BxmlExpressionToAcsl.translate(typeEl, ctx);
+        if (isPrimitiveTypeName(typeText)) {
+            if ("NAT".equals(typeText)) return "belongs(" + fieldRef + ", NAT)";
+            if ("BOOL".equals(typeText)) return "belongs(" + fieldRef + ", BOOL)";
+            if ("INT".equals(typeText)) return "belongs(" + fieldRef + ", INT)";
+        }
+        return "belongs(" + fieldRef + ", " + typeText + ")";
+    }
+
     private static String translateEqualityComparison(
             Element leftEl, Element rightEl, String left, String right, BxmlTranslateContext ctx) {
         // <==> tem precedência menor que && em ACSL: sem parênteses envolvendo TODA a
@@ -618,11 +674,8 @@ public final class BxmlPredicateToAcsl {
             if (v == null) {
                 v = "";
             }
-            return switch (v.trim()) {
-                case "NAT", "INTEGER", "INT" -> "NAT";
-                case "BOOL" -> "BOOL";
-                default -> BxmlExpressionToAcsl.translate(codomainEl, ctx);
-            };
+            String lib = BxmlExpressionToAcsl.libSetForBTypeName(v);
+            return lib != null ? lib : BxmlExpressionToAcsl.translate(codomainEl, ctx);
         }
         return BxmlExpressionToAcsl.translate(codomainEl, ctx);
     }
@@ -660,17 +713,13 @@ public final class BxmlPredicateToAcsl {
         if (typeArg != null && "Id".equals(typeArg.getLocalName())) {
             String v = typeArg.getAttribute("value");
             if (v == null || v.isBlank()) return "NAT";
-            return switch (v) {
-                case "NAT", "INTEGER", "INT" -> "NAT";
-                case "BOOL" -> "BOOL";
-                default -> {
-                    if (ctx != null) {
-                        String renamed = ctx.enumeratedSetRenames().get(v);
-                        if (renamed != null) yield renamed;
-                    }
-                    yield v;
-                }
-            };
+            String lib = BxmlExpressionToAcsl.libSetForBTypeName(v);
+            if (lib != null) return lib;
+            if (ctx != null) {
+                String renamed = ctx.enumeratedSetRenames().get(v);
+                if (renamed != null) return renamed;
+            }
+            return v;
         }
         return "NAT";
     }
@@ -702,11 +751,31 @@ public final class BxmlPredicateToAcsl {
      * quando a testemunha é univocamente determinada — ver
      * {@link #tryExistsLetElimination(String, Element, BxmlTranslateContext)}.
      */
+    /**
+     * Tipo ACSL do binder {@code varId} de um {@code !x.(...)}/{@code #x.(...)}: o mesmo resolvedor
+     * dos binders de ANY ({@link #acslQuantifierLogicTypeForAnyVariable}: tipagem {@code x : A --> B}
+     * no corpo, senão o {@code typref}). Antes era sempre {@code integer}, e uma bijeção como em
+     * {@code #bij.(bij : IDX >->> IDX & rr = (bij ; array))} saía {@code \exists integer bij}
+     * ("incompatible types integer and Function"). Só um tipo não escalar substitui o {@code
+     * integer}, para não mudar os binders escalares que já funcionavam.
+     */
+    private static String quantifiedBinderType(Element bodyEl, Element varId, BxmlTranslateContext ctx) {
+        if (bodyEl == null) {
+            return "integer";
+        }
+        String t = acslQuantifierLogicTypeForAnyVariable(bodyEl, varId, ctx);
+        if (t == null || t.isBlank() || "integer".equals(t) || "boolean".equals(t) || "real".equals(t)) {
+            return "integer";
+        }
+        return BxmlComprehensionRegistry.isBinderSafeType(t) ? t : "integer";
+    }
+
     private static String translateQuantifiedPred(Element qp, BxmlTranslateContext ctx) {
         String type = qp.getAttribute("type");
         String quant = "!".equals(type) ? "\\forall" : "\\exists";
 
         Element varsEl = childByName(qp, "Variables");
+        Element bodyEl = childByName(qp, "Body");
         List<String> varDecls = new ArrayList<>();
         List<String> varNames = new ArrayList<>();
         if (varsEl != null) {
@@ -717,12 +786,11 @@ public final class BxmlPredicateToAcsl {
                 Element e = (Element) n;
                 if ("Attr".equals(e.getLocalName()) || !"Id".equals(e.getLocalName())) continue;
                 varNames.add(e.getAttribute("value"));
-                varDecls.add("integer " + e.getAttribute("value"));
+                varDecls.add(quantifiedBinderType(bodyEl, e, ctx) + " " + e.getAttribute("value"));
             }
         }
         if (varDecls.isEmpty()) return "/* quantified pred */";
 
-        Element bodyEl = childByName(qp, "Body");
         if (bodyEl == null) return "/* quantified pred */";
         Element bodyPred = BxmlDomUtils.firstPredChild(bodyEl);
         if (bodyPred == null) return "/* quantified pred */";

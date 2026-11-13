@@ -7,6 +7,8 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 /**
  * Formata o bloco {@code axiomatic NomeMaquina_variables { logic … }} de uma máquina B, com tipos
@@ -260,57 +262,139 @@ public final class MachineAxiomaticBlockFormatter {
         for (Map.Entry<String, String> e : types.entrySet()) {
             String var = e.getKey();
             String logicType = e.getValue();
-            String implRhs = null;
-            if (rootAbstractForImplRhs != null
-                    && refinementChild != null
-                    && ctx != null
-                    && BxmlMachineVariables.concreteVariableInvIsTotalArrowFunction(refinementChild, var)) {
-                logicType = BxmlMachineVariables.relationLogicTypeToFunctionLogicType(logicType);
-                implRhs =
-                        BxmlMachineVariables.implementationRhsTotalFunctionFromArray(
-                                rootAbstractForImplRhs.trim(), var, refinementChild, ctx, bxmlDirectory);
+            // Variável tipada por registo B (ver BxmlTypeRegistry#structTypeElement): sem forma
+            // ACSL de "logic struct T v = ...;" com valor agregado (ACSL não suporta literais de
+            // struct em termos lógicos), então em vez de UMA declaração emite-se um espelho logic
+            // escalar POR-CAMPO ("v__campo"); só suportado no caminho com C real por trás
+            // (rootAbstractForImplRhs != null) — o único exercitado até agora (cv_rec, máquina
+            // fundida sem gluing entre camadas de abstração).
+            if (logicType != null
+                    && logicType.startsWith("struct:")
+                    && rootAbstractForImplRhs != null
+                    && ctx != null) {
+                appendStructFieldMirrors(sb, var, logicType, rootAbstractForImplRhs.trim(), ctx);
+                continue;
             }
-            sb.append("    logic ").append(logicType).append(" ").append(var);
-            // reads dummy_ghost_v só quando a variável não tem definição concreta (= rhs):
-            // as duas cláusulas são mutuamente exclusivas em ACSL.
-            boolean hasConcreteRhs = rootAbstractForImplRhs != null;
-            if (!hasConcreteRhs
-                    && ghostDummyReadsForAbstractVars != null
-                    && ghostDummyReadsForAbstractVars.contains(var)) {
-                sb.append(" reads dummy_ghost_").append(var);
-            }
-            if (rootAbstractForImplRhs != null) {
-                String rhs;
-                String override = varRhsOverrides == null ? null : varRhsOverrides.get(var);
-                if (override != null) {
-                    rhs = override;
-                } else if (implRhs != null) {
-                    rhs = implRhs;
-                } else {
-                    rhs = rootAbstractForImplRhs + "__" + var;
-                    // "logic boolean v = <scalar _Bool C global>;" faz o Frama-C/WP falhar em
-                    // TODOS os provers (CVC5/Alt-Ergo/Z3) com "[Why3 Error] Type mismatch between
-                    // bool and int" — reproduzido isoladamente sem qualquer código B2ACSL: o
-                    // modelo de memória do WP não converte corretamente o valor lido do chunk C
-                    // para o tipo lógico "boolean" nessa forma de definição direta. Envolver a
-                    // mesma leitura num ternário ACSL (\true/\false) contorna o problema (a
-                    // conversão passa a ocorrer via if-then-else, que o WP já trata bem).
-                    if ("boolean".equals(logicType)) {
-                        rhs = "(" + rhs + " ? \\true : \\false)";
-                    }
-                }
-                sb.append(" = ").append(rhs);
-            } else if (refinementWithParent) {
-                Optional<String> abs =
-                        BxmlConnectionAcsl.linkingAbstractVariableName(
-                                refinementParent, refinementChild, var, gluing);
-                abs.ifPresent(
-                        a -> sb.append(" = return_valid_").append(var).append("(").append(a).append(")"));
-            }
-            sb.append(";\n");
+            appendScalarVariableMirror(
+                    sb,
+                    var,
+                    logicType,
+                    rootAbstractForImplRhs,
+                    refinementWithParent,
+                    refinementParent,
+                    refinementChild,
+                    gluing,
+                    ghostDummyReadsForAbstractVars,
+                    ctx,
+                    varRhsOverrides,
+                    bxmlDirectory);
         }
         sb.append("}\n");
         return sb.toString();
+    }
+
+    private static void appendScalarVariableMirror(
+            StringBuilder sb,
+            String var,
+            String logicType,
+            String rootAbstractForImplRhs,
+            boolean refinementWithParent,
+            Element refinementParent,
+            Element refinementChild,
+            Map<String, String> gluing,
+            Set<String> ghostDummyReadsForAbstractVars,
+            BxmlTranslateContext ctx,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory) {
+        String implRhs = null;
+        if (rootAbstractForImplRhs != null
+                && refinementChild != null
+                && ctx != null
+                && BxmlMachineVariables.concreteVariableInvIsTotalArrowFunction(refinementChild, var)) {
+            logicType = BxmlMachineVariables.relationLogicTypeToFunctionLogicType(logicType);
+            implRhs =
+                    BxmlMachineVariables.implementationRhsTotalFunctionFromArray(
+                            rootAbstractForImplRhs.trim(), var, refinementChild, ctx, bxmlDirectory);
+        }
+        sb.append("    logic ").append(logicType).append(" ").append(var);
+        // reads dummy_ghost_v só quando a variável não tem definição concreta (= rhs):
+        // as duas cláusulas são mutuamente exclusivas em ACSL.
+        boolean hasConcreteRhs = rootAbstractForImplRhs != null;
+        if (!hasConcreteRhs
+                && ghostDummyReadsForAbstractVars != null
+                && ghostDummyReadsForAbstractVars.contains(var)) {
+            sb.append(" reads dummy_ghost_").append(var);
+        }
+        if (rootAbstractForImplRhs != null) {
+            String rhs;
+            String override = varRhsOverrides == null ? null : varRhsOverrides.get(var);
+            if (override != null) {
+                rhs = override;
+            } else if (implRhs != null) {
+                rhs = implRhs;
+            } else {
+                rhs = rootAbstractForImplRhs + "__" + var;
+                // "logic boolean v = <scalar _Bool C global>;" faz o Frama-C/WP falhar em
+                // TODOS os provers (CVC5/Alt-Ergo/Z3) com "[Why3 Error] Type mismatch between
+                // bool and int" — reproduzido isoladamente sem qualquer código B2ACSL: o
+                // modelo de memória do WP não converte corretamente o valor lido do chunk C
+                // para o tipo lógico "boolean" nessa forma de definição direta. Envolver a
+                // mesma leitura num ternário ACSL (\true/\false) contorna o problema (a
+                // conversão passa a ocorrer via if-then-else, que o WP já trata bem).
+                if ("boolean".equals(logicType)) {
+                    rhs = "(" + rhs + " ? \\true : \\false)";
+                }
+            }
+            sb.append(" = ").append(rhs);
+        } else if (refinementWithParent) {
+            Optional<String> abs =
+                    BxmlConnectionAcsl.linkingAbstractVariableName(
+                            refinementParent, refinementChild, var, gluing);
+            abs.ifPresent(
+                    a -> sb.append(" = return_valid_").append(var).append("(").append(a).append(")"));
+        }
+        sb.append(";\n");
+    }
+
+    /**
+     * Espelhos {@code logic} por-campo de uma variável tipada por registo B ({@code v : struct(...)})
+     * — ver comentário no chamador. {@code structSentinel} é {@code "struct:<typref>"} (ver
+     * {@link BxmlMachineVariables#inferVariableLogicTypes}); {@code rootAbstractForImplRhs} já vem
+     * "trim()"-ado.
+     */
+    private static void appendStructFieldMirrors(
+            StringBuilder sb,
+            String var,
+            String structSentinel,
+            String rootAbstractForImplRhs,
+            BxmlTranslateContext ctx) {
+        int typref = Integer.parseInt(structSentinel.substring("struct:".length()));
+        Element structEl = ctx.types().structTypeElement(typref);
+        if (structEl == null) return;
+        NodeList children = structEl.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element item = (Element) n;
+            if (!"Record_Item".equals(item.getLocalName())) continue;
+            String label = item.getAttribute("label");
+            Element fieldTypeEl = BxmlDomUtils.firstNonAttrElementChild(item);
+            if (label == null || label.isBlank() || fieldTypeEl == null) continue;
+            String fieldLogicType = ctx.types().fieldTypeToAcslLogicType(fieldTypeEl);
+            String rhs = rootAbstractForImplRhs + "__" + var + "." + label;
+            if ("boolean".equals(fieldLogicType)) {
+                rhs = "(" + rhs + " ? \\true : \\false)";
+            }
+            sb.append("    logic ")
+                    .append(fieldLogicType)
+                    .append(" ")
+                    .append(var)
+                    .append("__")
+                    .append(label)
+                    .append(" = ")
+                    .append(rhs)
+                    .append(";\n");
+        }
     }
 
 }

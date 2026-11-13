@@ -49,7 +49,23 @@ public final class BxmlTypeRegistry {
     public static final Pattern TUPLE_DOMAIN_RELATION_NAME = Pattern.compile(
             "^(?:Relation|Function)_((?:Tuple_)+)((?:(?:integer|boolean)_)+)(integer|boolean)$");
 
+    /**
+     * Como {@link #TUPLE_DOMAIN_RELATION_NAME}, mas para o codomínio NÃO escalar {@code POW(X)} (ex.
+     * {@code "Relation_Tuple_integer_integer_Set_integer"} para {@code (INTEGER*NATURAL) -->
+     * POW(INTEGER)}, como {@code C_contrainteDeplacementReel} em railmap): domínio composto (tupla
+     * de N&gt;=2 elementos) + codomínio {@code Set<escalar>}. Grupo 1 = os {@code "Tuple_"} do
+     * domínio, grupo 2 = os N tipos-folha do domínio (cada um com {@code "_"} à direita), grupo 3 =
+     * o tipo-elemento do {@code Set} do codomínio. {@code TUPLE_DOMAIN_RELATION_NAME} NUNCA bate
+     * nesta string (o seu grupo final tem de ser um escalar bare, nunca {@code Set_<escalar>}), por
+     * isso ambos os padrões continuam mutuamente exclusivos por construção.
+     */
+    public static final Pattern TUPLE_DOMAIN_SET_CODOMAIN_RELATION_NAME = Pattern.compile(
+            "^(?:Relation|Function)_((?:Tuple_)+)((?:(?:integer|boolean)_)+)Set_(integer|boolean)$");
+
     private final Map<Integer, String> idToDisplay = new HashMap<>();
+
+    /** Ver {@link #structTypeElement(int)}. */
+    private final Map<Integer, Element> structTypeElements = new HashMap<>();
 
     /**
      * Registo de tipos de codomínio/domínio-tupla descobertos ao resolver tipos desta instância
@@ -71,8 +87,33 @@ public final class BxmlTypeRegistry {
             if (idStr.isBlank()) continue;
             int id = Integer.parseInt(idStr.trim());
             r.idToDisplay.put(id, typeToString(t));
+            Element bareStruct = BxmlDomUtils.firstNonAttrElementChild(t);
+            if (bareStruct != null && "Struct".equals(bareStruct.getLocalName())) {
+                r.structTypeElements.put(id, bareStruct);
+            }
         }
         return r;
+    }
+
+    /**
+     * Elemento {@code <Struct>} (campos {@code Record_Item}) do tipo B registo puro (não
+     * {@code POW(struct(...))}) de {@code typref} — usado para gerar os espelhos {@code logic}
+     * por-campo de uma variável tipada por registo ({@code rv : struct(fld1: 0..9, fld2: BOOL)}),
+     * já que ACSL não suporta literais de struct agregados (confirmado empiricamente: "unsupported
+     * aggregated field construct"). {@code null} se {@code typref} não for um tipo registo.
+     */
+    public Element structTypeElement(int typref) {
+        return structTypeElements.get(typref);
+    }
+
+    /**
+     * Tipo ACSL {@code logic} (ex. {@code integer}, {@code boolean}) de um campo de registo B, a
+     * partir do elemento de tipo do próprio {@code Record_Item} (ex. {@code <Id value='INTEGER'/>},
+     * {@code <Binary_Exp op='..'>}), reaproveitando a mesma conversão usada para variáveis escalares.
+     */
+    public String fieldTypeToAcslLogicType(Element fieldTypeEl) {
+        if (fieldTypeEl == null) return "integer";
+        return rawBTypeToAcslVariableLogicType(bxmlTypeExprToString(fieldTypeEl));
     }
 
     /**
@@ -83,8 +124,8 @@ public final class BxmlTypeRegistry {
         // POW(T) → T
         if (full.startsWith("POW(") && full.endsWith(")")) {
             String inner = full.substring(4, full.length() - 1).trim();
-            // B: NAT ⊆ ℤ; POW(NAT) para conjuntos de naturais
-            if ("INTEGER".equals(inner)) return "NAT";
+            // testemunha de tipo de empty(...): o mesmo conjunto da lib que o B2ACSLRules usa
+            if ("INTEGER".equals(inner)) return "INT";
             return inner;
         }
         return full;
@@ -108,11 +149,30 @@ public final class BxmlTypeRegistry {
     }
 
     /**
+     * Forma genérica ({@code Set<Tuple<...> >}, com {@code > >} separados) de um nome achatado
+     * registado por esta máquina ({@code Relation_integer_Set_integer}), ou {@code type} inalterado.
+     * Um nome achatado não serve de binder num {@code \forall} de axioma nem é reconhecido pelo
+     * universo ghost isolado; a forma genérica serve aos dois (o ghost troca Set/Tuple por DSet/DTuple).
+     */
+    public String expandTupleCodomainAlias(String type) {
+        if (type == null) return null;
+        String def = tupleCodomainTypes.definitionOf(type);
+        return def == null ? type : BxmlComprehensionRegistry.normalizeTypeSpacing(def);
+    }
+
+    /**
      * Converte o texto de tipo B (de {@link #getRawType}) num tipo de lógica ACSL para variáveis.
      */
     public String rawBTypeToAcslVariableLogicType(String raw) {
         if (raw == null || raw.isBlank() || "UNKNOWN".equals(raw)) return "integer";
         String r = raw.trim();
+        // Sentinela de tipo registo (ver bxmlTypeExprToString/Struct): não é um tipo ACSL de facto
+        // ("struct" não existe como tal em ACSL — ACSL não suporta literais de struct agregados),
+        // só um marcador para MachineAxiomaticBlockFormatter decidir emitir espelhos logic
+        // POR-CAMPO em vez de um único "logic struct rv = ...;" inválido.
+        if ("STRUCT".equals(r)) {
+            return "struct";
+        }
         if (isScalarBTypeName(r)) {
             return acslElementTypeNameStatic(r);
         }
@@ -299,7 +359,18 @@ public final class BxmlTypeRegistry {
      * #compoundDomainCartesianProductToAcslRelationType}) — a forma de registo/nomeação não depende
      * de qual dos dois lados é o composto.
      */
-    private String registerCartesianRelationType(String domainType, String codomainType) {
+    /**
+     * Visibilidade de pacote: também usado por {@link
+     * BxmlMachineVariables#sequenceDomainRelationTypeIfAny} para registar o tipo {@code Relation<...>}
+     * de uma constante {@code V : (seq(D) --> R)} cujo domínio já foi resolvido à parte (via {@link
+     * BxmlMachineVariables#acslListTypeForSequenceUnary}, não pelo caminho normal de {@code
+     * powCartesianProductToAcslRelationType} — esse não sabe reconhecer domínio-sequência dentro do
+     * POW aninhado do typref cru B). Confirmado empiricamente (teste isolado com frama-c
+     * -acsl-import) que {@code \list<A>} aninhado dentro de {@code Tuple<...>} PARSEIA bem desde que
+     * o alias fique num ficheiro alcançado via {@code include} (nunca inline no ficheiro de topo) —
+     * exatamente o que este método já faz.
+     */
+    String registerCartesianRelationType(String domainType, String codomainType) {
         String genericTypeExpr = "Relation<" + domainType + ", " + codomainType + ">";
         String flatName = flattenGenericTypeExprToIdentifier(genericTypeExpr);
         String definition =
@@ -434,6 +505,12 @@ public final class BxmlTypeRegistry {
         String ln = e.getLocalName();
         if ("Id".equals(ln)) {
             return e.getAttribute("value");
+        }
+        // Tipo registo B ("struct(fld1: T1, fld2: T2, ...)"): sem forma ACSL própria (ver
+        // rawBTypeToAcslVariableLogicType), só um marcador para o chamador decidir tratamento
+        // especial (espelhos logic por-campo em vez de um tipo ACSL único).
+        if ("Struct".equals(ln)) {
+            return "STRUCT";
         }
         if ("Unary_Exp".equals(ln) && "POW".equals(e.getAttribute("op"))) {
             Element inner = BxmlDomUtils.firstNonAttrElementChild(e);

@@ -19,11 +19,41 @@ public final class BxmlLoopTranslator {
 
     private BxmlLoopTranslator() {}
 
-    public record LoopContract(int index, List<String> invariant, String variant, List<String> assigns) {
+    /**
+     * Anotação de um laço C. {@code preformatted}, quando não nulo, é o texto pronto dos blocos
+     * {@code at loop N:} de um laço gerado por {@code ARRAY := DOMAIN * {VALUE}} (ver
+     * {@link InitialisationAcsl#appendLoopInitSpec}); {@code span} é quantos laços C ele ocupa
+     * (2 no caso 2D: externo e interno).
+     */
+    public record LoopContract(
+            int index, List<String> invariant, String variant, List<String> assigns, String preformatted, int span) {
         public LoopContract {
             invariant = invariant == null ? List.of() : List.copyOf(invariant);
             assigns = assigns == null ? List.of() : List.copyOf(assigns);
+            span = Math.max(1, span);
         }
+
+        public LoopContract(int index, List<String> invariant, String variant, List<String> assigns) {
+            this(index, invariant, variant, assigns, null, 1);
+        }
+
+        /** Número do próximo laço C depois deste. */
+        public int nextIndex() {
+            return index + span;
+        }
+
+        /** Mesma anotação com outro invariante e outro assigns; o texto pronto não se reescreve. */
+        public LoopContract withInvariantAndAssigns(List<String> newInvariant, List<String> newAssigns) {
+            if (preformatted != null) {
+                return this;
+            }
+            return new LoopContract(index, newInvariant, variant, newAssigns, null, span);
+        }
+    }
+
+    /** Número do próximo laço C, contando os laços já anotados (2D ocupa dois). */
+    private static int nextLoopIndex(List<LoopContract> out) {
+        return out.isEmpty() ? 1 : out.get(out.size() - 1).nextIndex();
     }
 
     /**
@@ -155,9 +185,25 @@ public final class BxmlLoopTranslator {
         if (sub == null) {
             return;
         }
+        // ARRAY := DOMAIN * {VALUE}: o gerador C escreve um laço for (dois no caso 2D). Entra na
+        // mesma contagem dos WHILE, na ordem do corpo, porque o -acsl-import pareia "at loop N" com
+        // o N-ésimo laço C da função.
+        if ("Assignement_Sub".equals(sub.getLocalName())) {
+            Element owner = implementationMachineEl != null ? implementationMachineEl : abstractMachineEl;
+            CartesianProductLoopSpecDetector.LoopInitSpec spec =
+                    CartesianProductLoopSpecDetector.cartesianProductLoopSpecFromAssignment(
+                            sub, owner, ctx, bxmlDirectory);
+            if (spec != null) {
+                int index = nextLoopIndex(out);
+                StringBuilder text = new StringBuilder();
+                int next = InitialisationAcsl.appendLoopInitSpec(text, spec, index);
+                out.add(new LoopContract(index, List.of(), "", List.of(), text.toString(), next - index));
+            }
+            return;
+        }
         if ("While".equals(sub.getLocalName())) {
             out.add(translateWhile(
-                    sub, ctx, abstractMachineEl, implementationMachineEl, out.size() + 1,
+                    sub, ctx, abstractMachineEl, implementationMachineEl, nextLoopIndex(out),
                     importedOpAssigns, bxmlDirectory));
             walkForWhileLoops(
                     BxmlDomUtils.firstChildElement(sub, "Body"), ctx, abstractMachineEl, implementationMachineEl, out,
@@ -184,10 +230,12 @@ public final class BxmlLoopTranslator {
             Element whileEl, BxmlTranslateContext ctx, Element abstractMachineEl,
             Element implementationMachineEl, int index, Map<String, List<String>> importedOpAssigns,
             Path bxmlDirectory) {
+        // Anotação de laço: x$0 é \at(x, Pre), não \old(x), que o ACSL proíbe aqui.
+        BxmlTranslateContext loopCtx = ctx.withScopeKind(BxmlAnnotationScope.Kind.LOOP);
         Element invEl = BxmlDomUtils.firstChildElement(whileEl, "Invariant");
         List<String> invariant = List.of();
         if (invEl != null) {
-            invariant = BxmlPredicateToAcsl.translateInvariantConjuncts(invEl, ctx).stream()
+            invariant = BxmlPredicateToAcsl.translateInvariantConjuncts(invEl, loopCtx).stream()
                     .map(String::trim)
                     .toList();
         }
@@ -197,7 +245,7 @@ public final class BxmlLoopTranslator {
         if (varEl != null) {
             Element exp = firstExpressionChild(varEl);
             if (exp != null) {
-                variant = BxmlExpressionToAcsl.translate(exp, ctx).trim();
+                variant = BxmlExpressionToAcsl.translate(exp, loopCtx).trim();
             }
         }
 
@@ -231,7 +279,7 @@ public final class BxmlLoopTranslator {
             return;
         }
         if ("Operation_Call".equals(sub.getLocalName())) {
-            collectOperationCallAssigns(sub, out, importedOpAssigns, localVars);
+            collectOperationCallAssigns(sub, ctx, out, importedOpAssigns, localVars);
             return;
         }
         collectLoopAssignsFromChildren(
@@ -294,7 +342,8 @@ public final class BxmlLoopTranslator {
     }
 
     private static void collectOperationCallAssigns(
-            Element sub, Set<String> out, Map<String, List<String>> importedOpAssigns, Set<String> localVars) {
+            Element sub, BxmlTranslateContext ctx, Set<String> out, Map<String, List<String>> importedOpAssigns,
+            Set<String> localVars) {
         // Parâmetros de saída: variáveis locais C modificadas pela chamada.
         Element outParams = BxmlDomUtils.firstChildElement(sub, "Output_Parameters");
         if (outParams != null) {
@@ -302,7 +351,7 @@ public final class BxmlLoopTranslator {
                 if ("Id".equals(id.getLocalName())) {
                     String name = id.getAttribute("value");
                     if (name != null && !name.isBlank() && !localVars.contains(name.trim())) {
-                        out.add(name.trim());
+                        out.add(outputParamTarget(name.trim(), ctx));
                     }
                 }
             }
@@ -339,6 +388,17 @@ public final class BxmlLoopTranslator {
         }
     }
 
+    /**
+     * Um parâmetro de saída da operação é um ponteiro em C: o laço altera {@code *p}, não {@code p}
+     * (ver {@link BxmlAnnotationScope#outputParams()}). Outros nomes ficam como estão.
+     */
+    private static String outputParamTarget(String name, BxmlTranslateContext ctx) {
+        if (ctx != null && ctx.annotationScope().outputParams().contains(name)) {
+            return "*" + name;
+        }
+        return name;
+    }
+
     /** Nome da operação em {@code <Operation_Call><Name><Id value="..."/></Name>}. */
     private static String extractOperationCallName(Element opCall) {
         Element nameEl = BxmlDomUtils.firstChildElement(opCall, "Name");
@@ -363,6 +423,9 @@ public final class BxmlLoopTranslator {
     private static String qualify(
             String varName, BxmlTranslateContext ctx, Element abstractMachineEl,
             Element implementationMachineEl, Path bxmlDirectory) {
+        if (ctx != null && ctx.annotationScope().outputParams().contains(varName)) {
+            return outputParamTarget(varName, ctx);
+        }
         if (ctx == null || abstractMachineEl == null) {
             return varName;
         }

@@ -5,6 +5,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -737,23 +739,30 @@ public final class BxmlSetsTranslator {
             }
             try {
                 Element seenEl = BxmlDocumentLoader.parseMachineElement(p);
-                Element block = BxmlDomUtils.firstChildElement(seenEl, "Concrete_Constants");
-                if (block == null) {
-                    continue;
-                }
-                NodeList ch = block.getChildNodes();
-                for (int i = 0; i < ch.getLength(); i++) {
-                    Node n = ch.item(i);
-                    if (n.getNodeType() != Node.ELEMENT_NODE) {
+                // Concrete_Constants E Abstract_Constants: uma constante ABSTRACT_CONSTANTS (ex.
+                // csp_stdLib_type_cst's SBOOL, definida via PROPERTIES) é igualmente um global
+                // partilhado só visível através do .acsl da máquina vista (-acsl-import) — o
+                // front-end isolado do .ci rejeita com "unbound logic variable" se só as
+                // Concrete_Constants forem consideradas aqui.
+                for (String blockName : List.of("Concrete_Constants", "Abstract_Constants")) {
+                    Element block = BxmlDomUtils.firstChildElement(seenEl, blockName);
+                    if (block == null) {
                         continue;
                     }
-                    Element e = (Element) n;
-                    if (!"Id".equals(e.getLocalName())) {
-                        continue;
-                    }
-                    String name = e.getAttribute("value");
-                    if (name != null && !name.isBlank()) {
-                        result.add(name.trim());
+                    NodeList ch = block.getChildNodes();
+                    for (int i = 0; i < ch.getLength(); i++) {
+                        Node n = ch.item(i);
+                        if (n.getNodeType() != Node.ELEMENT_NODE) {
+                            continue;
+                        }
+                        Element e = (Element) n;
+                        if (!"Id".equals(e.getLocalName())) {
+                            continue;
+                        }
+                        String name = e.getAttribute("value");
+                        if (name != null && !name.isBlank()) {
+                            result.add(name.trim());
+                        }
                     }
                 }
             } catch (Exception ignored) {
@@ -799,28 +808,32 @@ public final class BxmlSetsTranslator {
             }
             try {
                 Element seenEl = BxmlDocumentLoader.parseMachineElement(p);
-                Element block = BxmlDomUtils.firstChildElement(seenEl, "Concrete_Constants");
-                if (block == null) {
-                    continue;
-                }
                 BxmlTypeRegistry seenTypes = BxmlTypeRegistry.fromMachine(seenEl);
-                NodeList ch = block.getChildNodes();
-                for (int i = 0; i < ch.getLength(); i++) {
-                    Node n = ch.item(i);
-                    if (n.getNodeType() != Node.ELEMENT_NODE) {
+                // Concrete_Constants E Abstract_Constants — ver comentário equivalente em
+                // listSeenMachineConcreteConstantNames.
+                for (String blockName : List.of("Concrete_Constants", "Abstract_Constants")) {
+                    Element block = BxmlDomUtils.firstChildElement(seenEl, blockName);
+                    if (block == null) {
                         continue;
                     }
-                    Element e = (Element) n;
-                    if (!"Id".equals(e.getLocalName())) {
-                        continue;
+                    NodeList ch = block.getChildNodes();
+                    for (int i = 0; i < ch.getLength(); i++) {
+                        Node n = ch.item(i);
+                        if (n.getNodeType() != Node.ELEMENT_NODE) {
+                            continue;
+                        }
+                        Element e = (Element) n;
+                        if (!"Id".equals(e.getLocalName())) {
+                            continue;
+                        }
+                        String name = e.getAttribute("value");
+                        if (name == null || name.isBlank()) {
+                            continue;
+                        }
+                        String tr = e.getAttribute("typref");
+                        int typref = tr.isBlank() ? -1 : Integer.parseInt(tr.trim());
+                        result.put(name.trim(), seenTypes.acslVariableLogicTypeFromTypref(typref));
                     }
-                    String name = e.getAttribute("value");
-                    if (name == null || name.isBlank()) {
-                        continue;
-                    }
-                    String tr = e.getAttribute("typref");
-                    int typref = tr.isBlank() ? -1 : Integer.parseInt(tr.trim());
-                    result.put(name.trim(), seenTypes.acslVariableLogicTypeFromTypref(typref));
                 }
             } catch (Exception ignored) {
             }
@@ -894,19 +907,39 @@ public final class BxmlSetsTranslator {
         } catch (IOException e) {
             return null;
         }
+        // Nome -> <Abstraction> de cada refinamento/implementação, para a segunda passada.
+        Map<String, String> abstractionOf = new HashMap<>();
+        List<Element> implementations = new ArrayList<>();
         for (Path p : candidates) {
             try {
                 Element el = BxmlDocumentLoader.parseMachineElement(p);
+                Element abs = BxmlDomUtils.firstChildElement(el, "Abstraction");
+                String absName = abs != null ? abs.getTextContent().trim() : null;
+                if (absName != null && !absName.isEmpty()) {
+                    abstractionOf.put(el.getAttribute("name"), absName);
+                }
                 if (!"implementation".equalsIgnoreCase(el.getAttribute("type"))) {
                     continue;
                 }
-                Element abs = BxmlDomUtils.firstChildElement(el, "Abstraction");
-                String absName = abs != null ? abs.getTextContent().trim() : null;
                 if (abstractMachineName.equals(absName)) {
                     return el;
                 }
+                implementations.add(el);
             } catch (Exception ignored) {
                 // ficheiro malformado ou não-BXML; ignora e tenta o próximo
+            }
+        }
+        // Implementação que refina a máquina por refinamentos intermediários (HeapSort ->
+        // HeapSort_r -> HeapSort_i; Isqrt -> Isqrt_ord -> Isqrt_r -> Isqrt_i): sobe a cadeia de
+        // <Abstraction> até a máquina pedida.
+        for (Element impl : implementations) {
+            Set<String> seen = new HashSet<>();
+            String cur = abstractionOf.get(impl.getAttribute("name"));
+            while (cur != null && seen.add(cur)) {
+                if (abstractMachineName.equals(cur)) {
+                    return impl;
+                }
+                cur = abstractionOf.get(cur);
             }
         }
         return null;

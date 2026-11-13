@@ -16,6 +16,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.example.bxml.BxmlGluingNormalizer;
 import com.example.bxml.BxmlMachineVariables;
@@ -88,6 +90,17 @@ public final class B2ACSLPipeline {
                     + "        loop variant op2 - i;\n";
 
     /** {@code true} se {@code node} (ou algum descendente) for {@code Binary_Exp op='**i'}. */
+    /** {@code true} se alguma fonte C do projeto ({@link CSourceFiles}) chama ou declara {@code name(...)}. */
+    private static boolean cSourcesCallFunction(Path cDir, String name) throws IOException {
+        java.util.regex.Pattern call = java.util.regex.Pattern.compile("\\b" + java.util.regex.Pattern.quote(name) + "\\s*\\(");
+        for (Path f : CSourceFiles.list(cDir, ".c", ".h")) {
+            if (call.matcher(Files.readString(f, StandardCharsets.ISO_8859_1)).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean containsIntegerPowerOperator(Node node) {
         if (node == null) return false;
         if (node.getNodeType() == Node.ELEMENT_NODE) {
@@ -110,23 +123,128 @@ public final class B2ACSLPipeline {
     private B2ACSLPipeline() {}
 
     /**
+     * Resultado da fase de geração ({@link #generate}): tudo o que o passo de verificação
+     * (Frama-C) precisa, sem ainda o ter executado. {@code exitCode != 0} indica que a geração
+     * parou antes do fim (mesmos códigos de {@link #run}) e os demais campos podem estar vazios.
+     */
+    public record GenerationResult(
+            int exitCode,
+            Path bdp,
+            Path cDir,
+            Path acslDir,
+            List<Path> topLevelAcslFiles,
+            List<Path> acslFiles,
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            List<Path> cFiles,
+            List<String> specificationUsedTypes,
+            String projectName) {
+
+        static GenerationResult failed(int exitCode, Path bdp) {
+            return new GenerationResult(
+                    exitCode, bdp, null, null, List.of(), List.of(), null, null, List.of(), List.of(),
+                    inferProjectNameFromBdp(bdp));
+        }
+    }
+
+    /**
+     * Estrutura de um projeto B lida dos {@code .bxml} (grafos SEES/IMPORTS e máquinas abstratas
+     * raiz), sem gerar nada — para quem precisa ordenar/verificar {@code .acsl} produzidos por outra
+     * ferramenta a partir da mesma entrada BXML.
+     */
+    public record ProjectStructure(
+            BxmlSeesGraph seesGraph,
+            BxmlImportsGraph importsGraph,
+            List<String> topLevelMachineNames,
+            List<Element> abstractMachineRoots) {}
+
+    /** Lê a estrutura (SEES/IMPORTS, máquinas abstratas raiz) dos {@code .bxml} de {@code bdp}. */
+    public static ProjectStructure loadProjectStructure(Path bdpPath) throws Exception {
+        Path bdp = bdpPath.toAbsolutePath().normalize();
+        List<Path> bxmlFiles = findBxmlFiles(bdp);
+        BxmlSeesGraph seesGraph = BxmlSeesGraph.fromBxmlDirectory(bdp);
+        BxmlImportsGraph importsGraph =
+                BxmlImportsGraph.fromBxmlDirectory(bdp, buildAbstractionParentMap(bxmlFiles));
+        List<Element> abstractMachineRoots = new ArrayList<>();
+        Set<String> abstractMachineNames = new LinkedHashSet<>();
+        for (Path f : bxmlFiles) {
+            Element root = AcslGenerator.parseMachineElement(f);
+            if (AcslGenerator.getAbstractionReferenceName(root).isPresent()) {
+                continue;
+            }
+            abstractMachineRoots.add(root);
+            abstractMachineNames.add(root.getAttribute("name"));
+        }
+        List<String> topLevel =
+                topLevelImportMachineNames(
+                        abstractMachineNames, dependencyOnlyMachineNames(seesGraph, importsGraph));
+        return new ProjectStructure(
+                seesGraph, importsGraph, topLevel, List.copyOf(abstractMachineRoots));
+    }
+
+    /**
      * Executa o pipeline completo.
      *
      * @param bdpPath Caminho da pasta bdp (contém os .bxml)
      * @return Código de retorno para o Atelier B (0=sucesso, !=0=falha)
      */
     public static int run(Path bdpPath) throws Exception {
+        GenerationResult generation = generate(bdpPath);
+        if (generation.exitCode() != 0) {
+            return generation.exitCode();
+        }
+
+        // Step 3: Executar Frama-C (acsl-importer + WP)
+        int framaResult;
+        if (MOCK_MODE) {
+            framaResult =
+                    runMockFramaC(
+                            generation.topLevelAcslFiles(), generation.cFiles(), generation.cDir());
+        } else {
+            WpOptions wpOptions = WpOptionsDialog.promptWpOptions(generation.projectName());
+            if (wpOptions == null) {
+                System.err.println("[B2ACSL] Execution cancelled by user.");
+                return 7;
+            }
+            String selectedProjectName = wpOptions.projectName();
+            ExternalVerifierRunner verifierRunner = new FramaCVerifierRunner();
+            framaResult =
+                    verifierRunner.runFramaC(
+                            generation.topLevelAcslFiles(),
+                            generation.acslFiles(),
+                            generation.acslDir(),
+                            generation.seesGraph(),
+                            generation.importsGraph(),
+                            generation.cFiles(),
+                            generation.cDir(),
+                            generation.specificationUsedTypes(),
+                            wpOptions,
+                            selectedProjectName);
+        }
+
+        // Step 4: Retornar valor para Atelier B
+        return framaResult;
+    }
+
+    /**
+     * Fase de geração do pipeline (passos 1 a 2.1): BXML → {@code ghost_operations.ci} → {@code
+     * .acsl} → lista de tipos da especificação, gravados em {@code <proj>/lang/c}. Não executa o
+     * Frama-C — ver {@link #run} para o pipeline completo.
+     *
+     * @param bdpPath Caminho da pasta bdp (contém os .bxml)
+     */
+    public static GenerationResult generate(Path bdpPath) throws Exception {
         Path bdp = bdpPath.toAbsolutePath().normalize();
         if (!Files.isDirectory(bdp)) {
             System.err.println("[B2ACSL] Caminho inválido (não é diretório): " + bdp);
-            return 1;
+            return GenerationResult.failed(1, bdp);
         }
 
         // Step 1: Ler arquivos .bxml
         List<Path> bxmlFiles = findBxmlFiles(bdp);
         if (bxmlFiles.isEmpty()) {
             System.err.println("[B2ACSL] Nenhum arquivo .bxml encontrado em: " + bdp);
-            return 2;
+            return GenerationResult.failed(2, bdp);
         }
 
         List<MachineFile> machines = new ArrayList<>();
@@ -141,7 +259,7 @@ public final class B2ACSLPipeline {
 
         if (machines.isEmpty()) {
             System.err.println("[B2ACSL] Nenhuma máquina válida encontrada nos ficheiros .bxml.");
-            return 3;
+            return GenerationResult.failed(3, bdp);
         }
 
         Map<String, String> invariantGluingSubstitutions = BxmlGluingNormalizer.collectFromAllBxmlFiles(bxmlFiles);
@@ -207,10 +325,44 @@ public final class B2ACSLPipeline {
         // cDir, quando isso reduz a lista sem a esvaziar (nunca filtra o caso normal de uma só
         // implementação, nem o modo mock sem nenhum .c ainda gerado).
         filterMergePathsToAvailableImplementations(mergePathsByRootAbstract, cDir);
+        // Pré-passo: regista qual máquina primeiro reivindica cada nome de variável abstrata,
+        // entre as máquinas que precisam de abstração ghost — detecta colisões de nome entre
+        // máquinas B SEM relação SEES/IMPORTS entre si que coincidentemente usam o mesmo nome de
+        // variável (ex.: "enregistrementCroisillon" em rmc_deplacement/rmc_deplacement_1/
+        // rmc_entrees no projeto railmap). Sem isto, ghost_operations.ci e os .acsl de cada
+        // máquina acabam com MAIS DE UMA declaração global do MESMO símbolo lógico — o Frama-C
+        // rejeita com "already declared with the same profile" quando os tipos divergem, e
+        // quando calham a bater tipo (aceite silenciosamente) as duas máquinas ficam a partilhar
+        // sem querer um único símbolo ghost. Ordem de iteração = ordem de "machines" abaixo, logo
+        // determinística: a 1ª máquina a reivindicar um nome mantém-no tal-e-qual (sem
+        // qualificação, comportamento inalterado); só a 2ª+ ocorrência do MESMO nome é
+        // qualificada (ver qualifyCollidingGhostNamesInAppendedSection/qualifyCollidingRealAcslNames
+        // abaixo) — projetos sem nenhuma colisão (a esmagadora maioria) ficam byte-a-byte iguais.
+        Map<String, String> machineByOwnedVarName = new HashMap<>();
+        for (MachineFile mf : machines) {
+            Element mr = mf.machine().getMachineElement();
+            if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
+                continue;
+            }
+            String machineName = mf.machine().getMachineName();
+            List<Element> mergedEls = new ArrayList<>();
+            for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
+                mergedEls.add(AcslGenerator.parseMachineElement(mp));
+            }
+            if (!BxmlMachineVariables.needsGhostAbstraction(mr, mergedEls)
+                    && !GhostOperationsCiGenerator.machineHasAnySubOperations(mr)) {
+                continue;
+            }
+            for (String v : ownAbstractVariableNames(mr, mergedEls)) {
+                machineByOwnedVarName.putIfAbsent(v, machineName);
+            }
+        }
+
         // Limpa antes do loop: GhostOperationsCiGenerator.write() ACRESCENTA (não sobrescreve) a
         // cada chamada — ver comentário abaixo — por isso o ficheiro precisa de começar vazio a
         // cada execução, senão conteúdo de uma run anterior ficaria duplicado.
-        Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
+        Path ghostCiTargetPath = GhostOperationsCiGenerator.targetPath(cDir);
+        Files.deleteIfExists(ghostCiTargetPath);
         boolean anyNeedsGhost = false;
         for (MachineFile mf : machines) {
             Element mr = mf.machine().getMachineElement();
@@ -227,6 +379,12 @@ public final class B2ACSLPipeline {
                 continue;
             }
             anyNeedsGhost = true;
+            Set<String> collidingVars =
+                    collidingAbstractVarNames(mr, mergedEls, machineName, machineByOwnedVarName);
+            String ghostCiBefore =
+                    Files.isRegularFile(ghostCiTargetPath)
+                            ? Files.readString(ghostCiTargetPath, StandardCharsets.UTF_8)
+                            : "";
             // write() ACRESCENTA ao ghost_operations.ci (não sobrescreve): num projeto com VÁRIAS
             // máquinas a precisar de abstração ghost (ex.: Customer_estr tem Customer E Set), cada
             // chamada usava Files.writeString sem APPEND, e só a ÚLTIMA máquina processada
@@ -237,6 +395,10 @@ public final class B2ACSLPipeline {
             // só logo a seguir ao loop, para não duplicar "type DSet<A>;" etc.
             GhostOperationsCiGenerator.write(
                     cDir, mr, invariantGluingSubstitutions, bdp, mergedEls, seesGraph, importsGraph);
+            if (!collidingVars.isEmpty()) {
+                qualifyCollidingGhostNamesInAppendedSection(
+                        ghostCiTargetPath, ghostCiBefore, machineName, collidingVars);
+            }
         }
         if (!anyNeedsGhost) {
             Files.deleteIfExists(GhostOperationsCiGenerator.targetPath(cDir));
@@ -281,9 +443,18 @@ public final class B2ACSLPipeline {
                     continue;
                 }
                 String machineName = mf.machine().getMachineName();
+                // Ordem de machinesForAcsl (não a de geração, que põe o portador da lib no fim):
+                // é ela que define as raízes e a ordem do -acsl-import (FramaCRunner).
+                abstractMachineNames.add(machineName);
                 if (!dependencyOnlyMachineNames.contains(machineName)) {
                     topLevelImportMachinesPreview.add(machineName);
                 }
+                // Apaga o .acsl (e o de tipos-tupla) de uma execução anterior, como o
+                // ghost_operations.ci acima: a varredura de símbolos da lib do portador lê o
+                // <M>.acsl de cada máquina quando ele existe, e um ficheiro antigo fazia a 1.ª
+                // execução e as seguintes gerarem includes diferentes.
+                Files.deleteIfExists(acslDir.resolve(machineName + ".acsl"));
+                Files.deleteIfExists(acslDir.resolve(machineName + "_tuple_types.acsl"));
             }
             String libIncludeScanRootMachineName =
                     topLevelImportMachinesPreview.isEmpty()
@@ -292,13 +463,13 @@ public final class B2ACSLPipeline {
             String libIncludeCarrierMachineName =
                     resolveLibIncludeCarrierMachineName(
                             libIncludeScanRootMachineName, seesGraph, importsGraph);
-            for (MachineFile mf : machinesForAcsl) {
+            Map<String, Path> acslByMachineName = new HashMap<>();
+            for (MachineFile mf : withLibIncludeCarrierLast(machinesForAcsl, libIncludeCarrierMachineName)) {
                 Element machineRoot = mf.machine().getMachineElement();
                 if (AcslGenerator.getAbstractionReferenceName(machineRoot).isPresent()) {
                     continue;
                 }
                 String machineName = mf.machine().getMachineName();
-                abstractMachineNames.add(machineName);
                 List<Path> mergePaths =
                         mergePathsByRootAbstract.getOrDefault(machineName, List.of());
                 Optional<Path> acsl =
@@ -314,17 +485,42 @@ public final class B2ACSLPipeline {
                                 libIncludeCarrierMachineName,
                                 libIncludeScanRootMachineName,
                                 ghostCiStripped);
-                acsl.ifPresent(acslFiles::add);
+                if (acsl.isPresent()) {
+                    List<Element> mergedEls = new ArrayList<>();
+                    for (Path mp : mergePaths) {
+                        mergedEls.add(AcslGenerator.parseMachineElement(mp));
+                    }
+                    Set<String> collidingVars =
+                            collidingAbstractVarNames(
+                                    machineRoot, mergedEls, machineName, machineByOwnedVarName);
+                    if (!collidingVars.isEmpty()) {
+                        qualifyCollidingRealAcslNames(acsl.get(), machineName, collidingVars);
+                    }
+                }
+                acsl.ifPresent(p -> acslByMachineName.put(machineName, p));
+            }
+            for (String machineName : abstractMachineNames) {
+                Path p = acslByMachineName.get(machineName);
+                if (p != null) {
+                    acslFiles.add(p);
+                }
             }
             List<String> topLevelImportMachines =
                     topLevelImportMachineNames(abstractMachineNames, dependencyOnlyMachineNames);
             List<Path> topLevelAcslFiles = new ArrayList<>(
                     filterAcslFilesByMachineNames(acslFiles, topLevelImportMachines));
-            if (usesIntegerPowerOperator) {
-                Path bPowAcsl = acslDir.resolve(INTEGER_POWER_HELPER_FUNCTION_NAME + ".acsl");
+            // O contrato de b_pow só pode ser importado se a função existir no C: o ** pode aparecer
+            // só na especificação (ex. "res = aa ** nn" numa máquina cuja implementação calcula a
+            // potência com um laço), e então o -acsl-import falha com "could not find function
+            // b_pow". Por isso a decisão olha também as fontes C.
+            Path bPowAcsl = acslDir.resolve(INTEGER_POWER_HELPER_FUNCTION_NAME + ".acsl");
+            if (usesIntegerPowerOperator
+                    && cSourcesCallFunction(cDir, INTEGER_POWER_HELPER_FUNCTION_NAME)) {
                 Files.writeString(bPowAcsl, INTEGER_POWER_HELPER_ACSL_SKETCH, StandardCharsets.UTF_8);
                 acslFiles.add(bPowAcsl);
                 topLevelAcslFiles.add(bPowAcsl);
+            } else {
+                Files.deleteIfExists(bPowAcsl);
             }
             if (!topLevelImportMachines.isEmpty()) {
                 System.out.println(
@@ -351,38 +547,21 @@ public final class B2ACSLPipeline {
 
             if (cFiles.isEmpty() && !MOCK_MODE) {
                 System.err.println("[B2ACSL] Nenhum arquivo .c encontrado em: " + cDir);
-                return 4;
+                return GenerationResult.failed(4, bdp);
             }
 
-            // Step 3: Executar Frama-C (acsl-importer + WP)
-            int framaResult;
-            String projectName = inferProjectNameFromBdp(bdp);
-            if (MOCK_MODE) {
-                framaResult = runMockFramaC(topLevelAcslFiles, cFiles, cDir);
-            } else {
-                WpOptions wpOptions = WpOptionsDialog.promptWpOptions(projectName);
-                if (wpOptions == null) {
-                    System.err.println("[B2ACSL] Execution cancelled by user.");
-                    return 7;
-                }
-                String selectedProjectName = wpOptions.projectName();
-                ExternalVerifierRunner verifierRunner = new FramaCVerifierRunner();
-                framaResult =
-                        verifierRunner.runFramaC(
-                                topLevelAcslFiles,
-                                acslFiles,
-                                acslDir,
-                                seesGraph,
-                                importsGraph,
-                                cFiles,
-                                cDir,
-                                specificationUsedTypes,
-                                wpOptions,
-                                selectedProjectName);
-            }
-
-            // Step 4: Retornar valor para Atelier B
-            return framaResult;
+            return new GenerationResult(
+                    0,
+                    bdp,
+                    cDir,
+                    acslDir,
+                    List.copyOf(topLevelAcslFiles),
+                    List.copyOf(acslFiles),
+                    seesGraph,
+                    importsGraph,
+                    cFiles,
+                    specificationUsedTypes,
+                    inferProjectNameFromBdp(bdp));
         } finally {
         }
     }
@@ -472,15 +651,7 @@ public final class B2ACSLPipeline {
     }
 
     private static List<Path> findCFiles(Path root) throws IOException {
-        if (!Files.isDirectory(root)) return List.of();
-        try (var stream = Files.walk(root)) {
-            return stream
-                    .filter(Files::isRegularFile)
-                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".c"))
-                    .filter(p -> !FramaCRunner.MERGED_CODE_FILE_NAME.equalsIgnoreCase(p.getFileName().toString()))
-                    .sorted(Comparator.comparing(Path::toString))
-                    .toList();
-        }
+        return CSourceFiles.list(root, ".c");
     }
 
     /**
@@ -548,6 +719,114 @@ public final class B2ACSLPipeline {
     }
 
     /**
+     * Nomes das variáveis abstratas PRÓPRIAS de {@code machineEl} (excluindo as colapsadas na
+     * implementação — ver {@link BxmlMachineVariables#collapsedIntoImplementationVariableNames}),
+     * exatamente como {@link GhostOperationsCiGenerator#write} as calcula internamente — reutilizado
+     * aqui para o pré-passo de deteção de colisão de nomes entre máquinas (ver comentário acima do
+     * loop que constrói {@code machineByOwnedVarName}).
+     */
+    private static List<String> ownAbstractVariableNames(
+            Element machineEl, List<Element> mergedMachineElements) {
+        Set<String> collapsed =
+                BxmlMachineVariables.collapsedIntoImplementationVariableNames(
+                        machineEl, mergedMachineElements);
+        return GhostOperationsCiGenerator.listAbstractVariableNames(machineEl).stream()
+                .filter(v -> !collapsed.contains(v))
+                .toList();
+    }
+
+    /**
+     * Variáveis abstratas PRÓPRIAS de {@code machineEl} cujo nome já foi reivindicado por OUTRA
+     * máquina em {@code machineByOwnedVarName} — candidatas a qualificação (ver {@link
+     * #qualifyCollidingGhostNamesInAppendedSection}/{@link #qualifyCollidingRealAcslNames}).
+     */
+    private static Set<String> collidingAbstractVarNames(
+            Element machineEl,
+            List<Element> mergedMachineElements,
+            String machineName,
+            Map<String, String> machineByOwnedVarName) {
+        Set<String> colliding = new LinkedHashSet<>();
+        for (String v : ownAbstractVariableNames(machineEl, mergedMachineElements)) {
+            String owner = machineByOwnedVarName.get(v);
+            if (owner != null && !owner.equals(machineName)) {
+                colliding.add(v);
+            }
+        }
+        return colliding;
+    }
+
+    /**
+     * Qualifica, com o prefixo {@code <machineName>__}, as referências ghost ({@code dummy_<v>}/
+     * {@code ghost_<v>}) de {@code collidingVars} — mas SÓ dentro do trecho que a chamada a {@link
+     * GhostOperationsCiGenerator#write} que acabou de correr ACRESCENTOU a {@code ghostCiPath}
+     * (identificado por {@code ghostCiTextBeforeWrite}, o conteúdo do ficheiro capturado
+     * imediatamente antes dessa chamada — {@code write()} só faz append, nunca reescreve o que já lá
+     * estava). Evita renomear a ocorrência já existente (bare, da 1ª máquina a reivindicar o nome)
+     * doutra secção do ficheiro.
+     */
+    private static void qualifyCollidingGhostNamesInAppendedSection(
+            Path ghostCiPath, String ghostCiTextBeforeWrite, String machineName, Set<String> collidingVars)
+            throws IOException {
+        if (!Files.isRegularFile(ghostCiPath)) {
+            return;
+        }
+        String full = Files.readString(ghostCiPath, StandardCharsets.UTF_8);
+        if (full.length() <= ghostCiTextBeforeWrite.length()) {
+            return;
+        }
+        String head = full.substring(0, ghostCiTextBeforeWrite.length());
+        String tail = full.substring(ghostCiTextBeforeWrite.length());
+        String qualifiedTail = tail;
+        for (String v : collidingVars) {
+            String suffix = machineName + "__" + v;
+            qualifiedTail =
+                    Pattern.compile("\\bdummy_" + Pattern.quote(v) + "\\b")
+                            .matcher(qualifiedTail)
+                            .replaceAll(Matcher.quoteReplacement("dummy_" + suffix));
+            qualifiedTail =
+                    Pattern.compile("\\bghost_" + Pattern.quote(v) + "\\b")
+                            .matcher(qualifiedTail)
+                            .replaceAll(Matcher.quoteReplacement("ghost_" + suffix));
+        }
+        if (!qualifiedTail.equals(tail)) {
+            Files.writeString(ghostCiPath, head + qualifiedTail, StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
+     * Qualifica, com o prefixo {@code <machineName>__}, as declarações/referências do símbolo lógico
+     * real ({@code <v>}) e do respetivo helper {@code dummy_ghost_<v>} (usado na cláusula
+     * {@code reads}) de {@code collidingVars}, dentro do {@code .acsl} já gerado para esta máquina —
+     * mesmo problema que {@link #qualifyCollidingGhostNamesInAppendedSection}, mas do lado REAL
+     * (não-isolado): cada máquina declara {@code logic <T> <v> reads dummy_ghost_<v>;} no seu
+     * PRÓPRIO {@code .acsl}, e todos os {@code .acsl} do projeto são carregados juntos numa ÚNICA
+     * invocação {@code -acsl-import} (sem isolamento de namespace por ficheiro) — confirmado que sem
+     * esta qualificação o Frama-C rejeita com o mesmo "already declared with the same profile" que
+     * o lado ghost, só que mais tarde. {@code dummy_ghost_<v>} é substituído PRIMEIRO: a boundary
+     * regex do passo seguinte (bare {@code <v>}) não volta a casar dentro do resultado já
+     * qualificado (o "_" antes de {@code <v>} em "...__<v>" nunca é fronteira de palavra).
+     */
+    private static void qualifyCollidingRealAcslNames(
+            Path acslFile, String machineName, Set<String> collidingVars) throws IOException {
+        String content = Files.readString(acslFile, StandardCharsets.UTF_8);
+        String updated = content;
+        for (String v : collidingVars) {
+            String suffix = machineName + "__" + v;
+            updated =
+                    Pattern.compile("\\bdummy_ghost_" + Pattern.quote(v) + "\\b")
+                            .matcher(updated)
+                            .replaceAll(Matcher.quoteReplacement("dummy_ghost_" + suffix));
+            updated =
+                    Pattern.compile("\\b" + Pattern.quote(v) + "\\b")
+                            .matcher(updated)
+                            .replaceAll(Matcher.quoteReplacement(suffix));
+        }
+        if (!updated.equals(content)) {
+            Files.writeString(acslFile, updated, StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
      * Gera primeiro os {@code .acsl} das máquinas só vistas em {@code SEES} ou importadas em {@code
      * IMPORTS}, para a máquina que vê/importa poder fundir os respetivos {@code include} da biblioteca.
      */
@@ -583,6 +862,33 @@ public final class B2ACSLPipeline {
         ordered.addAll(dependencyFirst);
         ordered.addAll(rest);
         ordered.addAll(refinements);
+        return ordered;
+    }
+
+    /**
+     * Ordem de geração: a de {@code machinesForAcsl}, com o portador dos includes da {@code B2ACSLLib}
+     * por último. Os includes do portador vêm da varredura dos {@code .acsl} das outras máquinas
+     * (ver {@code AcslGenerator.resolveLibIncludesAndDependencyScan}); gerado antes delas, ele só via
+     * uma tradução reduzida do BXML (sem os blocos de variáveis da implementação, onde saem {@code
+     * array_to_function_*}, {@code is_total_function}, …) ou os {@code .acsl} de uma execução
+     * anterior.
+     */
+    private static List<MachineFile> withLibIncludeCarrierLast(
+            List<MachineFile> machinesForAcsl, String libIncludeCarrierMachineName) {
+        if (libIncludeCarrierMachineName == null || libIncludeCarrierMachineName.isBlank()) {
+            return machinesForAcsl;
+        }
+        String carrier = libIncludeCarrierMachineName.trim();
+        List<MachineFile> ordered = new ArrayList<>(machinesForAcsl.size());
+        List<MachineFile> carrierFiles = new ArrayList<>();
+        for (MachineFile mf : machinesForAcsl) {
+            if (carrier.equals(mf.machine().getMachineName())) {
+                carrierFiles.add(mf);
+            } else {
+                ordered.add(mf);
+            }
+        }
+        ordered.addAll(carrierFiles);
         return ordered;
     }
 

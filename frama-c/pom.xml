@@ -27,4 +27,33 @@
       <artifactId>b2acsl-translate</artifactId>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Jar standalone (classifier "all") para FramaCRunner#verify como entry point reutilizável
+           por chamadores externos (outra ferramenta/script) — só os passos acsl-import →
+           pós-processamento de merged_code.c → -wp, sem a tradução BXML→ACSL do módulo "cli".
+           Empacota as classes deste módulo + b2acsl-core + b2acsl-translate (dependências diretas
+           de FramaCRunner); sem mainClass, já que isto é uma biblioteca para chamar via API, não um
+           executável. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>${maven.shade.plugin.version}</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>all</shadedClassifierName>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

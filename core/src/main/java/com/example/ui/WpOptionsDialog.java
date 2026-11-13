@@ -37,6 +37,13 @@ public final class WpOptionsDialog {
 
     private static final String DEFAULT_WP_PROVER = "CVC5";
     private static final int DEFAULT_WP_TIMEOUT_SECONDS = 10;
+    // Teto de parede da chamada -wp INTEIRA de uma função (soma de todos os goals dela) — não o
+    // timeoutSeconds acima (esse é por-GOAL individual do solver, -wp-timeout). Sem controlo na
+    // interface Swing (removido - sempre este valor fixo quando o diálogo é usado); ajustável só no
+    // caminho headless via a variável de ambiente WP_FUNCTION_TIMEOUT/property
+    // "b2acsl.wp.functionTimeout" (ver com.example.B2AcslConfig#DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS,
+    // mesmo default) — útil para exemplos com muitas goals numa função só (ex. RulesOfTheSeas).
+    private static final int DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS = 600;
     private static final String DEFAULT_WP_OUTPUT = "status";
     private static final String DEFAULT_PROJECT_NAME = "Project";
 
@@ -46,6 +53,7 @@ public final class WpOptionsDialog {
             String projectName,
             List<String> provers,
             int timeoutSeconds,
+            int functionTimeoutSeconds,
             String outputFlag,
             boolean loopSimplification,
             boolean smokeTests,
@@ -152,7 +160,7 @@ public final class WpOptionsDialog {
             counterExamplesBox.setOpaque(false);
             content.add(counterExamplesBox, gbc);
 
-            // gbc.gridy = 5;
+            // gbc.gridy = 6;
             // splitGoalsBox.setOpaque(false);
             // content.add(splitGoalsBox, gbc);
 
@@ -203,6 +211,7 @@ public final class WpOptionsDialog {
                                         project,
                                         selectedProvers,
                                         timeout,
+                                        DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS,
                                         output,
                                         loopSimplificationBox.isSelected(),
                                         smokeTestsBox.isSelected(),
@@ -293,6 +302,7 @@ public final class WpOptionsDialog {
                 projectName,
                 provers,
                 cfg.wpTimeoutSeconds(),
+                cfg.wpFunctionTimeoutSeconds(),
                 cfg.wpOutputFlag(),
                 cfg.wpLoopSimplification(),
                 cfg.wpSmokeTests(),
@@ -347,6 +357,7 @@ public final class WpOptionsDialog {
             String projectName,
             List<String> provers,
             int timeoutSeconds,
+            int functionTimeoutSeconds,
             String outputMode,
             boolean loopSimplification,
             boolean smokeTests,
@@ -369,6 +380,10 @@ public final class WpOptionsDialog {
             normalizedProvers.add(DEFAULT_WP_PROVER);
         }
         int normalizedTimeout = timeoutSeconds > 0 ? timeoutSeconds : DEFAULT_WP_TIMEOUT_SECONDS;
+        int normalizedFunctionTimeout =
+                functionTimeoutSeconds > 0
+                        ? functionTimeoutSeconds
+                        : DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS;
         String normalizedOutput =
                 switch (outputMode == null ? "" : outputMode.trim().toLowerCase()) {
                     case "print", "-wp-print" -> "-wp-print";
@@ -379,6 +394,7 @@ public final class WpOptionsDialog {
                 normalizedProjectName,
                 List.copyOf(normalizedProvers),
                 normalizedTimeout,
+                normalizedFunctionTimeout,
                 normalizedOutput,
                 loopSimplification,
                 smokeTests,

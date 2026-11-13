@@ -78,6 +78,10 @@ import com.example.bxml.CartesianProductLoopSpecDetector.LoopInitSpec;
                 loopNumber = appendLoopInitSpec(sb, spec, loopNumber);
             }
             for (BxmlLoopTranslator.LoopContract loop : explicitLoops) {
+                if (loop.preformatted() != null) {
+                    sb.append(loop.preformatted());
+                    continue;
+                }
                 sb.append("    at loop ").append(loop.index()).append(":\n");
                 for (String conjunct : loop.invariant()) {
                     if (conjunct != null && !conjunct.isBlank()) {
@@ -106,7 +110,7 @@ import com.example.bxml.CartesianProductLoopSpecDetector.LoopInitSpec;
          * corretamente (o {@code -acsl-import} do Frama-C pareia {@code at loop N} com o Nº loop
          * encontrado, em ordem, no corpo C — não por nome/posição na lista de specs).
          */
-        private static int appendLoopInitSpec(StringBuilder sb, LoopInitSpec spec, int loopNumber) {
+        static int appendLoopInitSpec(StringBuilder sb, LoopInitSpec spec, int loopNumber) {
             if (spec instanceof CartesianProductLoopSpec ls) {
                 String lo = ls.loExpr();
                 String hi = ls.hiExpr();
@@ -142,7 +146,8 @@ import com.example.bxml.CartesianProductLoopSpecDetector.LoopInitSpec;
                 sb.append("        loop invariant ").append(rowLo).append(" <= ").append(i)
                   .append(" <= ").append(rowHi).append(" + 1;\n");
                 sb.append("        loop invariant ").append(rowsDoneInvariant).append(";\n");
-                sb.append("        loop assigns ").append(i).append(", ").append(arr)
+                // O laço externo também escreve o contador do interno.
+                sb.append("        loop assigns ").append(i).append(", ").append(j).append(", ").append(arr)
                   .append("[").append(rowLo).append(" .. ").append(rowHi).append("][")
                   .append(colLo).append(" .. ").append(colHi).append("];\n");
                 sb.append("        loop variant ").append(rowHi).append(" + 1 - ").append(i).append(";\n");

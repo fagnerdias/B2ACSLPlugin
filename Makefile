@@ -1,4 +1,4 @@
-.PHONY: build-jar build-native build-installer clean run
+.PHONY: build-jar build-native build-installer clean run build-rules compare
 
 APP_NAME ?= B2ACSLExec
 MAIN_CLASS ?= com.example.Main
@@ -80,3 +80,19 @@ clean:
 run: build-jar
 	@mkdir -p "$(ACSL_OUT)"
 	java -Db2acsl.mock=$(MOCK) -Db2acsl.keepAcsl="$(ACSL_OUT)" -jar "$(UBER_JAR)"
+
+# B2ACSLRules (git submodule rules/): rebuilds rules/dist/b2acsl.jar with its own Makefile, which
+# needs the Eclipse ATL/EMF jars (ECLIPSE_PLUGINS, default ~/.p2/pool/plugins). -B because a fresh
+# clone gives the committed jar the same mtime as its sources; the committed .asm files are kept.
+build-rules:
+	$(MAKE) -C rules -B -o transformations/BXML2ACSL.asm -o transformations/ACSL2Text.asm jar
+
+# B2ACSLPlugin x B2ACSLRules comparison (comparator/README.md), e.g.:
+#   make compare COMPARE_ARGS="--example AddRunner"
+#   make compare COMPARE_ARGS="--all --timeout 10"
+COMPARATOR_JAR := comparator/target/b2acsl-comparator-$(VERSION)-all.jar
+COMPARE_ARGS ?= --all
+
+compare:
+	@test -f "$(COMPARATOR_JAR)" || $(MVN) -q -DskipTests package
+	java -jar "$(COMPARATOR_JAR)" $(COMPARE_ARGS)

@@ -50,6 +50,12 @@ public final class BxmlMachineVariables {
             String t = fromInvariant.get(name);
             if (t == null) {
                 t = types.acslVariableLogicTypeFromTypref(typref);
+                // Sentinela "struct" (ver BxmlTypeRegistry#rawBTypeToAcslVariableLogicType): carrega
+                // o typref junto para MachineAxiomaticBlockFormatter reencontrar os campos do registo
+                // sem precisar de um segundo passe sobre machineEl.
+                if ("struct".equals(t)) {
+                    t = "struct:" + typref;
+                }
             }
             out.put(name, t);
         }
@@ -293,20 +299,32 @@ public final class BxmlMachineVariables {
      * Variáveis abstratas cuja implementação declara {@code Concrete_Variables} com o MESMO NOME
      * (namespaces B são por máquina — reusar o nome é o padrão normal quando a implementação é um
      * refinamento direto da variável abstrata, ex. {@code limit} tanto em {@code Customer} quanto
-     * em {@code Customer_i}), e cuja própria implementação a tipa como array/função total
-     * ({@code v : lo..hi --> T} no {@code <Invariant>} da implementação, via
-     * {@link #concreteVariableFunctionArrowElement}).
+     * em {@code Customer_i}, ou {@code EF11}/{@code KIT_C_911} tanto em {@code logic} quanto em
+     * {@code logic_i}).
      *
      * <p>Diferente de {@link #anyImplementationUsesAbstractVariablesOnly} (implementação SEM
      * {@code Concrete_Variables} próprias — reusa o estado abstrato diretamente) — este caso é o
      * oposto: a implementação TEM a sua própria variável concreta, mas com o nome idêntico ao da
      * abstrata (não um nome distinto como {@code price}/{@code price_i}, onde o autor B escolheu
      * deliberadamente duas identidades ligadas por uma invariante de colagem explícita — nesse caso
-     * mantém-se ghost + array-backed como duas entidades). Quando o nome é o mesmo, não há
-     * invariante de colagem separada no B fonte (a igualdade é implícita ao partilhar o nome) — só
-     * faz sentido UMA variável ACSL: a definição direta a partir do array, sem camada ghost redundante
-     * (evita o padrão duplo "logic ... v reads dummy_ghost_v;" + "logic ... v_i = array_to_function…"
-     * nunca ligados por um {@code equals(v_i, v)} explícito, que nem sequer era gerado).
+     * mantém-se ghost + camada concreta como duas entidades). Quando o nome é o mesmo, não há
+     * invariante de colagem separada no B fonte (a igualdade é implícita ao partilhar o nome, regra
+     * do B) — só faz sentido UMA variável ACSL: a definição direta a partir da camada da
+     * implementação, sem camada ghost redundante.
+     *
+     * <p>Vale tanto para array/função total ({@code v : lo..hi --> T} no {@code <Invariant>} da
+     * implementação, via {@link #concreteVariableFunctionArrowElement}) quanto para escalar — a
+     * restrição a array-backed de uma versão anterior deixava variáveis ESCALARES de mesmo nome
+     * (ex. {@code EF11}) caírem no caminho antigo: {@code logic integer EF11 reads
+     * dummy_ghost_EF11;} (opaca, nunca escrita por nenhuma função C) + {@code logic integer EF11_i =
+     * logic__EF11;} (a concreta real, nome sufixado) — duas entidades nunca ligadas, cujo efeito é
+     * tornar toda cláusula sobre {@code EF11} improvável (meta vira {@code L_EF11(ghost_EF11_0) =
+     * 1}, sem hipótese) ou vácua (nenhuma função C escreve a variável ghost). A mecânica de colapso
+     * abaixo (remover a declaração ghost/opaca, manter só a definição com o nome B na camada da
+     * implementação, mover o invariante para depois dela) é a mesma para os dois casos — só o RHS da
+     * definição concreta difere (array-backed vs {@code = Raiz__v;}), e isso já é decidido
+     * separadamente por {@link MachineAxiomaticBlockFormatter} para QUALQUER variável concreta,
+     * colapsada ou não.
      */
     public static Set<String> collapsedIntoImplementationVariableNames(
             Element abstractMachineEl, List<Element> mergedMachineElements) {
@@ -321,8 +339,7 @@ public final class BxmlMachineVariables {
         for (Element mel : mergedMachineElements) {
             if (!isImplementationMachine(mel)) continue;
             for (String v : declaredVariableNames(mel)) {
-                if (!ownNames.contains(v)) continue;
-                if (concreteVariableFunctionArrowElement(mel, v) != null) {
+                if (ownNames.contains(v)) {
                     out.add(v);
                 }
             }
@@ -534,9 +551,45 @@ public final class BxmlMachineVariables {
                 }
                 if (isSequenceTypingOp(pair[1])) {
                     acc.put(v, acslListTypeForSequenceUnary(pair[1], types));
+                    return;
+                }
+                String sequenceDomainRelationType = sequenceDomainRelationTypeIfAny(pair[1], types);
+                if (sequenceDomainRelationType != null) {
+                    acc.put(v, sequenceDomainRelationType);
                 }
             }
         }
+    }
+
+    /**
+     * {@code "V : (seq(D) --> R)"} (ou {@code +->}/{@code >->}/etc.) — {@code V} é uma RELAÇÃO cujo
+     * DOMÍNIO é uma sequência (ex.: {@code stdlib_CRC16Polynom3D65 : seq1(uint8_t) --> uint16_t},
+     * {@code csp_stdLib_crc} e {@code csp_stdLib_addr}, ambos partilhados por {@code railmap} e
+     * {@code safetyflasher}). O typref cru de {@code V} é {@code POW(POW(INTEGER*INTEGER)*INTEGER)}
+     * — o split ingénuo por {@code "*"} de {@link BxmlTypeRegistry#powCartesianProductToAcslRelationType}
+     * não respeita o {@code POW(...)} aninhado do domínio-sequência e quebra em partes erradas,
+     * produzindo um tipo totalmente errado (ex. {@code Relation_integer_Tuple_integer_integer} em vez
+     * de {@code Relation<\list<integer>, integer>}) — só descoberto tarde no {@code -acsl-import} como
+     * "incompatible types \list<integer> and integer" no ponto de uso ({@code is_total_function}).
+     * Mesma razão de {@code ctx.variableLogicTypes()} ser consultado primeiro em {@link
+     * #handleExpComparisonForTypes} (ver comentário em {@code
+     * BxmlConstantsAndProperties#formatAbstractConstantsBlock}): o typref cru não distingue
+     * {@code \list} de {@code Relation}/POW aninhado. {@code null} se {@code rhs} não tiver esta forma.
+     */
+    private static String sequenceDomainRelationTypeIfAny(Element rhs, BxmlTypeRegistry types) {
+        Element arrowDomain = BxmlExpressionToAcsl.arrowTypeDomainIfAny(rhs);
+        Element arrowCodomain = BxmlExpressionToAcsl.arrowTypeCodomainIfAny(rhs);
+        if (arrowDomain == null
+                || arrowCodomain == null
+                || !isSequenceTypingOp(arrowDomain)
+                || !"Id".equals(arrowCodomain.getLocalName())) {
+            return null;
+        }
+        String domainType = acslListTypeForSequenceUnary(arrowDomain, types);
+        String codomainRhs = arrowCodomain.getAttribute("value");
+        String codomainType =
+                isNamedBaseType(codomainRhs) ? types.acslElementTypeName(codomainRhs) : "integer";
+        return types.registerCartesianRelationType(domainType, codomainType);
     }
 
     static boolean isSequenceTypingOp(Element exp) {

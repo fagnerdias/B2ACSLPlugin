@@ -80,23 +80,30 @@ public final class BxmlInitialisationTranslator {
 
         InitSource src = selectInitialisationSource(machineEl, mergedMachineElements);
 
+        // ensures: sempre da INITIALISATION da máquina ABSTRATA, nunca da implementação — regra do
+        // prompt "contratos ACSL traduzidos literalmente" (2.1): a abstrata é a especificação; a da
+        // implementação tipicamente só concretiza uma escolha B não-determinística (ex. "V :: S -->
+        // T" virando "V := S*{c}"), que não é a especificação, só uma testemunha válida dela. Ao
+        // contrário de loopSpecs/explicitLoops abaixo (que descrevem o LAÇO C real e por isso
+        // continuam vindo de `src`, que prefere a implementação), o ensures nunca deve prometer um
+        // valor mais específico do que a abstrata garante.
         List<String> ensures = new ArrayList<>();
-        if (src.initSource() != null) {
-            walkSubstitution(BxmlDomUtils.firstSubChild(src.initSource()), ensures, ctx);
+        Element abstractInit = BxmlDomUtils.firstChildElement(machineEl, "Initialisation");
+        if (abstractInit != null) {
+            walkSubstitution(BxmlDomUtils.firstSubChild(abstractInit), ensures, ctx);
         }
-        List<CartesianProductLoopSpecDetector.LoopInitSpec> loopSpecs = (src.initSource() != null)
-                ? CartesianProductLoopSpecDetector.detectAllLoopSpecs(
-                        BxmlDomUtils.firstSubChild(src.initSource()), src.initOwnerMachine(), ctx, bxmlDirectory)
-                : List.of();
-        // WHILE explícito (com INVARIANT/VARIANT do usuário) na inicialização — ex.: um array
-        // preenchido por um laço escrito à mão em vez do açúcar `ARRAY := DOMAIN*{VALUE}` acima.
-        // Só verificado quando não há loopSpecs: os dois padrões nunca coincidem no mesmo nó (um é
-        // Assignement_Sub, o outro é While), e nenhum exemplo atual mistura os dois numa mesma
-        // Initialisation — ver BxmlLoopTranslator#translateLoopsFromSubstitution.
+        // Laços C da inicialização, numa só passada e numa só contagem: o açúcar
+        // `ARRAY := DOMAIN*{VALUE}` (um laço for, dois no caso 2D) e os WHILE escritos à mão (com
+        // INVARIANT/VARIANT). Os dois podem vir juntos (reverse_array: o array é zerado e depois
+        // preenchido por um WHILE) — ver BxmlLoopTranslator#walkForWhileLoops.
+        List<CartesianProductLoopSpecDetector.LoopInitSpec> loopSpecs = List.of();
         List<BxmlLoopTranslator.LoopContract> explicitLoops =
-                (src.initSource() != null && loopSpecs.isEmpty())
+                (src.initSource() != null)
+                        // A máquina ABSTRATA, como nas operações: qualifica no loop assigns as
+                        // variáveis que ela declara (array -> ReverseArray__array[0 .. max_IDX]); a
+                        // implementação vem de enclosingMachineElement da própria substituição.
                         ? BxmlLoopTranslator.translateLoopsFromSubstitution(
-                                BxmlDomUtils.firstSubChild(src.initSource()), ctx, src.initOwnerMachine(), null,
+                                BxmlDomUtils.firstSubChild(src.initSource()), ctx, machineEl, null,
                                 bxmlDirectory)
                         : List.of();
 
@@ -247,13 +254,11 @@ public final class BxmlInitialisationTranslator {
             case "Nary_Sub" -> {
                 String op = sub.getAttribute("op");
                 if (";".equals(op)) {
-                    NodeList children = sub.getChildNodes();
-                    for (int i = 0; i < children.getLength(); i++) {
-                        Node n = children.item(i);
-                        if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                        Element ch = (Element) n;
-                        if ("Attr".equals(ch.getLocalName())) continue;
-                        walkSubstitution(ch, ensures, ctx, oldNames);
+                    List<Element> children = subChildren(sub);
+                    if (!trySequentialComposition(children, ensures, ctx, oldNames)) {
+                        for (Element ch : children) {
+                            walkSubstitution(ch, ensures, ctx, oldNames);
+                        }
                     }
                 } else if ("||".equals(op)) {
                     // simultâneo: um ensures conjuntivo
@@ -267,7 +272,7 @@ public final class BxmlInitialisationTranslator {
             case "Skip" -> { /* nada */ }
             case "Bloc_Sub" -> walkSubstitution(BxmlDomUtils.firstSubChild(sub), ensures, ctx, oldNames);
             case "ANY_Sub" -> {
-                String t = translateAnySubAsExists(sub, ctx);
+                String t = translateAnySubAsExists(sub, ctx, oldNames);
                 if (!t.isBlank()) {
                     ensures.add(t);
                 }
@@ -276,8 +281,331 @@ public final class BxmlInitialisationTranslator {
             case "Becomes_Such_That" -> parseBecomesSuchThatSub(sub, ensures, ctx);
             case "Select" -> parseSelectAsConditionalEnsures(sub, ensures, ctx, oldNames);
             case "If_Sub" -> parseIfSubAsConditionalEnsures(sub, ensures, ctx, oldNames);
+            case "Operation_Call" -> parseOperationCall(sub, ensures, ctx, oldNames);
             default -> { /* outras substituições: extensão futura */ }
         }
+    }
+
+    /** Filhos diretos de uma substituição composta ({@code Nary_Sub}), ignorando {@code <Attr>}. */
+    private static List<Element> subChildren(Element sub) {
+        List<Element> out = new ArrayList<>();
+        NodeList nl = sub.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element ch = (Element) n;
+            if ("Attr".equals(ch.getLocalName())) continue;
+            out.add(ch);
+        }
+        return out;
+    }
+
+    /**
+     * Valor simbólico de uma variável de estado em algum ponto de uma composição sequencial: ou o
+     * texto ACSL literal do seu valor corrente ({@link #literal}, usado tal-qual, incluindo o caso
+     * base {@code \old(v)}), ou o merge {@code cond ? then : else} de um {@code If_Sub} ({@link
+     * #cond}/{@link #thenVal}/{@link #elseVal}).
+     */
+    private record SeqVal(String literal, String cond, SeqVal thenVal, SeqVal elseVal) {
+        static SeqVal of(String literal) {
+            return new SeqVal(literal, null, null, null);
+        }
+
+        static SeqVal cond(String cond, SeqVal thenVal, SeqVal elseVal) {
+            return new SeqVal(null, cond, thenVal, elseVal);
+        }
+
+        boolean isCond() {
+            return cond != null;
+        }
+    }
+
+    /** Texto ACSL do valor corrente (ternário aninhado se {@code isCond()}), para substituição em RHS/condições posteriores. */
+    private static String renderSeqVal(SeqVal v) {
+        if (!v.isCond()) {
+            return v.literal();
+        }
+        // Parênteses em volta do ternário INTEIRO: isto é substituído inline no texto de outra
+        // condição/RHS (ver substituteSequentialState), e "?:" tem precedência menor que "=="/"&&"
+        // em ACSL — sem o parêntese extra, "cond ? a : b == 1" lê como "cond ? a : (b == 1)" em vez
+        // de "(cond ? a : b) == 1".
+        return "((" + v.cond() + ") ? (" + renderSeqVal(v.thenVal()) + ") : (" + renderSeqVal(v.elseVal()) + "))";
+    }
+
+    private static SeqVal sigmaLookup(String v, Map<String, SeqVal> sigma) {
+        SeqVal sv = sigma.get(v);
+        return sv != null ? sv : SeqVal.of("\\old(" + v + ")");
+    }
+
+    /**
+     * Substitui, em {@code text}, cada ocorrência de uma variável rastreada pelo seu valor corrente:
+     * {@code sigma.get(v)} renderizado se {@code v} já foi atribuído antes deste ponto da sequência,
+     * ou {@code \old(v)} se {@code v} só foi atribuída por um ramo irmão de uma {@code ||} que
+     * engloba a sequência ({@code oldNames}). Generaliza {@link #applyOldWrapping} (que só sabia
+     * envolver com {@code \old(...)} incondicional) para o caso em que o "pré-estado" relevante de
+     * {@code v} já reflete efeitos de comandos anteriores da MESMA sequência {@code ;}.
+     */
+    private static String substituteSequentialState(String text, Map<String, SeqVal> sigma, Set<String> oldNames) {
+        if (text == null) return null;
+        Set<String> names = new LinkedHashSet<>(oldNames);
+        names.addAll(sigma.keySet());
+        if (names.isEmpty()) return text;
+        List<String> sorted = new ArrayList<>(names);
+        sorted.sort((a, b) -> Integer.compare(b.length(), a.length()));
+        String out = text;
+        for (String v : sorted) {
+            String replacement = sigma.containsKey(v) ? renderSeqVal(sigma.get(v)) : ("\\old(" + v + ")");
+            Matcher m = Pattern.compile("\\b" + Pattern.quote(v) + "\\b").matcher(out);
+            StringBuffer sb = new StringBuffer();
+            while (m.find()) {
+                m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+            }
+            m.appendTail(sb);
+            out = sb.toString();
+        }
+        return out;
+    }
+
+    /**
+     * Tenta tratar uma composição sequencial {@code Nary_Sub op=";"} com estado simbólico (σ) em vez
+     * do caminho antigo (cada filho tratado de forma totalmente independente, que gera {@code
+     * ensures} falsos/contraditórios quando dois filhos escrevem a mesma variável — ver documento de
+     * especificação "correção da composição sequencial"). Só ativa o caminho novo quando: (1) há
+     * pelo menos 2 filhos, (2) pelo menos duas delas escrevem alguma variável em comum (sem
+     * sobreposição, o caminho antigo já produz o resultado correto — ativar aqui só mudaria o texto
+     * gerado sem necessidade, arriscando regressão à toa) e (3) {@link #evaluateSequentialEffects}
+     * consegue avaliar TODOS os filhos sem encontrar uma construção não suportada (laço, {@code
+     * Select}/{@code CHOICE}/{@code ANY_Sub}/{@code Becomes_In}/{@code Becomes_Such_That}, ou uma
+     * forma de atribuição cujo "valor" não é isolável como texto simples — ver {@link
+     * #evaluateAssignementSubValues}). Fora disso devolve {@code false} e quem chama mantém o
+     * caminho antigo, byte-a-byte idêntico ao de antes desta correção.
+     */
+    private static boolean trySequentialComposition(
+            List<Element> children, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
+        if (children.size() < 2) return false;
+
+        List<Set<String>> written = new ArrayList<>();
+        for (Element ch : children) {
+            Set<String> w = new LinkedHashSet<>();
+            collectAssignedLhsNames(ch, w);
+            written.add(w);
+        }
+        boolean overlap = false;
+        outer:
+        for (int i = 0; i < written.size(); i++) {
+            for (int j = i + 1; j < written.size(); j++) {
+                if (!java.util.Collections.disjoint(written.get(i), written.get(j))) {
+                    overlap = true;
+                    break outer;
+                }
+            }
+        }
+        if (!overlap) return false;
+
+        Map<String, SeqVal> sigma = new LinkedHashMap<>();
+        for (Element ch : children) {
+            if (!evaluateSequentialEffects(ch, sigma, oldNames, ctx)) {
+                return false;
+            }
+        }
+        for (Map.Entry<String, SeqVal> e : sigma.entrySet()) {
+            emitSequentialCases(e.getKey(), e.getValue(), ensures, ctx);
+        }
+        return true;
+    }
+
+    /**
+     * Avalia o efeito de {@code sub} sobre o estado simbólico {@code sigma} (mutado em memória,
+     * σ: variável → expressão ACSL do seu valor corrente), percorrendo a composição da esquerda
+     * para a direita. Devolve {@code false} (sem mutar {@code sigma} de forma incompleta/inválida —
+     * o chamador descarta o resultado inteiro nesse caso) assim que encontra algo fora do
+     * subconjunto suportado: {@code Skip}, {@code Assignement_Sub} (cuja "forma" seja isolável como
+     * {@code nome == valor}/{@code equals(nome, valor)} simples), {@code If_Sub}, {@code Bloc_Sub} e
+     * {@code Nary_Sub} com {@code op=";"} ou {@code op="||"}.
+     */
+    private static boolean evaluateSequentialEffects(
+            Element sub, Map<String, SeqVal> sigma, Set<String> oldNames, BxmlTranslateContext ctx) {
+        if (sub == null) return true;
+        return switch (sub.getLocalName()) {
+            case "Skip" -> true;
+            case "Assignement_Sub" -> evaluateAssignementSubValues(sub, sigma, oldNames, ctx);
+            case "If_Sub" -> evaluateIfSubValues(sub, sigma, oldNames, ctx);
+            case "Bloc_Sub" -> evaluateSequentialEffects(BxmlDomUtils.firstSubChild(sub), sigma, oldNames, ctx);
+            case "Nary_Sub" -> evaluateNarySubValues(sub, sigma, oldNames, ctx);
+            default -> false;
+        };
+    }
+
+    private static boolean evaluateNarySubValues(
+            Element sub, Map<String, SeqVal> sigma, Set<String> oldNames, BxmlTranslateContext ctx) {
+        String op = sub.getAttribute("op");
+        List<Element> children = subChildren(sub);
+        if (";".equals(op)) {
+            for (Element ch : children) {
+                if (!evaluateSequentialEffects(ch, sigma, oldNames, ctx)) return false;
+            }
+            return true;
+        }
+        if ("||".equals(op)) {
+            Map<String, SeqVal> base = new LinkedHashMap<>(sigma);
+            for (Element ch : children) {
+                Map<String, SeqVal> branch = new LinkedHashMap<>(base);
+                if (!evaluateSequentialEffects(ch, branch, oldNames, ctx)) return false;
+                for (Map.Entry<String, SeqVal> e : branch.entrySet()) {
+                    if (!base.containsKey(e.getKey()) || base.get(e.getKey()) != e.getValue()) {
+                        sigma.put(e.getKey(), e.getValue());
+                    }
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Avalia uma atribuição como uma atualização de σ (não como uma cláusula {@code ensures}
+     * diretamente — a emissão final acontece uma única vez por variável, ao fim de toda a
+     * sequência, via {@link #emitSequentialCases}). Reusa {@link BxmlExpressionToAcsl#formatEquality}
+     * (mesma tradução usada por {@link #parseAssignementSub}) e depois EXTRAI o nome/valor; se o
+     * resultado não tiver exatamente a forma {@code nomeEsperado == valor} ou {@code
+     * equals(nomeEsperado, valor)} — casos especiais de {@code formatEquality} como literal de
+     * registo, sobreposição com lambda cru, ou coerção lista/relação não têm essa forma — devolve
+     * {@code false} em vez de arriscar uma leitura errada do "valor" desta variável.
+     */
+    private static boolean evaluateAssignementSubValues(
+            Element assign, Map<String, SeqVal> sigma, Set<String> oldNames, BxmlTranslateContext ctx) {
+        Element vars = BxmlDomUtils.firstChildElement(assign, "Variables");
+        Element vals = BxmlDomUtils.firstChildElement(assign, "Values");
+        if (vars == null || vals == null) return true;
+        List<Element> lhs = BxmlDomUtils.directExpChildren(vars);
+        List<Element> rhs = BxmlDomUtils.directExpChildren(vals);
+        int n = Math.min(lhs.size(), rhs.size());
+        for (int i = 0; i < n; i++) {
+            Element lhsEl = lhs.get(i);
+            Element rhsEl = rhs.get(i);
+            String expectedName;
+            if ("Id".equals(lhsEl.getLocalName())) {
+                String v = lhsEl.getAttribute("value");
+                if (v == null || v.isBlank()) return false;
+                expectedName = BxmlExpressionToAcsl.translateBNamedConstant(v.trim());
+            } else {
+                expectedName = functionOverrideTargetName(lhsEl);
+                if (expectedName == null) return false;
+            }
+            String eq = BxmlExpressionToAcsl.formatEquality(lhsEl, rhsEl, ctx);
+            String[] parts = splitEqualityParts(eq);
+            if (parts == null || !expectedName.equals(parts[0].trim())) {
+                return false;
+            }
+            String valueExpr = substituteSequentialState(parts[1], sigma, oldNames);
+            sigma.put(expectedName, SeqVal.of(valueExpr));
+        }
+        return true;
+    }
+
+    /**
+     * Como {@link #wrapLhsVarsInRhsWithOld} separa {@code ensure} em {@code lhsPart}/{@code rhsPart}
+     * — mas devolvendo o NOME NU (sem o prefixo {@code equals(}) no caso {@code equals(l, r)}, para
+     * comparação direta com o nome já conhecido da variável atribuída.
+     */
+    private static String[] splitEqualityParts(String ensure) {
+        if (ensure == null) return null;
+        int eqIdx = ensure.indexOf(" == ");
+        if (eqIdx >= 0) {
+            return new String[] {ensure.substring(0, eqIdx), ensure.substring(eqIdx + 4)};
+        }
+        if (ensure.startsWith("equals(") && ensure.endsWith(")")) {
+            int comma = topLevelCommaIndex(ensure, 7);
+            if (comma >= 0) {
+                return new String[] {ensure.substring(7, comma), ensure.substring(comma + 1, ensure.length() - 1)};
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Avalia um {@code If_Sub} como uma atualização de σ: a condição é lida no σ de ENTRADA (pré-
+     * estado relativo a este ponto da sequência — que já reflete efeitos de comandos anteriores,
+     * ao contrário do {@code \old(...)} incondicional do caminho antigo), cada ramo é avaliado a
+     * partir de uma CÓPIA desse σ, e para cada variável tocada por pelo menos um ramo o novo valor é
+     * o merge {@code cond ? valor_then : valor_else} (colapsado para um valor só se ambos os ramos
+     * derem exatamente o mesmo texto — ramo ausente ou que não toca a variável usa o valor de
+     * ENTRADA, não {@code \old(v)} incondicional).
+     */
+    private static boolean evaluateIfSubValues(
+            Element ifSub, Map<String, SeqVal> sigma, Set<String> oldNames, BxmlTranslateContext ctx) {
+        Element condEl = BxmlDomUtils.firstChildElement(ifSub, "Condition");
+        Element thenEl = BxmlDomUtils.firstChildElement(ifSub, "Then");
+        if (condEl == null || thenEl == null) return false;
+
+        Element thenSub = BxmlDomUtils.firstSubChild(thenEl);
+        Element elseEl = BxmlDomUtils.firstChildElement(ifSub, "Else");
+        Element elseSub = elseEl != null ? BxmlDomUtils.firstSubChild(elseEl) : null;
+
+        String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
+        if (cond == null || cond.isBlank()) return false;
+        cond = substituteSequentialState(cond, sigma, oldNames);
+
+        Map<String, SeqVal> thenSigma = new LinkedHashMap<>(sigma);
+        if (!evaluateSequentialEffects(thenSub, thenSigma, oldNames, ctx)) return false;
+        Map<String, SeqVal> elseSigma = new LinkedHashMap<>(sigma);
+        if (elseSub != null && !evaluateSequentialEffects(elseSub, elseSigma, oldNames, ctx)) return false;
+
+        Set<String> written = new LinkedHashSet<>();
+        collectAssignedLhsNames(thenSub, written);
+        collectAssignedLhsNames(elseSub, written);
+        for (String v : written) {
+            SeqVal thenVal = thenSigma.containsKey(v) ? thenSigma.get(v) : sigmaLookup(v, sigma);
+            SeqVal elseVal = elseSigma.containsKey(v) ? elseSigma.get(v) : sigmaLookup(v, sigma);
+            if (renderSeqVal(thenVal).equals(renderSeqVal(elseVal))) {
+                sigma.put(v, thenVal);
+            } else {
+                sigma.put(v, SeqVal.cond(cond, thenVal, elseVal));
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Achata o valor simbólico final de {@code varName} numa lista de casos {@code (guardas, valor)}
+     * mutuamente exclusivos e exaustivos, e emite uma cláusula {@code ensures} por caso — a última
+     * atribuição (textualmente) a uma variável já reflete TODOS os comandos anteriores da sequência
+     * que a tocam, ao contrário do caminho antigo (uma cláusula por comando, incluindo cláusulas de
+     * "moldura" que ficam falsas quando um comando posterior sobrescreve a variável).
+     */
+    private static void emitSequentialCases(
+            String varName, SeqVal val, List<String> ensures, BxmlTranslateContext ctx) {
+        if (!val.isCond() && ("\\old(" + varName + ")").equals(val.literal())) {
+            return;
+        }
+        boolean setValued = BxmlExpressionToAcsl.isSetValuedVariableName(varName, ctx);
+        List<Map.Entry<List<String>, String>> cases = new ArrayList<>();
+        flattenSeqValCases(val, new ArrayList<>(), cases);
+        for (Map.Entry<List<String>, String> c : cases) {
+            String eq = setValued
+                    ? "equals(" + varName + ", " + c.getValue() + ")"
+                    : varName + " == " + c.getValue();
+            List<String> guards = c.getKey();
+            ensures.add(guards.isEmpty() ? eq : "(" + String.join(" && ", guards) + ") ==> (" + eq + ")");
+        }
+    }
+
+    private static void flattenSeqValCases(
+            SeqVal val, List<String> guards, List<Map.Entry<List<String>, String>> out) {
+        if (!val.isCond()) {
+            out.add(Map.entry(List.copyOf(guards), val.literal()));
+            return;
+        }
+        // Cada guarda é isolada entre parênteses: val.cond() pode conter "||" (ou outro operador de
+        // precedência menor que "&&") e a lista inteira é depois unida com " && " por
+        // emitSequentialCases — sem isto, "A || B" como guarda viraria "... && A || B && ..." e o
+        // "||" escaparia da conjunção pretendida.
+        guards.add("(" + val.cond() + ")");
+        flattenSeqValCases(val.thenVal(), guards, out);
+        guards.remove(guards.size() - 1);
+        guards.add("!(" + val.cond() + ")");
+        flattenSeqValCases(val.elseVal(), guards, out);
+        guards.remove(guards.size() - 1);
     }
 
     /**
@@ -430,6 +758,15 @@ public final class BxmlInitialisationTranslator {
     }
 
     public static String translateAnySubAsExists(Element anySub, BxmlTranslateContext ctx) {
+        return translateAnySubAsExists(anySub, ctx, Set.of());
+    }
+
+    /**
+     * @param outerOldNames variáveis atribuídas pelo {@code ||} que contém este ANY: o guarda e os
+     *     lados direitos do ANY também as leem no pré-estado.
+     */
+    static String translateAnySubAsExists(
+            Element anySub, BxmlTranslateContext ctx, Set<String> outerOldNames) {
         if (anySub == null) return "";
         AnySubAliasInfo info = analyzeAnySubAliases(anySub);
         if (info == null) return "";
@@ -473,6 +810,9 @@ public final class BxmlInitialisationTranslator {
 
         Set<String> assignedRealNames = new LinkedHashSet<>();
         collectAssignedLhsNames(thenSub, assignedRealNames);
+        if (outerOldNames != null) {
+            assignedRealNames.addAll(outerOldNames);
+        }
 
         List<String> guardParts = new ArrayList<>();
         for (Element c : guardConjuncts) {
@@ -501,6 +841,14 @@ public final class BxmlInitialisationTranslator {
                 // sendo definida (pós-estado) e não pode levar \old — por isso wrapLhsVarsInRhsWithOld
                 // (que separa LHS/RHS) em vez de applyOldWrapping (que embrulharia os dois lados).
                 Element realIdEl = BxmlDomUtils.directExpChildren(BxmlDomUtils.firstChildElement(s, "Variables")).get(0);
+                // V := W <+ %z.(..): forma pontual já com o pré-estado resolvido (o pós-passe
+                // textual estragaria a segunda implicação — ver overwriteLambdaAssignmentPointwise)
+                String pointwise = GeneralizedQuantifierTranslator.overwriteLambdaAssignmentPointwise(
+                        realIdEl, definingExpr.get(auxHere), ctx, ctx.plusPreStateNames(assignedRealNames));
+                if (pointwise != null) {
+                    thenParts.add(renameEliminatedAuxVars(pointwise, eliminated, aliasRealName));
+                    continue;
+                }
                 String eq = BxmlExpressionToAcsl.formatEquality(realIdEl, definingExpr.get(auxHere), ctx);
                 thenParts.add(wrapLhsVarsInRhsWithOld(eq, assignedRealNames));
                 continue;
@@ -623,7 +971,24 @@ public final class BxmlInitialisationTranslator {
                 parseIfSubAsConditionalEnsures(ch, ensures, ctx, allLhsNames);
             } else if ("Select".equals(ch.getLocalName())) {
                 parseSelectAsConditionalEnsures(ch, ensures, ctx, allLhsNames);
+            } else if ("Operation_Call".equals(ch.getLocalName())) {
+                parseOperationCall(ch, ensures, ctx, allLhsNames);
+            } else {
+                // ANY, BEGIN, CHOICE, ... como operando de ||: mesmo caminho do topo, com o
+                // pré-estado do grupo inteiro (antes eram descartados sem aviso).
+                walkSubstitution(ch, ensures, ctx, allLhsNames);
             }
+        }
+    }
+
+    /**
+     * {@code pp <-- op(a)}: a saída definida pela operação chamada ({@code pp == E[a/x]}, ver
+     * {@link OperationCallOutputSpecs}); o lado direito lê o pré-estado das variáveis atribuídas.
+     */
+    private static void parseOperationCall(
+            Element call, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
+        for (String c : OperationCallOutputSpecs.outputClauses(call, ctx)) {
+            ensures.add(oldNames == null || oldNames.isEmpty() ? c : wrapLhsVarsInRhsWithOld(c, oldNames));
         }
     }
 
@@ -683,7 +1048,27 @@ public final class BxmlInitialisationTranslator {
             case "Nary_Sub", "Bloc_Sub" -> collectChildSubAssignedLhsNames(sub, out);
             case "If_Sub" -> collectIfSubAssignedLhsNames(sub, out);
             case "Select" -> collectSelectAssignedLhsNames(sub, out);
-            default -> { /* Skip, ANY_Sub, etc. — nada a coletar */ }
+            // as saídas reais de pp <-- op(a) também são escritas
+            case "Operation_Call" -> {
+                Element outs = BxmlDomUtils.firstChildElement(sub, "Output_Parameters");
+                if (outs != null) {
+                    for (Element o : BxmlDomUtils.directExpChildren(outs)) {
+                        if ("Id".equals(o.getLocalName()) && !o.getAttribute("value").isBlank()) {
+                            out.add(o.getAttribute("value").trim());
+                        }
+                    }
+                }
+            }
+            // as variáveis atribuídas no THEN de um ANY também são escritas pela substituição (as
+            // ligadas do ANY nunca são atribuídas): sem isto, o pré-estado de um || ou do próprio
+            // guarda do ANY não as conhece (RulerOfTheSeas NextTurn/AttackPlayer saíam sem \old)
+            case "ANY_Sub" -> {
+                Element then = BxmlDomUtils.firstChildElement(sub, "Then");
+                if (then != null) {
+                    collectAssignedLhsNames(BxmlDomUtils.firstSubChild(then), out);
+                }
+            }
+            default -> { /* Skip, etc. — nada a coletar */ }
         }
     }
 
@@ -990,7 +1375,13 @@ public final class BxmlInitialisationTranslator {
      *       faria) produz sintaxe inválida. {@code -->>} (sobrejeção total) acrescenta
      *       {@code is_surjective(v, rng)}.</li>
      *   <li>{@code S} é uma expressão de conjunto literal: {@code v} é elemento simples — usa
-     *       {@code becomes_element_of(v, S)} ({@code set_functions/becomes_element_of.acsl}).</li>
+     *       {@code belongs(v, S)} diretamente, em vez de {@code becomes_element_of(v, S)}: a
+     *       sobrecarga de conjunto simples de {@code becomes_element_of}
+     *       ({@code set_functions/becomes_element_of.acsl}) é DEFINIDA como
+     *       {@code predicate becomes_element_of(integer x, Set<integer> e) = belongs(x, e);} — são
+     *       equivalentes para o WP, e {@code belongs} é o nome pedido pela tradução literal da
+     *       especificação B (prompt "contratos ACSL traduzidos literalmente", regra 3.1: {@code x
+     *       :: S} vira {@code belongs(x, S)}).</li>
      * </ul>
      * Espelha {@code GhostOperationsCiGenerator#ghostMembershipEnsure} para o universo NÃO-ghost —
      * a mesma lacuna que aquele método já resolvia do lado ghost nunca tinha sido replicada aqui.
@@ -1010,7 +1401,7 @@ public final class BxmlInitialisationTranslator {
         }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) return null;
-        return "becomes_element_of(" + v + ", " + setExprText + ")";
+        return "belongs(" + v + ", " + setExprText + ")";
     }
 
     /**
@@ -1043,8 +1434,29 @@ public final class BxmlInitialisationTranslator {
         }
         lhsNames.addAll(extraLhsVarNames);
 
+        // B: o lado direito lê o pré-estado. A forma pontual de uma lambda é montada direto com
+        // esse escopo (\old dentro do \forall), em vez do texto pós-processado abaixo.
+        Set<String> lhsBNames = new LinkedHashSet<>();
+        for (Element l : lhs) {
+            if ("Id".equals(l.getLocalName()) && !l.getAttribute("value").isBlank()) {
+                lhsBNames.add(l.getAttribute("value").trim());
+            }
+        }
+        lhsBNames.addAll(extraLhsVarNames);
+        BxmlTranslateContext rhsCtx = ctx.plusPreStateNames(lhsBNames);
+
         int n = Math.min(lhs.size(), rhs.size());
         for (int i = 0; i < n; i++) {
+            String pointwise =
+                    GeneralizedQuantifierTranslator.lambdaAssignmentPointwise(lhs.get(i), rhs.get(i), ctx, rhsCtx);
+            if (pointwise == null) {
+                pointwise = GeneralizedQuantifierTranslator.overwriteLambdaAssignmentPointwise(
+                        lhs.get(i), rhs.get(i), ctx, rhsCtx);
+            }
+            if (pointwise != null) {
+                ensures.add(pointwise);
+                continue;
+            }
             String e = BxmlExpressionToAcsl.formatEquality(lhs.get(i), rhs.get(i), ctx);
             if (!lhsNames.isEmpty()) {
                 e = wrapLhsVarsInRhsWithOld(e, lhsNames);

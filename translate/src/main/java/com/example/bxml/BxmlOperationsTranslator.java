@@ -284,7 +284,7 @@ public final class BxmlOperationsTranslator {
         List<OperationAcsl> out = new ArrayList<>();
         List<String> separationArrayTargets =
                 ConcreteAssignTargetResolver.listArraySeparationTargets(
-                        machineName, mergedRefinementChain, ctx, arraySeparationMachineNames,
+                        machineName, machineEl, mergedRefinementChain, ctx, arraySeparationMachineNames,
                         bxmlDirectory);
 
         NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
@@ -360,9 +360,16 @@ public final class BxmlOperationsTranslator {
                             rootAbstractMachineName, machineEl, mergedRefinementChain, gluing,
                             useGhostAbstraction, varRhsOverrides, bxmlDirectory);
 
+            // Nos laços, uma saída escalar é lida e escrita através do ponteiro C: o contexto leva
+            // as saídas para que invariant, variant e loop assigns usem *p (BxmlAnnotationScope).
+            // As saídas tipadas como função (arrays C) seguem o caminho próprio de
+            // finalizeFunctionTypedOutputHandling abaixo, que espera o nome cru.
+            List<String> scalarOutputParams = new ArrayList<>(outputParams);
+            scalarOutputParams.removeAll(funcTypedOutputs);
             ImplementationLoopsResult implResult =
                     resolveImplementationLoops(
-                            opName, opCtx, machineEl, mergedRefinementChain, importedOpAssigns, bxmlDirectory);
+                            opName, opCtx.withOutputParams(scalarOutputParams), machineEl, mergedRefinementChain,
+                            importedOpAssigns, bxmlDirectory);
             Element implOp = implResult.implOp();
             List<BxmlLoopTranslator.LoopContract> loops = implResult.loops();
 
@@ -380,7 +387,8 @@ public final class BxmlOperationsTranslator {
             // laço para funcTypedOutputs (que já consome este mesmo padrão por laço).
             FunctionTypedOutputHandling functionTypedHandling =
                     finalizeFunctionTypedOutputHandling(
-                            child, opCtx, requires, loops, funcTypedOutputs, outputParams);
+                            child, opCtx, requires, loops, funcTypedOutputs, outputParams,
+                            separationArrayTargets);
             Map<String, String> functionTypedOutputBounds = functionTypedHandling.functionTypedOutputBounds();
             loops = functionTypedHandling.loops();
 
@@ -412,10 +420,16 @@ public final class BxmlOperationsTranslator {
      * parâmetros de entrada/saída, sem abstração ghost (operam diretamente sobre as variáveis
      * concretas já resolvidas desta mesma máquina — não há "abstrata" para ligar).
      *
-     * <p>BXML duplica cada operação local: {@code <Local_Operations>} tem a declaração (que aqui só
-     * serve para descobrir OS NOMES), {@code <Operations>} tem o corpo "real" (mesmo texto B nos
-     * exemplos vistos até agora, mas é o segundo que os outros corpos de operação desta
-     * implementação realmente invocam — usa-se esse).
+     * <p>BXML duplica cada operação local: {@code <Local_Operations>} tem a DECLARAÇÃO — nome,
+     * parâmetros, {@code <Precondition>} e {@code <Body>} com a ESPECIFICAÇÃO B da operação — e a
+     * {@code <Operations>} irmã tem o corpo REAL (o texto B0 que o C gerado efetivamente executa,
+     * usado só para a VERIFICAÇÃO, nunca como fonte de cláusulas — regra do prompt "contratos ACSL
+     * traduzidos literalmente"). O contrato (requires/ensures/assigns) vem inteiramente da
+     * declaração em {@code <Local_Operations>}, nunca do corpo real: traduzir o corpo real (como
+     * esta função fazia antes) gera uma cláusula por caminho de {@code IF} enumerado, em vez da
+     * especificação declarada (ex.: {@code update_bistables} em {@code logic_i.imp} tinha 48
+     * {@code ensures} vindos do corpo, contra as 2 que a especificação
+     * {@code C_CSS_V2 :: NAT || EIT_C_CSS :: NAT} pede).
      *
      * @param implementationMachineEl elemento fundido {@code type="implementation"} com o
      *        {@code <Local_Operations>} (ex. cv_struct_i)
@@ -441,18 +455,20 @@ public final class BxmlOperationsTranslator {
         String machineName = rootAbstractMachineName;
 
         for (String opName : listOperationNames(localOpsEl)) {
-            Element realOp = findOperationByName(operationsEl, opName);
             Element declOp = findOperationByName(localOpsEl, opName);
-            Element opForParams = declOp != null ? declOp : realOp;
-            Element body =
-                    BxmlDomUtils.firstChildElement(realOp != null ? realOp : declOp, "Body");
+            if (declOp == null) continue;
+            // Guarda defensiva: a <Operations> irmã (corpo real, usado só para a verificação do
+            // WP, nunca como fonte de cláusula) deve existir — não é mais lida aqui, mas a sua
+            // ausência indicaria BXML malformado.
+            if (findOperationByName(operationsEl, opName) == null) continue;
+            Element body = BxmlDomUtils.firstChildElement(declOp, "Body");
             if (body == null) continue;
 
             // Parâmetros de entrada/saída (ex.: TestLocalOperation's "ss <-- sum_op(xx) = ...") —
             // ao contrário do caso "sem parâmetros" original desta função (ex. cv_struct's
             // lclear), um parâmetro de SAÍDA é um ponteiro C, não uma variável concreta desta
             // máquina: precisa de \valid/dereferenciamento "*", nunca do prefixo machineName__.
-            List<String> outputParams = parseOutputParameterNames(opForParams);
+            List<String> outputParams = parseOutputParameterNames(declOp);
             Set<String> outputParamSet = new LinkedHashSet<>(outputParams);
 
             List<String> ensures = new ArrayList<>();
@@ -469,6 +485,10 @@ public final class BxmlOperationsTranslator {
             }
 
             List<String> requires = new ArrayList<>(invariantPredicateNames);
+            Element pre = BxmlDomUtils.firstChildElement(declOp, "Precondition");
+            if (pre != null) {
+                requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
+            }
             for (String p : outputParams) {
                 requires.add("\\valid(" + p + ")");
             }
@@ -859,8 +879,7 @@ public final class BxmlOperationsTranslator {
                 List<String> inv = lc.invariant().stream()
                         .map(s -> rewriteAcslStringForArrayBackedParams(s, arrayParamLens))
                         .toList();
-                rewrittenLoops.add(new BxmlLoopTranslator.LoopContract(
-                        lc.index(), inv, lc.variant(), lc.assigns()));
+                rewrittenLoops.add(lc.withInvariantAndAssigns(inv, lc.assigns()));
             }
             return rewrittenLoops;
         }
@@ -873,7 +892,8 @@ public final class BxmlOperationsTranslator {
             List<String> requires,
             List<BxmlLoopTranslator.LoopContract> loops,
             Set<String> funcTypedOutputs,
-            List<String> outputParams) {
+            List<String> outputParams,
+            List<String> separationArrayTargets) {
         Map<String, String> functionTypedOutputBounds =
                 new LinkedHashMap<>(extractFunctionTypedOutputBounds(loops, funcTypedOutputs));
         // Saída array-backed atribuída via ANY_Sub direto (ex.: "ee <-- elements = ANY xx WHERE
@@ -896,6 +916,13 @@ public final class BxmlOperationsTranslator {
                     bound != null
                             ? "\\valid(" + p + " + (0 .. " + bound + "))"
                             : "\\valid(" + p + ")");
+            // Saída array: a faixa inteira separada dos arrays globais da máquina e das importadas,
+            // como as saídas escalares em buildRequiresForOperation.
+            if (bound != null && separationArrayTargets != null) {
+                for (String target : separationArrayTargets) {
+                    requires.add("\\separated(" + p + " + (0 .. " + bound + "), " + target + ")");
+                }
+            }
         }
         if (!funcTypedOutputs.isEmpty() && !loops.isEmpty()) {
             loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
@@ -944,7 +971,8 @@ public final class BxmlOperationsTranslator {
                     GhostDomainRestrictionRewriter.partialFunctionDomainFromPreconditionInPred(
                             predRoot, qName);
             if (domain == null) continue;
-            String len = GhostDomainRestrictionRewriter.arrayLengthAcslFromDomain(domain, ctx, Set.of());
+            // ultimo indice (o limite do \valid/assigns), nao o comprimento
+            String len = GhostDomainRestrictionRewriter.arrayLastIndexAcslFromDomain(domain, ctx);
             if (len == null || len.isBlank()) continue;
             for (String p : funcTypedOutputs) {
                 if (out.containsKey(p)) continue;
@@ -1156,7 +1184,7 @@ public final class BxmlOperationsTranslator {
                     newAssigns.add(a);
                 }
             }
-            result.add(new BxmlLoopTranslator.LoopContract(lc.index(), inv, lc.variant(), newAssigns));
+            result.add(lc.withInvariantAndAssigns(inv, newAssigns));
         }
         return List.copyOf(result);
     }
@@ -1338,10 +1366,24 @@ public final class BxmlOperationsTranslator {
     /**
      * Parâmetros de saída em C são ponteiros: {@code ret : S} no B traduz-se para
      * {@code belongs(*ret, BOOL)} ou {@code belongs((integer)*ret, S)} nos {@code requires}.
+     *
+     * <p>SEM âncoras {@code ^}/{@code $} (ao contrário da versão anterior): uma precondição B com
+     * vários conjuntos {@code &} (ex.: {@code get_stdlib_CRC16Polynom3D65}'s 7 conjuntos, incluindo
+     * {@code po : uint16_t}) chega aqui como UMA ÚNICA string {@code requires} (ver {@link
+     * BxmlPredicateToAcsl#translatePredicateBlock}, que junta a árvore inteira com {@code &&} —
+     * distinto de {@code translateInvariantConjuncts}, que achataria em entradas separadas). Uma
+     * âncora exigia que a string INTEIRA fosse só {@code belongs(param, S)}; com {@code po : uint16_t}
+     * embutido no MEIO de uma string maior, o {@code matches()} nunca disparava e {@code po} ficava
+     * sem desreferenciar — "incompatible types integer and uint16_t *" no {@code -acsl-import}
+     * (parâmetros de saída simples, com precondição de 1 conjunto só, já funcionavam antes).
+     * {@code [^()]+} (não {@code [^)]+}) evita consumir um {@code (} de outra chamada adjacente na
+     * mesma string (ex. {@code is_total_function(array_to_function_int(...), ...)}) — se o 2º
+     * argumento tiver parênteses próprios, esta ocorrência simplesmente não casa (degrada para "não
+     * reescreve", nunca para uma reescrita errada).
      */
     private static final Pattern REQUIRES_BELONGS =
             Pattern.compile(
-                    "^belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^)]+)\\s*\\)$");
+                    "belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^()]+?)\\s*\\)");
 
     private static void rewriteRequiresForOutputParameters(
             List<String> requires, List<String> outputParams, Set<String> boolOutputParams) {
@@ -1355,22 +1397,31 @@ public final class BxmlOperationsTranslator {
             if (req == null || req.isBlank()) {
                 continue;
             }
-            Matcher m = REQUIRES_BELONGS.matcher(req.trim());
-            if (!m.matches()) {
+            Matcher m = REQUIRES_BELONGS.matcher(req);
+            StringBuilder rewritten = new StringBuilder();
+            boolean changed = false;
+            while (m.find()) {
+                String var = m.group(1).trim();
+                String set = m.group(2).trim();
+                if (!out.contains(var)) {
+                    continue;
+                }
+                changed = true;
+                // Saídas bool (C _Bool*) correspondem diretamente ao tipo lógico ACSL "boolean" —
+                // sem cast. O cast (integer) só se aplica a saídas int/enum (ex.: cc : COPY em
+                // Biblioteca), cujo domínio (Set<integer>) exige elevar o valor C para o tipo
+                // lógico "integer". Aplicá-lo também a saídas bool comparadas contra um domínio
+                // Set<boolean> (ex.: BOOL) provoca "invalid implicit conversion from integer to
+                // boolean" no Frama-C.
+                String value = boolOut.contains(var) ? "*" + var : "(integer)*" + var;
+                m.appendReplacement(
+                        rewritten, Matcher.quoteReplacement("belongs(" + value + ", " + set + ")"));
+            }
+            if (!changed) {
                 continue;
             }
-            String var = m.group(1).trim();
-            String set = m.group(2).trim();
-            if (!out.contains(var)) {
-                continue;
-            }
-            // Saídas bool (C _Bool*) correspondem diretamente ao tipo lógico ACSL "boolean" — sem
-            // cast. O cast (integer) só se aplica a saídas int/enum (ex.: cc : COPY em Biblioteca),
-            // cujo domínio (Set<integer>) exige elevar o valor C para o tipo lógico "integer".
-            // Aplicá-lo também a saídas bool comparadas contra um domínio Set<boolean> (ex.: BOOL)
-            // provoca "invalid implicit conversion from integer to boolean" no Frama-C.
-            String value = boolOut.contains(var) ? "*" + var : "(integer)*" + var;
-            requires.set(i, "belongs(" + value + ", " + set + ")");
+            m.appendTail(rewritten);
+            requires.set(i, rewritten.toString());
         }
     }
 
@@ -1387,6 +1438,20 @@ public final class BxmlOperationsTranslator {
     record ArrayFunctionParamInfo(String lengthExpr, boolean boolCodomain) {
         String functionName() {
             return boolCodomain ? "array_to_function_bool" : "array_to_function_int";
+        }
+
+        /**
+         * {@code array_to_function_int}/{@code _bool} exigem exatamente {@code int *}/{@code _Bool *}
+         * (ver assinatura em {@code function_functions/array_to_function_int.acsl}/{@code _bool.acsl})
+         * — um parâmetro C de outro tipo inteiro (ex.: {@code uint8_t *p_trame}, domínio B
+         * {@code uint8_t}) precisa deste cast explícito, senão o {@code -acsl-import} rejeita com
+         * "invalid implicit conversion from 'uint8_t *' to 'int *'". Mesmo cast já usado (sem este
+         * bug) no caminho de VARIÁVEIS concretas array-backed (ver {@code MachineAxiomaticBlockFormatter},
+         * ex. {@code array_to_function_int((int*)(Customer__limit), ...)}) — faltava só aqui, no
+         * caminho de PARÂMETROS de operação.
+         */
+        String castType() {
+            return boolCodomain ? "_Bool" : "int";
         }
     }
 
@@ -1411,7 +1476,7 @@ public final class BxmlOperationsTranslator {
         }
     }
 
-    private static String rewriteAcslStringForArrayBackedParams(
+    static String rewriteAcslStringForArrayBackedParams(
             String s, Map<String, ArrayFunctionParamInfo> infoByParam) {
         if (s == null || s.isBlank() || infoByParam == null || infoByParam.isEmpty()) return s;
         for (Map.Entry<String, ArrayFunctionParamInfo> e : infoByParam.entrySet()) {
@@ -1419,9 +1484,13 @@ public final class BxmlOperationsTranslator {
             ArrayFunctionParamInfo info = e.getValue();
             String fn = info.functionName();
             // Substitui ocorrências isoladas de p que não estejam já dentro de array_to_function_*(
+            // Cast (int*)/(_Bool*) explícito: p pode ser um tipo inteiro C mais estreito que "int"
+            // (ex.: uint8_t *p_trame, domínio B uint8_t) — sem o cast, "invalid implicit conversion
+            // from 'uint8_t *' to 'int *'" no -acsl-import (mesmo cast já usado no caminho de
+            // variáveis concretas array-backed, ver ArrayFunctionParamInfo#castType).
             s = s.replaceAll(
                     "(?<!array_to_function_int\\()(?<!array_to_function_bool\\()\\b" + Pattern.quote(p) + "\\b",
-                    fn + "(" + p + ", " + info.lengthExpr() + ")");
+                    fn + "((" + info.castType() + "*)(" + p + "), " + info.lengthExpr() + ")");
         }
         return s;
     }
@@ -1626,6 +1695,10 @@ public final class BxmlOperationsTranslator {
                 sb.append(";\n");
             }
             for (BxmlLoopTranslator.LoopContract loop : loops) {
+                if (loop.preformatted() != null) {
+                    sb.append(loop.preformatted());
+                    continue;
+                }
                 sb.append("    at loop ").append(loop.index()).append(":\n");
                 for (String conjunct : loop.invariant()) {
                     if (conjunct != null && !conjunct.isBlank()) {

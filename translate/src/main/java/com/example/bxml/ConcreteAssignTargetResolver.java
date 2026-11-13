@@ -668,11 +668,46 @@ public final class ConcreteAssignTargetResolver {
      */
     public static List<String> listArraySeparationTargets(
             String machineName,
+            Element abstractMachineEl,
             List<Element> mergedMachineElements,
             BxmlTranslateContext ctx,
             Collection<String> relatedMachineNames,
             Path bxmlDirectory) {
         LinkedHashSet<String> out = new LinkedHashSet<>();
+        // Arrays declarados em CONCRETE_VARIABLES da abstração ou de um refinamento (a implementação
+        // não os redeclara: PartitionArray, DutchFlag, cv_rel sem _i) — também são memória global
+        // da própria máquina. Só os tipados por função total (implementationAssignTargetWithRange
+        // devolve null para os demais).
+        List<Element> nonImplementations = new ArrayList<>();
+        if (abstractMachineEl != null) {
+            nonImplementations.add(abstractMachineEl);
+        }
+        if (mergedMachineElements != null) {
+            for (Element mel : mergedMachineElements) {
+                if (!BxmlMachineVariables.isImplementationMachine(mel)) {
+                    nonImplementations.add(mel);
+                }
+            }
+        }
+        List<String> declaredArrays = new ArrayList<>();
+        for (Element mel : nonImplementations) {
+            Element concrete = BxmlDomUtils.firstChildElement(mel, "Concrete_Variables");
+            if (concrete == null) continue;
+            NodeList ch = concrete.getChildNodes();
+            for (int i = 0; i < ch.getLength(); i++) {
+                if (ch.item(i).getNodeType() != Node.ELEMENT_NODE) continue;
+                Element id = (Element) ch.item(i);
+                if (!"Id".equals(id.getLocalName())) continue;
+                String v = id.getAttribute("value");
+                if (v == null || v.isBlank()) continue;
+                String ranged =
+                        implementationAssignTargetWithRange(machineName + "__" + v, v, mel, ctx, bxmlDirectory);
+                if (ranged != null && !ranged.endsWith("[..]")) {
+                    declaredArrays.add(ranged);
+                }
+            }
+        }
+        out.addAll(toSeparatedPointerRanges(declaredArrays));
         out.addAll(
                 toSeparatedPointerRanges(
                         listImplementationAssignTargets(

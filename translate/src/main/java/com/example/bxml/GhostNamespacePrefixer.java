@@ -319,10 +319,15 @@ final class GhostNamespacePrefixer {
         s = prefixSetComprehensionsForGhost(s);
         s = GhostOperationsCiGenerator.ghostDummyConcreteRefs(s, concreteConstantNames);
         s = prefixAbstractVarsForGhost(s, abstractVars);
-        // Set<A> não existe neste front-end isolado — só o tipo-sombra DSet<A> (ver
-        // DummyGhostAxiomaticBuilder#rewriteDummyTypes, mesma substituição). \list<T> é builtin
-        // nativo da ACSL (não da lib), por isso não precisa de sombra equivalente.
-        return s.replaceAll("\\bSet<", "DSet<");
+        // Set<A>/Relation<A,B>/Function<A,B>/Tuple<A,B> não existem neste front-end isolado — só os
+        // tipos-sombra DSet<A>/DRelation<A,B>/DTuple<A,B> (ver
+        // DummyGhostAxiomaticBuilder#dummyAxiomaticLogicType, mesmo alvo). Antes só se convertia
+        // Set<, deixando Relation</Function< (ex.: o tipo de uma variável livre de
+        // GeneralizedQuantifierTranslator#resolveFreeVarType resolvido via typref, nunca "integer")
+        // crus neste bloco — "unexpected token 'Relation'" no -acsl-import, já dentro do universo
+        // isolado. \list<T> é builtin nativo da ACSL (não da lib), por isso não precisa de sombra
+        // equivalente.
+        return prefixFunctionTypesForGhost(s);
     }
 
     /**

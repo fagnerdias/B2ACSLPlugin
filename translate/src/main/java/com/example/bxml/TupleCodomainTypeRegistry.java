@@ -1,5 +1,6 @@
 package com.example.bxml;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -57,8 +58,15 @@ public final class TupleCodomainTypeRegistry {
         needed.putIfAbsent(name, setTupleDefinition);
     }
 
+    /** Definição {@code Set<Tuple<...> >} do nome achatado {@code name}, ou {@code null} se não registado. */
+    String definitionOf(String name) {
+        return name == null ? null : needed.get(name.trim());
+    }
+
     public Map<String, String> snapshotAndClear() {
-        Map<String, String> copy = Map.copyOf(needed);
+        // Ordem de registo preservada: Map.copyOf itera numa ordem que muda de uma JVM para outra,
+        // e o ficheiro <M>_tuple_types.acsl saía com as linhas trocadas entre execuções.
+        Map<String, String> copy = Collections.unmodifiableMap(new LinkedHashMap<>(needed));
         needed.clear();
         return copy;
     }

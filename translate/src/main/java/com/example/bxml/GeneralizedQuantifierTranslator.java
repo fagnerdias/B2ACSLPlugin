@@ -22,7 +22,7 @@ final class GeneralizedQuantifierTranslator {
      * Filtrados durante a detecção de variáveis livres em {@link #translateQuantifiedExp}.
      */
     private static final java.util.Set<String> B_NON_PARAM_IDS = java.util.Set.of(
-            "NAT", "NAT1", "INTEGER", "INT", "BOOL", "REAL", "STRING",
+            "NAT", "NAT1", "INTEGER", "INT", "NATURAL", "NATURAL1", "BOOL", "REAL", "STRING",
             "TRUE", "FALSE", "MAXINT", "MININT");
 
     /**
@@ -98,7 +98,7 @@ final class GeneralizedQuantifierTranslator {
         String[] intervalBounds = boundVarNames.size() == 1
                 ? intervalDomainBounds(guardPred, boundVarNames.get(0), ctx)
                 : null;
-        if (intervalBounds != null && !Boolean.FALSE.equals(targetIsExplicitlySequenceTyped(qe))) {
+        if (intervalBounds != null && useSequenceBuilder(qe, intervalBounds[0], ctx)) {
             return translateSequenceBuilderLambda(
                     boundVarNames.get(0), intervalBounds[0], intervalBounds[1], bodyExp, guardPred, ctx);
         }
@@ -209,7 +209,172 @@ final class GeneralizedQuantifierTranslator {
         String[] intervalBounds =
                 intervalDomainBounds(guardPred, boundVarIds.get(0).getAttribute("value"), ctx);
         if (intervalBounds == null) return true;
-        return Boolean.FALSE.equals(targetIsExplicitlySequenceTyped(lambdaEl));
+        return !useSequenceBuilder(lambdaEl, intervalBounds[0], ctx);
+    }
+
+    /**
+     * Decide se uma lambda {@code %x.(x : lo..hi | E)} é uma sequência B ({@code \list}) ou uma
+     * função (modelo de mapa), pelo tipo do ALVO — o outro lado de {@code V = %...} ou a variável
+     * atribuída em {@code V := %...}:
+     * <ol>
+     *   <li>tipagem explícita do alvo em PROPERTIES/INVARIANT ({@code seq}/{@code iseq}/... ou não);
+     *   <li>tipo lógico conhecido do alvo (desta máquina ou de outra): {@code \list} ou não;
+     *   <li>alvo sem tipo conhecido (ex. {@code aseq} de {@code #aseq.(aseq = %ii.(ii : 1..n | ...))}):
+     *       sequência só se {@code lo} for {@code 1}, porque o domínio de uma sequência B começa em 1
+     *       ({@code list_to_function} da biblioteca também é 1-based);
+     *   <li>sem alvo (lambda como argumento): sequência, como antes.
+     * </ol>
+     * Antes só o passo 1 existia, e uma atribuição como {@code array := %ii.(ii : 0..n | ii)} a uma
+     * função saía como {@code \list}: "incompatible types \list<integer> and Function".
+     */
+    private static boolean useSequenceBuilder(Element lambdaEl, String lo, BxmlTranslateContext ctx) {
+        String target = lambdaTargetName(lambdaEl);
+        if (target == null) {
+            return true;
+        }
+        Boolean explicit = targetIsExplicitlySequenceTyped(lambdaEl);
+        if (explicit != null) {
+            return explicit;
+        }
+        String t = ctx.variableLogicTypes().get(target);
+        if (t == null || t.isBlank()) {
+            t = ctx.crossMachineVariableLogicTypes().get(target);
+        }
+        if (t != null && !t.isBlank()) {
+            return t.startsWith("\\list");
+        }
+        return lo != null && "1".equals(lo.trim());
+    }
+
+    /**
+     * Nome do alvo de uma lambda: o {@code Id} do outro lado de {@code Id = %...}, ou a variável
+     * na mesma posição de {@code Variables} quando a lambda é um valor de {@code Assignement_Sub};
+     * {@code null} se não houver.
+     */
+    static String lambdaTargetName(Element lambdaEl) {
+        Node parent = lambdaEl.getParentNode();
+        if (!(parent instanceof Element parentEl)) {
+            return null;
+        }
+        if ("Exp_Comparison".equals(parentEl.getLocalName()) && "=".equals(parentEl.getAttribute("op"))) {
+            Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(parentEl);
+            if (pair[0] == null || pair[1] == null) return null;
+            Element other = pair[0] == lambdaEl ? pair[1] : pair[0];
+            return "Id".equals(other.getLocalName()) ? other.getAttribute("value").trim() : null;
+        }
+        if ("Values".equals(parentEl.getLocalName())
+                && parentEl.getParentNode() instanceof Element assign
+                && "Assignement_Sub".equals(assign.getLocalName())) {
+            List<Element> values = BxmlDomUtils.directExpChildren(parentEl);
+            int idx = values.indexOf(lambdaEl);
+            Element vars = BxmlDomUtils.firstChildElement(assign, "Variables");
+            if (idx < 0 || vars == null) return null;
+            List<Element> lhs = BxmlDomUtils.directExpChildren(vars);
+            if (idx >= lhs.size() || !"Id".equals(lhs.get(idx).getLocalName())) return null;
+            return lhs.get(idx).getAttribute("value").trim();
+        }
+        return null;
+    }
+
+    /**
+     * {@code V := %x.(G | E)} quando a lambda é uma função (modelo de mapa): a forma pontual
+     * inline {@code (\forall x; (G) ==> function_apply(V, x) == E) && (\forall x; belongs(x,
+     * dom(V)) <==> (G))}, sem função lógica auxiliar. Inline porque o corpo pode ler o próprio
+     * {@code V} (ex. {@code array := %ii.(... | array(max_IDX - ii))}), que no lado direito é o
+     * PRÉ-estado: {@code rhsCtx} traz {@code V} em {@link BxmlAnnotationScope#preStateNames()} e
+     * sai {@code \old(V)}; dentro de um axioma global isso seria impossível. {@code null} se a
+     * lambda não tiver esta forma (corpo booleano, ou sequência).
+     */
+    /**
+     * {@code V := W <+ %z.(Q | E)} na forma pontual, com o pré-estado já resolvido (V no pós-estado,
+     * W/Q/E lidos com {@code rhsCtx}, que traz V em {@code preStateNames}):
+     * <pre>
+     *   (\forall T z; (Q ==> V(z) == E) && (!(Q) ==> V(z) == W(z)))
+     *   && (\forall T z; belongs(z, dom(V)) <==> (belongs(z, dom(W)) || (Q)))
+     * </pre>
+     * Montada aqui para não passar pelo pós-passe textual {@code wrapLhsVarsInRhsWithOld}, que corta
+     * no primeiro {@code " == "} e envolvia em {@code \old} também o {@code V(z)} da segunda
+     * implicação — o ramo "fora da lambda" virava a tautologia {@code \old(V)(z) == \old(V)(z)} e a
+     * especificação perdia que V não muda ali. {@code null} se a forma não for esta (uma variável
+     * ligada, guarda e corpo presentes).
+     */
+    static String overwriteLambdaAssignmentPointwise(
+            Element varEl, Element rhsEl, BxmlTranslateContext lhsCtx, BxmlTranslateContext rhsCtx) {
+        if (varEl == null || rhsEl == null || !"Binary_Exp".equals(rhsEl.getLocalName())
+                || !"<+".equals(rhsEl.getAttribute("op"))) {
+            return null;
+        }
+        Element[] pair = BxmlExpressionToAcsl.twoDirectExpChildren(rhsEl);
+        Element lambda = pair[1];
+        if (pair[0] == null || lambda == null || !"Quantified_Exp".equals(lambda.getLocalName())
+                || !"%".equals(lambda.getAttribute("type"))) {
+            return null;
+        }
+        List<Element> boundVarIds = lambdaBoundVarIdElements(lambda);
+        if (boundVarIds.size() != 1) return null;
+        Element guardEl = BxmlExpressionToAcsl.childByLocalName(lambda, "Pred");
+        Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
+        Element bodyEl = BxmlExpressionToAcsl.childByLocalName(lambda, "Body");
+        Element bodyExp = bodyEl != null ? BxmlExpressionToAcsl.firstExpChild(bodyEl) : null;
+        if (guardPred == null || bodyExp == null || "Boolean_Exp".equals(bodyExp.getLocalName())) {
+            return null;
+        }
+        Element zEl = boundVarIds.get(0);
+        String z = zEl.getAttribute("value");
+        String trAttr = zEl.getAttribute("typref");
+        int typref = trAttr.isBlank() ? -1 : Integer.parseInt(trAttr.trim());
+        String decl = lhsCtx.types().acslVariableLogicTypeFromTypref(typref) + " " + z;
+        String v = BxmlExpressionToAcsl.translate(varEl, lhsCtx);
+        String w = BxmlExpressionToAcsl.translate(pair[0], rhsCtx);
+        String q = BxmlPredicateToAcsl.translatePropertyPred(guardPred, rhsCtx);
+        String e = BxmlExpressionToAcsl.translate(bodyExp, rhsCtx);
+        String vz = "function_apply(" + v + ", " + z + ")";
+        String wz = "function_apply(" + w + ", " + z + ")";
+        boolean setValued = BxmlExpressionToAcsl.isSetValued(bodyExp, rhsCtx);
+        String inLambda = setValued ? "equals(" + vz + ", " + e + ")" : "(" + vz + " == " + e + ")";
+        String outside = setValued ? "equals(" + vz + ", " + wz + ")" : "(" + vz + " == " + wz + ")";
+        return "(\\forall " + decl + "; ((" + q + ") ==> " + inLambda + ") && (!(" + q + ") ==> " + outside
+                + ")) && (\\forall " + decl + "; belongs(" + z + ", dom(" + v + ")) <==> (belongs(" + z
+                + ", dom(" + w + ")) || (" + q + ")))";
+    }
+
+    static String lambdaAssignmentPointwise(
+            Element varEl, Element lambdaEl, BxmlTranslateContext lhsCtx, BxmlTranslateContext rhsCtx) {
+        if (varEl == null || lambdaEl == null
+                || !"Quantified_Exp".equals(lambdaEl.getLocalName()) || !"%".equals(lambdaEl.getAttribute("type"))) {
+            return null;
+        }
+        List<Element> boundVarIds = lambdaBoundVarIdElements(lambdaEl);
+        if (boundVarIds.isEmpty()) return null;
+        Element bodyEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Body");
+        Element bodyExp = bodyEl != null ? BxmlExpressionToAcsl.firstExpChild(bodyEl) : null;
+        if (bodyExp == null || "Boolean_Exp".equals(bodyExp.getLocalName())) {
+            return null;
+        }
+        if (!isMapModelLambda(lambdaEl, lhsCtx)) {
+            return null;
+        }
+        Element guardEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Pred");
+        Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
+
+        List<String> boundVarDecls = new ArrayList<>();
+        String point = null;
+        for (Element boundIdEl : boundVarIds) {
+            String boundVar = boundIdEl.getAttribute("value");
+            String trAttr = boundIdEl.getAttribute("typref");
+            int typref = trAttr.isBlank() ? -1 : Integer.parseInt(trAttr.trim());
+            boundVarDecls.add(lhsCtx.types().acslLogicTypeForValueTypref(typref) + " " + boundVar);
+            point = point == null ? boundVar : "couple(" + point + ", " + boundVar + ")";
+        }
+        String decls = String.join(", ", boundVarDecls);
+        String v = BxmlExpressionToAcsl.translate(varEl, lhsCtx);
+        String guard = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, rhsCtx) : "\\true";
+        String body = BxmlExpressionToAcsl.translate(bodyExp, rhsCtx);
+        String value = "Quantified_Set".equals(bodyExp.getLocalName())
+                ? "equals(function_apply(" + v + ", " + point + "), " + body + ")"
+                : "(function_apply(" + v + ", " + point + ") == " + body + ")";
+        return "(\\forall " + decls + "; (" + guard + ") ==> " + value + ") && (\\forall " + decls
+                + "; belongs(" + point + ", dom(" + v + ")) <==> (" + guard + "))";
     }
 
     /**
@@ -419,7 +584,8 @@ final class GeneralizedQuantifierTranslator {
                 return new DomainClassification(DomainKind.INTERVAL, lo, hi, null, null);
             }
             java.util.List<String> parts = new java.util.ArrayList<>();
-            for (Element r : rest) parts.add(BxmlPredicateToAcsl.translatePropertyPred(r, ctx));
+            // o filtro entra no CORPO da função gerada (filterTemplate), não no ponto de chamada
+            for (Element r : rest) parts.add(BxmlPredicateToAcsl.translatePropertyPred(r, ctx.forHelperBody()));
             return new DomainClassification(DomainKind.INTERVAL, lo, hi, String.join(" && ", parts), null);
         }
 
@@ -456,30 +622,39 @@ final class GeneralizedQuantifierTranslator {
     static java.util.List<String>[] freeVarsAndTypes(
             java.util.List<String> boundVarNames, BxmlTranslateContext ctx, Element... scanRoots) {
         java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
+        java.util.Map<String, Integer> idTyprefs = new java.util.HashMap<>();
         for (Element root : scanRoots) {
-            if (root != null) collectIdValues(root, allIds);
+            if (root != null) collectIdValues(root, allIds, idTyprefs);
         }
         allIds.removeAll(boundVarNames);
-        allIds.removeAll(ctx.variableLogicTypes().keySet());
+        allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
         for (String v : freeVarNames) {
-            String t = ctx.variableLogicTypes().get(v);
-            if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(v);
-            freeVarTypes.add(t == null || t.isBlank() ? "integer" : t);
+            freeVarTypes.add(resolveFreeVarType(v, ctx, idTyprefs));
         }
         @SuppressWarnings("unchecked")
         java.util.List<String>[] out = new java.util.List[] {freeVarNames, freeVarTypes};
         return out;
     }
 
+    /**
+     * Argumentos livres de uma chamada a uma função gerada, com vírgula final ({@code ""} se não
+     * houver): cada parâmetro na forma do escopo do chamador — o pré-estado para {@code x__0}
+     * ({@code \old(x)} ou {@code \at(x, Pre)}) e {@code *p} para uma saída (ver {@link
+     * BxmlAnnotationScope#helperArg}).
+     */
+    private static String callFreeArgs(java.util.List<String> freeVarNames, BxmlTranslateContext ctx) {
+        return freeVarNames.isEmpty() ? "" : ctx.annotationScope().helperArgs(freeVarNames) + ", ";
+    }
+
     /** §2/§2b: domínio-intervalo — recursão (SIGMA/PI) ou declaração+axiomas guardados (MIN/MAX). */
     private static String registerIntervalDomainSum(
             SigmaFunctionRegistry.Op op, String boundVarName, DomainClassification dc, Element bodyExp,
             Element guardPred, String sourceComment, BxmlTranslateContext ctx, SigmaFunctionRegistry registry) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         String bodyForLo = replaceWordBoundary(bodyStr, boundVarName, "lo");
         String bodyForHi = replaceWordBoundary(bodyStr, boundVarName, "hi");
         String filterForLo = dc.filterTemplate() != null
@@ -504,8 +679,7 @@ final class GeneralizedQuantifierTranslator {
         String name = registry.registerInterval(
                 op, freeVarNames, freeVarTypes, sourceComment, bodyForLo, bodyForHi, filterForLo, filterForHi,
                 congrVar, congrType);
-        String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
-        return name + "(" + freeArgs + dc.lo() + ", " + dc.hi() + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + dc.lo() + ", " + dc.hi() + ")";
     }
 
     /** §3: domínio-conjunto qualquer — axiomatização estrutural sobre {@code empty}/{@code singleton+union}. */
@@ -513,7 +687,7 @@ final class GeneralizedQuantifierTranslator {
             SigmaFunctionRegistry.Op op, String boundVarName, int boundVarTypref, DomainClassification dc,
             Element bodyExp, Element guardPred, String sourceComment, BxmlTranslateContext ctx,
             SigmaFunctionRegistry registry) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         String bodyForX = replaceWordBoundary(bodyStr, boundVarName, "x");
 
         // NÃO escanear guardPred aqui: para DomainKind.SET, classifyDomain exige que TODOS os
@@ -536,8 +710,7 @@ final class GeneralizedQuantifierTranslator {
 
         String name = registry.registerSet(
                 op, freeVarNames, freeVarTypes, sourceComment, boundVarType, bodyForX, dc.domainExprText());
-        String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
-        return name + "(" + freeArgs + dc.domainExprText() + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + dc.domainExprText() + ")";
     }
 
     /**
@@ -578,11 +751,12 @@ final class GeneralizedQuantifierTranslator {
                     + ":lo..hi' (sem filtro extra) */";
         }
 
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         java.util.List<String>[] ft = freeVarsAndTypes(
                 java.util.List.of(outerVar, innerVar), ctx, bodyExp, guardPred);
         java.util.List<String> freeVarNames = ft[0];
         java.util.List<String> freeVarTypes = ft[1];
+        // dentro do corpo da função externa: os próprios nomes de parâmetro
         String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
 
         // Interna: parâmetro extra "x" representa o valor corrente da variável externa.
@@ -611,7 +785,7 @@ final class GeneralizedQuantifierTranslator {
         String outerName = registry.registerInterval(
                 op, freeVarNames, freeVarTypes, outerComment, outerBodyForLo, outerBodyForHi, null, null,
                 null, null);
-        return outerName + "(" + freeArgs + outerBounds[0] + ", " + outerBounds[1] + ")";
+        return outerName + "(" + callFreeArgs(freeVarNames, ctx) + outerBounds[0] + ", " + outerBounds[1] + ")";
     }
 
     // ══════════════ UNION / INTER (Quantified_Exp type='UNION'/'INTER') ══════════════
@@ -761,7 +935,7 @@ final class GeneralizedQuantifierTranslator {
             UnionInterFunctionRegistry.Op op, String boundVarName, DomainClassification dc, Element bodyExp,
             Element guardPred, String elementType, String sourceComment, BxmlTranslateContext ctx,
             UnionInterFunctionRegistry registry) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         String bodyForLo = replaceWordBoundary(bodyStr, boundVarName, "lo");
         String bodyForHi = replaceWordBoundary(bodyStr, boundVarName, "hi");
         String filterForLo = dc.filterTemplate() != null
@@ -809,8 +983,7 @@ final class GeneralizedQuantifierTranslator {
         String name = registry.registerInterval(
                 op, freeVarNames, freeVarTypes, sourceComment, elementType, bodyForLo, bodyForHi,
                 filterForLo, filterForHi, hasUniverse, universeExpr, congrVar, congrType);
-        String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
-        return name + "(" + freeArgs + dc.lo() + ", " + dc.hi() + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + dc.lo() + ", " + dc.hi() + ")";
     }
 
     /** §4: domínio-conjunto qualquer. */
@@ -818,7 +991,7 @@ final class GeneralizedQuantifierTranslator {
             UnionInterFunctionRegistry.Op op, String boundVarName, int boundVarTypref, DomainClassification dc,
             Element bodyExp, Element guardPred, String elementType, String sourceComment,
             BxmlTranslateContext ctx, UnionInterFunctionRegistry registry) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
         String bodyForX = replaceWordBoundary(bodyStr, boundVarName, "x");
 
         // NÃO escanear guardPred — mesmo motivo de registerSetDomainSum (SIGMA): para
@@ -841,8 +1014,7 @@ final class GeneralizedQuantifierTranslator {
         String name = registry.registerSet(
                 op, freeVarNames, freeVarTypes, sourceComment, elementType, boundVarType, bodyForX,
                 dc.domainExprText());
-        String freeArgs = freeVarNames.isEmpty() ? "" : String.join(", ", freeVarNames) + ", ";
-        return name + "(" + freeArgs + dc.domainExprText() + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + dc.domainExprText() + ")";
     }
 
     /**
@@ -853,7 +1025,7 @@ final class GeneralizedQuantifierTranslator {
     private static String translateSequenceBuilderLambda(
             String boundVarName, String loExpr, String hiExpr, Element bodyExp, Element guardPred,
             BxmlTranslateContext ctx) {
-        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+        String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
 
         // Variáveis livres: IDs no corpo E na guarda (que contém lo/hi, ex. card(array)) que não
         // são a variável ligada nem estado da PRÓPRIA máquina (reads directo, sem parametrizar).
@@ -862,17 +1034,17 @@ final class GeneralizedQuantifierTranslator {
         // LambdaFunctionRegistry#registerSequenceBuilder), logo uma variável de OUTRA máquina (ex.
         // array, de VArray, importada por Fifo_i_2) tem de entrar como parâmetro tipado explícito.
         java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
-        collectIdValues(bodyExp, allIds);
-        if (guardPred != null) collectIdValues(guardPred, allIds);
+        java.util.Map<String, Integer> idTyprefs = new java.util.HashMap<>();
+        collectIdValues(bodyExp, allIds, idTyprefs);
+        if (guardPred != null) collectIdValues(guardPred, allIds, idTyprefs);
         allIds.remove(boundVarName);
-        allIds.removeAll(ctx.variableLogicTypes().keySet());
+        allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
         for (String v : freeVarNames) {
-            String t = ctx.crossMachineVariableLogicTypes().get(v);
-            freeVarTypes.add(t == null || t.isBlank() ? "integer" : t);
+            freeVarTypes.add(resolveFreeVarType(v, ctx, idTyprefs));
         }
 
         String bodyForLo = replaceWordBoundary(bodyStr, boundVarName, "lo");
@@ -884,10 +1056,7 @@ final class GeneralizedQuantifierTranslator {
         }
         String name = registry.registerSequenceBuilder(
                 freeVarNames, freeVarTypes, "integer", bodyForLo, bodyForLoPlusK);
-        java.util.List<String> args = new java.util.ArrayList<>(freeVarNames);
-        args.add(loExpr);
-        args.add(hiExpr);
-        return name + "(" + String.join(", ", args) + ")";
+        return name + "(" + callFreeArgs(freeVarNames, ctx) + loExpr + ", " + hiExpr + ")";
     }
 
     /**
@@ -899,7 +1068,8 @@ final class GeneralizedQuantifierTranslator {
     private static String translateMapLambda(
             java.util.List<String> boundVarNames, Element guardPred, Element bodyExp,
             BxmlTranslateContext ctx) {
-        String guardStr = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx) : null;
+        String guardStr = guardPred != null
+                ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx.forHelperBody()) : null;
 
         boolean isBooleanBody = "Boolean_Exp".equals(bodyExp.getLocalName());
         // % x.(P | {y|Q}): o corpo E é ele próprio uma compreensão — o valor por x é um CONJUNTO,
@@ -914,10 +1084,10 @@ final class GeneralizedQuantifierTranslator {
         if (isBooleanBody) {
             Element innerPred = BxmlExpressionToAcsl.firstExpChild(bodyExp);
             if (innerPred == null) return "/* TODO: lambda body */";
-            bodyStr = BxmlPredicateToAcsl.translatePropertyPred(innerPred, ctx);
+            bodyStr = BxmlPredicateToAcsl.translatePropertyPred(innerPred, ctx.forHelperBody());
             scanRoot = innerPred;
         } else {
-            bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx);
+            bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
             scanRoot = bodyExp;
         }
 
@@ -928,19 +1098,19 @@ final class GeneralizedQuantifierTranslator {
             boundSet.addAll(quantifiedSetOwnBoundVarNames(bodyExp));
         }
         java.util.LinkedHashSet<String> allIds = new java.util.LinkedHashSet<>();
-        collectIdValues(scanRoot, allIds);
-        if (guardPred != null) collectIdValues(guardPred, allIds);
+        java.util.Map<String, Integer> idTyprefs = new java.util.HashMap<>();
+        collectIdValues(scanRoot, allIds, idTyprefs);
+        if (guardPred != null) collectIdValues(guardPred, allIds, idTyprefs);
         allIds.removeAll(boundSet);
-        allIds.removeAll(ctx.variableLogicTypes().keySet());
-        allIds.removeAll(ctx.crossMachineVariableNames());
+        // Variáveis de estado (desta máquina ou de outra) viram parâmetro, como nos demais helpers:
+        // o axioma _def não tem rótulo e valeria para todo estado de memória.
+        allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
         for (String v : freeVarNames) {
-            String t = ctx.variableLogicTypes().get(v);
-            if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(v);
-            freeVarTypes.add(t == null || t.isBlank() ? "integer" : t);
+            freeVarTypes.add(resolveFreeVarType(v, ctx, idTyprefs));
         }
 
         LambdaFunctionRegistry registry = ctx.lambdaRegistry();
@@ -953,9 +1123,7 @@ final class GeneralizedQuantifierTranslator {
                 name = registry.registerFunction(
                         freeVarNames, freeVarTypes, boundVarNames, bodyStr, returnType, guardStr);
             }
-            java.util.List<String> args = new java.util.ArrayList<>(freeVarNames);
-            args.addAll(boundVarNames);
-            return name + "(" + String.join(", ", args) + ")";
+            return name + "(" + callFreeArgs(freeVarNames, ctx) + String.join(", ", boundVarNames) + ")";
         }
         // Fallback inline (sem registro disponível no contexto)
         java.util.List<String> decls = new java.util.ArrayList<>();
@@ -995,11 +1163,18 @@ final class GeneralizedQuantifierTranslator {
      * ponto {@code x} (que fica livre, sem nada que o ligue) — a relação correta é pontual,
      * restrita ao domínio {@code D}: {@code \forall Tx x; D ==> equals(function_apply(V,x),
      * lambda_funcNN(x))} (corpo valorado-em-conjunto) ou {@code \forall Tx x; D ==>
-     * function_apply(V,x) == lambda_funcNN(x)} (corpo escalar). Devolve {@code null} se {@code
-     * lambdaEl} não tiver esta forma, se o corpo for booleano (predicado, tratado à parte — ver
-     * {@link BxmlConstantsAndProperties}), ou se a classificação escolher o modelo de sequência
-     * (ver {@link #isMapModelLambda}) — nesse caso o chamador cai no caminho genérico ({@code
-     * \list}, já correto sem este envolvimento).
+     * function_apply(V,x) == lambda_funcNN(x)} (corpo escalar). Com N&gt;1 variáveis ligadas (ex.
+     * {@code add_uint32 = %(x1,x2).(x1:D1 & x2:D2 | x1+x2)}), o argumento de {@code
+     * function_apply} é o par ACHATADO À ESQUERDA {@code couple(x1, x2)} (mesma convenção de
+     * {@code GhostNamespacePrefixer#uncurryAbstractConstantApplications}), com um {@code \forall}
+     * por cada variável — sem isto ({@code function_apply(V, x1, x2)} ou pior, nenhum envolvimento
+     * nenhum) x1/x2 ficavam LIVRES na comparação nua {@code V == lambda_funcNN(...)}, "unbound
+     * logic variable x1" no {@code -acsl-import} (só descoberto ao corrigir a tipagem de variável
+     * livre de {@link #resolveFreeVarType} deixar de mascarar este erro com "incompatible types"
+     * mais cedo no mesmo ficheiro). Devolve {@code null} se {@code lambdaEl} não tiver esta forma,
+     * se o corpo for booleano (predicado, tratado à parte — ver {@link BxmlConstantsAndProperties}),
+     * ou se a classificação escolher o modelo de sequência (ver {@link #isMapModelLambda}) — nesse
+     * caso o chamador cai no caminho genérico ({@code \list}, já correto sem este envolvimento).
      */
     static String setValuedMapLambdaPointwiseEquality(
             Element varEl, Element lambdaEl, BxmlTranslateContext ctx) {
@@ -1007,8 +1182,7 @@ final class GeneralizedQuantifierTranslator {
             return null;
         }
         List<Element> boundVarIds = lambdaBoundVarIdElements(lambdaEl);
-        if (boundVarIds.size() != 1) return null; // só a forma de 1 variável ligada, por agora
-        Element boundIdEl = boundVarIds.get(0);
+        if (boundVarIds.isEmpty()) return null;
         Element bodyEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Body");
         Element bodyExp = bodyEl != null ? BxmlExpressionToAcsl.firstExpChild(bodyEl) : null;
         if (bodyExp == null || "Boolean_Exp".equals(bodyExp.getLocalName())) {
@@ -1022,10 +1196,16 @@ final class GeneralizedQuantifierTranslator {
         Element guardEl = BxmlExpressionToAcsl.childByLocalName(lambdaEl, "Pred");
         Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
 
-        String boundVar = boundIdEl.getAttribute("value");
-        String trAttr = boundIdEl.getAttribute("typref");
-        int typref = trAttr.isBlank() ? -1 : Integer.parseInt(trAttr.trim());
-        String acslT = ctx.types().acslLogicTypeForValueTypref(typref);
+        List<String> boundVarDecls = new ArrayList<>();
+        String appliedArg = null;
+        for (Element boundIdEl : boundVarIds) {
+            String boundVar = boundIdEl.getAttribute("value");
+            String trAttr = boundIdEl.getAttribute("typref");
+            int typref = trAttr.isBlank() ? -1 : Integer.parseInt(trAttr.trim());
+            String acslT = ctx.types().acslLogicTypeForValueTypref(typref);
+            boundVarDecls.add(acslT + " " + boundVar);
+            appliedArg = appliedArg == null ? boundVar : "couple(" + appliedArg + ", " + boundVar + ")";
+        }
 
         String varStr = BxmlExpressionToAcsl.translate(varEl, ctx);
         // BxmlExpressionToAcsl.translate() regista o lambda em ctx.lambdaRegistry() e devolve a chamada já correta
@@ -1034,9 +1214,12 @@ final class GeneralizedQuantifierTranslator {
         String guardStr = guardPred != null ? BxmlPredicateToAcsl.translatePropertyPred(guardPred, ctx) : "\\true";
 
         String pointwiseComparison = isSetValuedBody
-                ? "equals(function_apply(" + varStr + ", " + boundVar + "), " + lambdaCall + ")"
-                : "(function_apply(" + varStr + ", " + boundVar + ") == " + lambdaCall + ")";
-        return "(\\forall " + acslT + " " + boundVar + "; (" + guardStr + ") ==> " + pointwiseComparison + ")";
+                ? "equals(function_apply(" + varStr + ", " + appliedArg + "), " + lambdaCall + ")"
+                : "(function_apply(" + varStr + ", " + appliedArg + ") == " + lambdaCall + ")";
+        String decls = String.join(", ", boundVarDecls);
+        // B: V = %x.(G | E) também fixa o domínio, dom(V) = {x | G} (como lambdaAssignmentPointwise).
+        return "(\\forall " + decls + "; (" + guardStr + ") ==> " + pointwiseComparison + ") && (\\forall "
+                + decls + "; belongs(" + appliedArg + ", dom(" + varStr + ")) <==> (" + guardStr + "))";
     }
 
     /** Substitui {@code name} por {@code replacement} em {@code text}, por fronteira de palavra. */
@@ -1055,11 +1238,36 @@ final class GeneralizedQuantifierTranslator {
      * como parâmetros espúrios da função gerada para o quantificador externo.
      */
     private static void collectIdValues(Element e, java.util.Set<String> out) {
-        collectIdValues(e, out, java.util.Set.of());
+        collectIdValues(e, out, java.util.Set.of(), null);
+    }
+
+    /**
+     * Como {@link #collectIdValues(Element, java.util.Set)}, mas também regista (1ª ocorrência) o
+     * {@code typref} de cada {@code Id} livre em {@code typrefsOut} — usado por {@link
+     * #resolveFreeVarType} para resolver o tipo de uma variável livre que uma máquina B só liga por
+     * fora (ex.: variável ligada por um {@code \forall}/{@code %} ENVOLVENTE, como {@code ts} em
+     * {@code !(c0,ts).(... & ts:1..9-->X | ...)}), portanto ausente de {@code
+     * ctx.variableLogicTypes()}/{@code ctx.crossMachineVariableLogicTypes()} (que só cobrem estado
+     * de máquina), sem essa informação ficava sempre {@code integer} por omissão — mesmo quando o
+     * {@code typref} do próprio nó {@code Id} já diz o tipo real (ex.: uma relação, usada depois em
+     * {@code dummy_function_apply(ts, ...)}, gerando "incompatible types integer and DRelation<...>"
+     * já dentro do universo isolado de {@code ghost_operations.ci}).
+     */
+    private static void collectIdValues(
+            Element e, java.util.Set<String> out, java.util.Map<String, Integer> typrefsOut) {
+        collectIdValues(e, out, java.util.Set.of(), typrefsOut);
     }
 
     private static void collectIdValues(
             Element e, java.util.Set<String> out, java.util.Set<String> locallyBound) {
+        collectIdValues(e, out, locallyBound, null);
+    }
+
+    private static void collectIdValues(
+            Element e,
+            java.util.Set<String> out,
+            java.util.Set<String> locallyBound,
+            java.util.Map<String, Integer> typrefsOut) {
         String localName = e.getLocalName();
         java.util.Set<String> childScope = locallyBound;
         if ("Quantified_Exp".equals(localName) || "Quantified_Pred".equals(localName)) {
@@ -1071,14 +1279,67 @@ final class GeneralizedQuantifierTranslator {
         }
         if ("Id".equals(localName)) {
             String v = e.getAttribute("value");
-            if (v != null && !v.isBlank() && !childScope.contains(v.trim())) out.add(v.trim());
+            if (v != null && !v.isBlank() && !childScope.contains(v.trim())) {
+                // x$0 (pré-estado) é outra variável livre, mesmo que x seja estado da máquina: dentro
+                // de uma função gerada ele vira o parâmetro x__0 (BxmlAnnotationScope#PRE_STATE_PARAM_SUFFIX).
+                String key = "0".equals(e.getAttribute("suffix"))
+                        ? v.trim() + BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX
+                        : v.trim();
+                out.add(key);
+                if (typrefsOut != null && !typrefsOut.containsKey(key)) {
+                    String tr = e.getAttribute("typref");
+                    if (tr != null && !tr.isBlank()) {
+                        try {
+                            typrefsOut.put(key, Integer.parseInt(tr.trim()));
+                        } catch (NumberFormatException ignored) {
+                            // typref não-numérico: sem entrada, resolveFreeVarType cai no default.
+                        }
+                    }
+                }
+            }
         }
         NodeList nl = e.getChildNodes();
         for (int i = 0; i < nl.getLength(); i++) {
             Node n = nl.item(i);
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-            collectIdValues((Element) n, out, childScope);
+            collectIdValues((Element) n, out, childScope, typrefsOut);
         }
+    }
+
+    /**
+     * Tipo ACSL de uma variável livre {@code v}, na mesma ordem de precedência usada nos 3 pontos de
+     * tipagem de variável livre deste ficheiro (SIGMA/PI/MIN/MAX/UNION/INTER via {@link
+     * #freeVarsAndTypes}, lambda-mapa via {@link #translateMapLambda}, lambda-sequência via {@link
+     * #translateSequenceBuilderLambda}): (1) variável de estado da PRÓPRIA máquina, (2) variável de
+     * estado de OUTRA máquina (SEES/IMPORTS), (3) {@code typref} do próprio {@code Id} livre (capturado
+     * por {@link #collectIdValues(Element, java.util.Set, java.util.Map)}) — cobre os casos (1) e (2)
+     * não cobrem: uma variável ligada por um quantificador ENVOLVENTE (não é "estado" nenhum) e um
+     * conjunto só {@code SEES} (não tem entrada em nenhum dos dois mapas de variável, só em {@code
+     * declaredSetNames()} — que só cobre a MÁQUINA PRÓPRIA, nunca as vistas). Só cai em {@code
+     * "integer"} se nenhuma das três fontes resolver — igual ao comportamento anterior para os casos
+     * genuinamente escalares.
+     */
+    private static String resolveFreeVarType(
+            String v, BxmlTranslateContext ctx, java.util.Map<String, Integer> typrefs) {
+        String t = ctx.variableLogicTypes().get(v);
+        if ((t == null || t.isBlank()) && v.endsWith(BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX)) {
+            String base = v.substring(0, v.length() - BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX.length());
+            t = ctx.variableLogicTypes().get(base);
+            if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(base);
+        }
+        if (t == null || t.isBlank()) t = ctx.crossMachineVariableLogicTypes().get(v);
+        if ((t == null || t.isBlank()) && typrefs != null && typrefs.containsKey(v)) {
+            t = ctx.types().acslVariableLogicTypeFromTypref(typrefs.get(v));
+        }
+        if (t == null || t.isBlank()) return "integer";
+        String base = v.endsWith(BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX)
+                ? v.substring(0, v.length() - BxmlAnnotationScope.PRE_STATE_PARAM_SUFFIX.length())
+                : v;
+        if (ctx.stateVariableNames().contains(base) || ctx.crossMachineVariableNames().contains(base)) {
+            // parâmetro de estado: binder do axioma — forma genérica, não o nome achatado
+            t = ctx.types().expandTupleCodomainAlias(t);
+        }
+        return t;
     }
 
     /** Nomes das variáveis ligadas por um {@code Quantified_Exp}/{@code Quantified_Pred}, a partir do seu filho {@code Variables}. */

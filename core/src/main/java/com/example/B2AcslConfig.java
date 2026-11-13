@@ -27,6 +27,7 @@ public record B2AcslConfig(
         String wpProjectNameProperty,
         String wpProver,
         int wpTimeoutSeconds,
+        int wpFunctionTimeoutSeconds,
         String wpOutputFlag,
         boolean wpLoopSimplification,
         boolean wpSmokeTests,
@@ -39,6 +40,14 @@ public record B2AcslConfig(
 
     private static final String DEFAULT_WP_PROVER = "CVC5";
     private static final int DEFAULT_WP_TIMEOUT_SECONDS = 10;
+    // Teto de parede para a chamada -wp INTEIRA de uma função (soma de todos os goals dela), não o
+    // timeout POR-GOAL acima (esse é -wp-timeout/DEFAULT_WP_TIMEOUT_SECONDS, por goal individual do
+    // solver). Ver FramaCRunner: exemplos com muitos goals numa função (ex. RulesOfTheSeas, ~3711
+    // goals) podem exceder este teto mesmo com um timeout por-goal pequeno; 600s é o valor histórico
+    // do projeto (era hardcoded), suficiente para a maioria dos exemplos, exceto os maiores — quem
+    // precisar de mais sobe via "b2acsl.wp.functionTimeout" (ou WP_FUNCTION_TIMEOUT em
+    // scripts/run_examples.sh) em vez de mudar o default global.
+    private static final int DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS = 600;
     private static final String DEFAULT_WP_OUTPUT = "status";
 
     /**
@@ -51,6 +60,8 @@ public record B2AcslConfig(
                 System.getProperty("b2acsl.wp.project"),
                 System.getProperty("b2acsl.wp.prover", DEFAULT_WP_PROVER),
                 Integer.getInteger("b2acsl.wp.timeout", DEFAULT_WP_TIMEOUT_SECONDS),
+                Integer.getInteger(
+                        "b2acsl.wp.functionTimeout", DEFAULT_WP_FUNCTION_TIMEOUT_SECONDS),
                 System.getProperty("b2acsl.wp.output", DEFAULT_WP_OUTPUT),
                 Boolean.parseBoolean(System.getProperty("b2acsl.wp.loopSimplification", "false")),
                 Boolean.parseBoolean(System.getProperty("b2acsl.wp.smokeTests", "true")),

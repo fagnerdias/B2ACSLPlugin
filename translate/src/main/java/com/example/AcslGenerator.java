@@ -521,7 +521,6 @@ public final class AcslGenerator {
                                 .filter(v -> !collapsedVariableNames.contains(v))
                                 .toList()
                         : List.of();
-        boolean machineHasNoImports = machineHasNoImports(machineEl, mergedMachineElements);
         // Quando a INITIALISATION usa ghost assert (para as variáveis QUE têm camada ghost), o
         // ensures "real" completo (initBare.ensures()) é descartado — mas isso apagaria também a
         // especificação de variáveis SEM camada ghost (colapsadas, ex. limit): ficam sem ensures
@@ -549,7 +548,10 @@ public final class AcslGenerator {
                         dummyGhostVarsForInit,
                         initBare.loopSpecs(),
                         initBare.explicitLoops(),
-                        machineHasNoImports);
+                        // Sempre um contrato, mesmo sem nada a atribuir: a INITIALISATION de uma
+                        // máquina que só importa máquinas sem estado (Systeme_CountArray) é
+                        // "assigns \nothing", não ausência de contrato.
+                        true);
         InitialisationAcsl init =
                 isAbstraction
                         ? withInvariantEnsures(initMarked, allInvariantPredicateNames)
@@ -564,7 +566,16 @@ public final class AcslGenerator {
                 }
             }
         }
-        List<OperationAcsl> operations =
+        // pp <-- op(a) no corpo abstrato: a saída definida pela operação chamada (só no contrato
+        // real; o ghost é traduzido fora deste intervalo — ver OperationCallOutputSpecs)
+        List<String> calleeMachineNames = new ArrayList<>(transitiveSeenMachineNames);
+        for (String m : transitiveImportedMachineNames) {
+            if (!calleeMachineNames.contains(m)) calleeMachineNames.add(m);
+        }
+        com.example.bxml.OperationCallOutputSpecs.bind(bxmlDirectory, calleeMachineNames);
+        List<OperationAcsl> operations;
+        try {
+        operations =
                 isAbstraction
                         ? new ArrayList<>(
                                 BxmlOperationsTranslator.translateOperations(
@@ -584,6 +595,9 @@ public final class AcslGenerator {
                                         new ArrayList<>(invariantSourceMachineNames),
                                         collapsedVariableNames))
                         : new ArrayList<>();
+        } finally {
+            com.example.bxml.OperationCallOutputSpecs.unbind();
+        }
         // LOCAL_OPERATIONS (ex. cv_struct_i's lclear): funções auxiliares privadas da
         // implementação, sem contraparte na máquina abstrata — translateOperations acima nunca as
         // visita (itera só <Operations> de machineEl, a máquina ABSTRATA). Ver
@@ -694,7 +708,7 @@ public final class AcslGenerator {
         String ghostPatternsBlock =
                 useGhostAbstraction
                         ? GhostContractPredicates.formatGhostPatternsAxiomaticBlock(
-                                machineEl, baseName, ctx.variableLogicTypes())
+                                machineEl, baseName, ctx.variableLogicTypes(), state.collapsedVariableNames)
                         : "";
         appendBlockWithSpacing(sb, ghostPatternsBlock);
         appendAnySubMarkerDeclarations(state);
@@ -885,7 +899,8 @@ public final class AcslGenerator {
         appendBlockWithSpacing(state.sb, varsMerged);
     }
 
-    private static void appendMergedConstantsPropertiesAndValuesBlocks(AcslGenerationState state) {
+    private static void appendMergedConstantsPropertiesAndValuesBlocks(AcslGenerationState state)
+            throws IOException {
         List<Element> mergedMachineElements = state.mergedMachineElements;
         BxmlTranslateContext ctx = state.ctx;
         StringBuilder sb = state.sb;
@@ -921,8 +936,17 @@ public final class AcslGenerator {
         // Compreensões: todas as variáveis e constantes já estão declaradas.
         // set_comprehension_k deve estar declarado antes de _i_values (que o referencia).
         if (!ctx.comprehensions().isEmpty()) {
-            sb.append(ctx.comprehensions().formatAxiomaticBlock(state.baseName, ctx));
-            sb.append("\n");
+            String comprehensionBlock = ctx.comprehensions().formatAxiomaticBlock(state.baseName, ctx);
+            if (hasGenericTypedBinder(comprehensionBlock)) {
+                // Binder Set<..>/Relation<..> (ex. uma variável de estado passada como parâmetro):
+                // só é aceito num ficheiro alcançado por include — mesma técnica do bloco SIGMA.
+                appendSigmaIncludeBlock(
+                        sb, state.outputDir, state.baseName + "_comprehension_sets.acsl",
+                        comprehensionBlock, state.libScanRemovedBodies);
+            } else {
+                sb.append(comprehensionBlock);
+                sb.append("\n");
+            }
         }
         for (String propsMerged : mergedPropertiesBlocks) {
             appendBlockWithSpacing(sb, propsMerged);
@@ -1022,7 +1046,11 @@ public final class AcslGenerator {
         if (lambdaNeedsSigmaFirst) {
             appendSigmaIncludeBlock(sb, outputDir, sigmaFileName, sigmaBlock, libScanRemovedBodies);
         }
-        if (lambdaBlock != null) {
+        if (lambdaBlock != null && hasGenericTypedBinder(lambdaBlock)) {
+            // idem às compreensões: binder genérico só num ficheiro incluído
+            appendSigmaIncludeBlock(
+                    sb, outputDir, baseName + "_lambda_functions.acsl", lambdaBlock, libScanRemovedBodies);
+        } else if (lambdaBlock != null) {
             sb.append("\n");
             sb.append(lambdaBlock);
             sb.append("\n");
@@ -1063,6 +1091,20 @@ public final class AcslGenerator {
      * #appendInvariantsAndQuantifierBlocks} para poder ser chamado antes OU depois do bloco lambda,
      * conforme a dependência detectada ali.
      */
+    private static final java.util.regex.Pattern GENERIC_TYPED_BINDER =
+            java.util.regex.Pattern.compile(
+                    "\\\\(?:forall|exists)\\s+[^;]*\\b(?:Set|Tuple|Relation|Function)\\s*<");
+
+    /**
+     * {@code true} se algum {@code \\forall}/{@code \\exists} de {@code block} liga uma variável de
+     * tipo genérico da lib ({@code Set<..>}, {@code Relation<..>}...). O {@code -acsl-import} rejeita
+     * esse binder num ficheiro de topo ({@code [Syntax error] <}), mas aceita-o num ficheiro
+     * incluído; {@code \\list<..>} e tipos genéricos em declarações passam nos dois.
+     */
+    static boolean hasGenericTypedBinder(String block) {
+        return block != null && GENERIC_TYPED_BINDER.matcher(block).find();
+    }
+
     private static void appendSigmaIncludeBlock(
             StringBuilder sb,
             Path outputDir,
@@ -1106,11 +1148,15 @@ public final class AcslGenerator {
             String libIncludeScanRootMachineName,
             String extraLibScanText)
             throws Exception {
+        // Tipos-tupla ANTES da varredura da lib: o corpo desta máquina já está gerado, e a
+        // varredura pode traduzir o BXML de outra máquina (quando o .acsl dela ainda não existe),
+        // registando os tipos-tupla DELA no registo ativo, que é o desta máquina — o ficheiro de
+        // tipos-tupla desta máquina passava a redeclarar tipos de outra (Syntax error no import).
+        String tupleTypesInclude = writeTupleTypesFileIfNeeded(state);
         LibIncludeResolution libResolution =
                 resolveLibIncludesAndDependencyScan(
                         state, seesGraph, importsGraph, libIncludeScanRootMachineName, extraLibScanText);
         String machineDependencyIncludes = resolveMachineDependencyIncludes(state, seesGraph, importsGraph);
-        String tupleTypesInclude = writeTupleTypesFileIfNeeded(state);
 
         StringBuilder sb = state.sb;
         int headerLen = state.headerLen;
@@ -1462,20 +1508,6 @@ public final class AcslGenerator {
                 init.loopSpecs(),
                 init.explicitLoops(),
                 init.emitMinimalContract());
-    }
-
-    private static boolean machineHasNoImports(Element machineEl, List<Element> mergedMachineElements) {
-        if (!com.example.bxml.BxmlSetsTranslator.listImportedMachineNames(machineEl).isEmpty()) {
-            return false;
-        }
-        if (mergedMachineElements != null) {
-            for (Element mel : mergedMachineElements) {
-                if (!com.example.bxml.BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
-                    return false;
-                }
-            }
-        }
-        return true;
     }
 
     private static void appendAcslMachineIncludes(StringBuilder preamble, String includeBlock) {
