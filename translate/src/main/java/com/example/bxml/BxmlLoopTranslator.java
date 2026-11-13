@@ -19,11 +19,41 @@ public final class BxmlLoopTranslator {
 
     private BxmlLoopTranslator() {}
 
-    public record LoopContract(int index, List<String> invariant, String variant, List<String> assigns) {
+    /**
+     * Anotação de um laço C. {@code preformatted}, quando não nulo, é o texto pronto dos blocos
+     * {@code at loop N:} de um laço gerado por {@code ARRAY := DOMAIN * {VALUE}} (ver
+     * {@link InitialisationAcsl#appendLoopInitSpec}); {@code span} é quantos laços C ele ocupa
+     * (2 no caso 2D: externo e interno).
+     */
+    public record LoopContract(
+            int index, List<String> invariant, String variant, List<String> assigns, String preformatted, int span) {
         public LoopContract {
             invariant = invariant == null ? List.of() : List.copyOf(invariant);
             assigns = assigns == null ? List.of() : List.copyOf(assigns);
+            span = Math.max(1, span);
         }
+
+        public LoopContract(int index, List<String> invariant, String variant, List<String> assigns) {
+            this(index, invariant, variant, assigns, null, 1);
+        }
+
+        /** Número do próximo laço C depois deste. */
+        public int nextIndex() {
+            return index + span;
+        }
+
+        /** Mesma anotação com outro invariante e outro assigns; o texto pronto não se reescreve. */
+        public LoopContract withInvariantAndAssigns(List<String> newInvariant, List<String> newAssigns) {
+            if (preformatted != null) {
+                return this;
+            }
+            return new LoopContract(index, newInvariant, variant, newAssigns, null, span);
+        }
+    }
+
+    /** Número do próximo laço C, contando os laços já anotados (2D ocupa dois). */
+    private static int nextLoopIndex(List<LoopContract> out) {
+        return out.isEmpty() ? 1 : out.get(out.size() - 1).nextIndex();
     }
 
     /**
@@ -155,9 +185,25 @@ public final class BxmlLoopTranslator {
         if (sub == null) {
             return;
         }
+        // ARRAY := DOMAIN * {VALUE}: o gerador C escreve um laço for (dois no caso 2D). Entra na
+        // mesma contagem dos WHILE, na ordem do corpo, porque o -acsl-import pareia "at loop N" com
+        // o N-ésimo laço C da função.
+        if ("Assignement_Sub".equals(sub.getLocalName())) {
+            Element owner = implementationMachineEl != null ? implementationMachineEl : abstractMachineEl;
+            CartesianProductLoopSpecDetector.LoopInitSpec spec =
+                    CartesianProductLoopSpecDetector.cartesianProductLoopSpecFromAssignment(
+                            sub, owner, ctx, bxmlDirectory);
+            if (spec != null) {
+                int index = nextLoopIndex(out);
+                StringBuilder text = new StringBuilder();
+                int next = InitialisationAcsl.appendLoopInitSpec(text, spec, index);
+                out.add(new LoopContract(index, List.of(), "", List.of(), text.toString(), next - index));
+            }
+            return;
+        }
         if ("While".equals(sub.getLocalName())) {
             out.add(translateWhile(
-                    sub, ctx, abstractMachineEl, implementationMachineEl, out.size() + 1,
+                    sub, ctx, abstractMachineEl, implementationMachineEl, nextLoopIndex(out),
                     importedOpAssigns, bxmlDirectory));
             walkForWhileLoops(
                     BxmlDomUtils.firstChildElement(sub, "Body"), ctx, abstractMachineEl, implementationMachineEl, out,

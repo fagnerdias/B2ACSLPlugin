@@ -878,8 +878,7 @@ public final class BxmlOperationsTranslator {
                 List<String> inv = lc.invariant().stream()
                         .map(s -> rewriteAcslStringForArrayBackedParams(s, arrayParamLens))
                         .toList();
-                rewrittenLoops.add(new BxmlLoopTranslator.LoopContract(
-                        lc.index(), inv, lc.variant(), lc.assigns()));
+                rewrittenLoops.add(lc.withInvariantAndAssigns(inv, lc.assigns()));
             }
             return rewrittenLoops;
         }
@@ -1176,7 +1175,7 @@ public final class BxmlOperationsTranslator {
                     newAssigns.add(a);
                 }
             }
-            result.add(new BxmlLoopTranslator.LoopContract(lc.index(), inv, lc.variant(), newAssigns));
+            result.add(lc.withInvariantAndAssigns(inv, newAssigns));
         }
         return List.copyOf(result);
     }
@@ -1687,6 +1686,10 @@ public final class BxmlOperationsTranslator {
                 sb.append(";\n");
             }
             for (BxmlLoopTranslator.LoopContract loop : loops) {
+                if (loop.preformatted() != null) {
+                    sb.append(loop.preformatted());
+                    continue;
+                }
                 sb.append("    at loop ").append(loop.index()).append(":\n");
                 for (String conjunct : loop.invariant()) {
                     if (conjunct != null && !conjunct.isBlank()) {

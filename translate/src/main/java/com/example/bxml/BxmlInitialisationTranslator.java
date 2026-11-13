@@ -92,19 +92,18 @@ public final class BxmlInitialisationTranslator {
         if (abstractInit != null) {
             walkSubstitution(BxmlDomUtils.firstSubChild(abstractInit), ensures, ctx);
         }
-        List<CartesianProductLoopSpecDetector.LoopInitSpec> loopSpecs = (src.initSource() != null)
-                ? CartesianProductLoopSpecDetector.detectAllLoopSpecs(
-                        BxmlDomUtils.firstSubChild(src.initSource()), src.initOwnerMachine(), ctx, bxmlDirectory)
-                : List.of();
-        // WHILE explícito (com INVARIANT/VARIANT do usuário) na inicialização — ex.: um array
-        // preenchido por um laço escrito à mão em vez do açúcar `ARRAY := DOMAIN*{VALUE}` acima.
-        // Só verificado quando não há loopSpecs: os dois padrões nunca coincidem no mesmo nó (um é
-        // Assignement_Sub, o outro é While), e nenhum exemplo atual mistura os dois numa mesma
-        // Initialisation — ver BxmlLoopTranslator#translateLoopsFromSubstitution.
+        // Laços C da inicialização, numa só passada e numa só contagem: o açúcar
+        // `ARRAY := DOMAIN*{VALUE}` (um laço for, dois no caso 2D) e os WHILE escritos à mão (com
+        // INVARIANT/VARIANT). Os dois podem vir juntos (reverse_array: o array é zerado e depois
+        // preenchido por um WHILE) — ver BxmlLoopTranslator#walkForWhileLoops.
+        List<CartesianProductLoopSpecDetector.LoopInitSpec> loopSpecs = List.of();
         List<BxmlLoopTranslator.LoopContract> explicitLoops =
-                (src.initSource() != null && loopSpecs.isEmpty())
+                (src.initSource() != null)
+                        // A máquina ABSTRATA, como nas operações: qualifica no loop assigns as
+                        // variáveis que ela declara (array -> ReverseArray__array[0 .. max_IDX]); a
+                        // implementação vem de enclosingMachineElement da própria substituição.
                         ? BxmlLoopTranslator.translateLoopsFromSubstitution(
-                                BxmlDomUtils.firstSubChild(src.initSource()), ctx, src.initOwnerMachine(), null,
+                                BxmlDomUtils.firstSubChild(src.initSource()), ctx, machineEl, null,
                                 bxmlDirectory)
                         : List.of();
 

@@ -94,7 +94,7 @@ public final class CartesianProductLoopSpecDetector {
         }
     }
 
-    private static LoopInitSpec cartesianProductLoopSpecFromAssignment(
+    static LoopInitSpec cartesianProductLoopSpecFromAssignment(
             Element assign, Element implMachineEl, BxmlTranslateContext ctx, Path bxmlDirectory) {
         Element varsEl = BxmlDomUtils.firstChildElement(assign, "Variables");
         if (varsEl == null) return null;
