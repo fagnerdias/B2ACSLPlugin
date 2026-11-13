@@ -272,7 +272,7 @@ public final class BxmlInitialisationTranslator {
             case "Skip" -> { /* nada */ }
             case "Bloc_Sub" -> walkSubstitution(BxmlDomUtils.firstSubChild(sub), ensures, ctx, oldNames);
             case "ANY_Sub" -> {
-                String t = translateAnySubAsExists(sub, ctx);
+                String t = translateAnySubAsExists(sub, ctx, oldNames);
                 if (!t.isBlank()) {
                     ensures.add(t);
                 }
@@ -758,6 +758,15 @@ public final class BxmlInitialisationTranslator {
     }
 
     public static String translateAnySubAsExists(Element anySub, BxmlTranslateContext ctx) {
+        return translateAnySubAsExists(anySub, ctx, Set.of());
+    }
+
+    /**
+     * @param outerOldNames variáveis atribuídas pelo {@code ||} que contém este ANY: o guarda e os
+     *     lados direitos do ANY também as leem no pré-estado.
+     */
+    static String translateAnySubAsExists(
+            Element anySub, BxmlTranslateContext ctx, Set<String> outerOldNames) {
         if (anySub == null) return "";
         AnySubAliasInfo info = analyzeAnySubAliases(anySub);
         if (info == null) return "";
@@ -801,6 +810,9 @@ public final class BxmlInitialisationTranslator {
 
         Set<String> assignedRealNames = new LinkedHashSet<>();
         collectAssignedLhsNames(thenSub, assignedRealNames);
+        if (outerOldNames != null) {
+            assignedRealNames.addAll(outerOldNames);
+        }
 
         List<String> guardParts = new ArrayList<>();
         for (Element c : guardConjuncts) {
@@ -961,6 +973,10 @@ public final class BxmlInitialisationTranslator {
                 parseSelectAsConditionalEnsures(ch, ensures, ctx, allLhsNames);
             } else if ("Operation_Call".equals(ch.getLocalName())) {
                 parseOperationCall(ch, ensures, ctx, allLhsNames);
+            } else {
+                // ANY, BEGIN, CHOICE, ... como operando de ||: mesmo caminho do topo, com o
+                // pré-estado do grupo inteiro (antes eram descartados sem aviso).
+                walkSubstitution(ch, ensures, ctx, allLhsNames);
             }
         }
     }
