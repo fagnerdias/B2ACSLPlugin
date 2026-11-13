@@ -5,6 +5,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -905,19 +907,39 @@ public final class BxmlSetsTranslator {
         } catch (IOException e) {
             return null;
         }
+        // Nome -> <Abstraction> de cada refinamento/implementação, para a segunda passada.
+        Map<String, String> abstractionOf = new HashMap<>();
+        List<Element> implementations = new ArrayList<>();
         for (Path p : candidates) {
             try {
                 Element el = BxmlDocumentLoader.parseMachineElement(p);
+                Element abs = BxmlDomUtils.firstChildElement(el, "Abstraction");
+                String absName = abs != null ? abs.getTextContent().trim() : null;
+                if (absName != null && !absName.isEmpty()) {
+                    abstractionOf.put(el.getAttribute("name"), absName);
+                }
                 if (!"implementation".equalsIgnoreCase(el.getAttribute("type"))) {
                     continue;
                 }
-                Element abs = BxmlDomUtils.firstChildElement(el, "Abstraction");
-                String absName = abs != null ? abs.getTextContent().trim() : null;
                 if (abstractMachineName.equals(absName)) {
                     return el;
                 }
+                implementations.add(el);
             } catch (Exception ignored) {
                 // ficheiro malformado ou não-BXML; ignora e tenta o próximo
+            }
+        }
+        // Implementação que refina a máquina por refinamentos intermediários (HeapSort ->
+        // HeapSort_r -> HeapSort_i; Isqrt -> Isqrt_ord -> Isqrt_r -> Isqrt_i): sobe a cadeia de
+        // <Abstraction> até a máquina pedida.
+        for (Element impl : implementations) {
+            Set<String> seen = new HashSet<>();
+            String cur = abstractionOf.get(impl.getAttribute("name"));
+            while (cur != null && seen.add(cur)) {
+                if (abstractMachineName.equals(cur)) {
+                    return impl;
+                }
+                cur = abstractionOf.get(cur);
             }
         }
         return null;

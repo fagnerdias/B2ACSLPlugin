@@ -521,7 +521,6 @@ public final class AcslGenerator {
                                 .filter(v -> !collapsedVariableNames.contains(v))
                                 .toList()
                         : List.of();
-        boolean machineHasNoImports = machineHasNoImports(machineEl, mergedMachineElements);
         // Quando a INITIALISATION usa ghost assert (para as variáveis QUE têm camada ghost), o
         // ensures "real" completo (initBare.ensures()) é descartado — mas isso apagaria também a
         // especificação de variáveis SEM camada ghost (colapsadas, ex. limit): ficam sem ensures
@@ -549,7 +548,10 @@ public final class AcslGenerator {
                         dummyGhostVarsForInit,
                         initBare.loopSpecs(),
                         initBare.explicitLoops(),
-                        machineHasNoImports);
+                        // Sempre um contrato, mesmo sem nada a atribuir: a INITIALISATION de uma
+                        // máquina que só importa máquinas sem estado (Systeme_CountArray) é
+                        // "assigns \nothing", não ausência de contrato.
+                        true);
         InitialisationAcsl init =
                 isAbstraction
                         ? withInvariantEnsures(initMarked, allInvariantPredicateNames)
@@ -1506,20 +1508,6 @@ public final class AcslGenerator {
                 init.loopSpecs(),
                 init.explicitLoops(),
                 init.emitMinimalContract());
-    }
-
-    private static boolean machineHasNoImports(Element machineEl, List<Element> mergedMachineElements) {
-        if (!com.example.bxml.BxmlSetsTranslator.listImportedMachineNames(machineEl).isEmpty()) {
-            return false;
-        }
-        if (mergedMachineElements != null) {
-            for (Element mel : mergedMachineElements) {
-                if (!com.example.bxml.BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()) {
-                    return false;
-                }
-            }
-        }
-        return true;
     }
 
     private static void appendAcslMachineIncludes(StringBuilder preamble, String includeBlock) {
