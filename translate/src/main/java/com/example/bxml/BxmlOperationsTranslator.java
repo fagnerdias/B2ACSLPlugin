@@ -284,7 +284,7 @@ public final class BxmlOperationsTranslator {
         List<OperationAcsl> out = new ArrayList<>();
         List<String> separationArrayTargets =
                 ConcreteAssignTargetResolver.listArraySeparationTargets(
-                        machineName, mergedRefinementChain, ctx, arraySeparationMachineNames,
+                        machineName, machineEl, mergedRefinementChain, ctx, arraySeparationMachineNames,
                         bxmlDirectory);
 
         NodeList ops = machineEl.getElementsByTagNameNS("*", "Operations");
@@ -387,7 +387,8 @@ public final class BxmlOperationsTranslator {
             // laço para funcTypedOutputs (que já consome este mesmo padrão por laço).
             FunctionTypedOutputHandling functionTypedHandling =
                     finalizeFunctionTypedOutputHandling(
-                            child, opCtx, requires, loops, funcTypedOutputs, outputParams);
+                            child, opCtx, requires, loops, funcTypedOutputs, outputParams,
+                            separationArrayTargets);
             Map<String, String> functionTypedOutputBounds = functionTypedHandling.functionTypedOutputBounds();
             loops = functionTypedHandling.loops();
 
@@ -891,7 +892,8 @@ public final class BxmlOperationsTranslator {
             List<String> requires,
             List<BxmlLoopTranslator.LoopContract> loops,
             Set<String> funcTypedOutputs,
-            List<String> outputParams) {
+            List<String> outputParams,
+            List<String> separationArrayTargets) {
         Map<String, String> functionTypedOutputBounds =
                 new LinkedHashMap<>(extractFunctionTypedOutputBounds(loops, funcTypedOutputs));
         // Saída array-backed atribuída via ANY_Sub direto (ex.: "ee <-- elements = ANY xx WHERE
@@ -914,6 +916,13 @@ public final class BxmlOperationsTranslator {
                     bound != null
                             ? "\\valid(" + p + " + (0 .. " + bound + "))"
                             : "\\valid(" + p + ")");
+            // Saída array: a faixa inteira separada dos arrays globais da máquina e das importadas,
+            // como as saídas escalares em buildRequiresForOperation.
+            if (bound != null && separationArrayTargets != null) {
+                for (String target : separationArrayTargets) {
+                    requires.add("\\separated(" + p + " + (0 .. " + bound + "), " + target + ")");
+                }
+            }
         }
         if (!funcTypedOutputs.isEmpty() && !loops.isEmpty()) {
             loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
