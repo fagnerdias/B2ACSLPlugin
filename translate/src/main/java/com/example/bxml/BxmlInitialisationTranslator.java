@@ -1043,7 +1043,16 @@ public final class BxmlInitialisationTranslator {
                     }
                 }
             }
-            default -> { /* Skip, ANY_Sub, etc. — nada a coletar */ }
+            // as variáveis atribuídas no THEN de um ANY também são escritas pela substituição (as
+            // ligadas do ANY nunca são atribuídas): sem isto, o pré-estado de um || ou do próprio
+            // guarda do ANY não as conhece (RulerOfTheSeas NextTurn/AttackPlayer saíam sem \old)
+            case "ANY_Sub" -> {
+                Element then = BxmlDomUtils.firstChildElement(sub, "Then");
+                if (then != null) {
+                    collectAssignedLhsNames(BxmlDomUtils.firstSubChild(then), out);
+                }
+            }
+            default -> { /* Skip, etc. — nada a coletar */ }
         }
     }
 
