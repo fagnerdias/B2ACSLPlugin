@@ -247,10 +247,39 @@ public final class BxmlMachineVariables {
             // ambiguidade nenhuma a proteger, mesmo com IMPORTS presente por outra razão. Sem este
             // caso, "sv" ficava sem ligação C nenhuma ("logic integer sv;" sem "= cv_struct__sv"),
             // deixando WP sem forma de observar as suas atribuições ("assigns \\nothing" inválido).
+            // Sem invariante próprio, mas importando uma máquina que declara uma variável com o
+            // MESMO nome (lunh: Luhn_i importa Luhn_1, que declara num): no B é colagem implícita
+            // por nome — a variável vive na máquina importada (ghost aqui), não num global C
+            // Raiz__v da implementação.
             if (hasArrayBackedVariable
                     || BxmlSetsTranslator.listImportedMachineNames(mel).isEmpty()
-                    || !hasNonTrivialInvariant(mel)) {
+                    || (!hasNonTrivialInvariant(mel) && !importedMachineDeclaresAnyOf(mel, ownNames))) {
                 return true;
+            }
+        }
+        return false;
+    }
+
+    /** Alguma máquina importada por {@code mel} (mesma pasta de .bxml) declara uma variável de {@code names}? */
+    private static boolean importedMachineDeclaresAnyOf(Element mel, Set<String> names) {
+        String uri = mel.getOwnerDocument() == null ? null : mel.getOwnerDocument().getDocumentURI();
+        if (uri == null || uri.isBlank()) return false;
+        java.nio.file.Path dir;
+        try {
+            dir = java.nio.file.Path.of(java.net.URI.create(uri)).getParent();
+        } catch (Exception e) {
+            return false;
+        }
+        if (dir == null) return false;
+        for (String imported : BxmlSetsTranslator.listImportedMachineNames(mel)) {
+            java.nio.file.Path p = dir.resolve(imported + ".bxml");
+            if (!java.nio.file.Files.isRegularFile(p)) continue;
+            try {
+                Set<String> declared = declaredVariableNames(BxmlDocumentLoader.parseMachineElement(p));
+                for (String n : names) {
+                    if (declared.contains(n)) return true;
+                }
+            } catch (Exception ignored) {
             }
         }
         return false;

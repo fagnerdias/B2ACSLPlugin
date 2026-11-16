@@ -215,8 +215,13 @@ final class CrossMachineBxmlLoader {
         }
 
         if (abstractEl != null && BxmlMachineVariables.needsGhostAbstraction(abstractEl, List.of(implEl))) {
+            // Só as variáveis que ficam ghost: as colapsadas na implementação (mesmo nome, ex.
+            // sum_now de Luhn_1 em Luhn_1_i) são globais C, já nos alvos acima, e não têm
+            // ghost_<v> no ghost_operations.ci.
+            java.util.Set<String> collapsed =
+                    BxmlMachineVariables.collapsedIntoImplementationVariableNames(abstractEl, List.of(implEl));
             for (String v : GhostOperationsCiGenerator.listAbstractVariableNames(abstractEl)) {
-                result.add("ghost_" + v);
+                if (!collapsed.contains(v)) result.add("ghost_" + v);
             }
         }
 

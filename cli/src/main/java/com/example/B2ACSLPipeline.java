@@ -357,6 +357,26 @@ public final class B2ACSLPipeline {
                 machineByOwnedVarName.putIfAbsent(v, machineName);
             }
         }
+        // Idem para os nomes lógicos REAIS de cada .acsl (não só os ghost acima): as variáveis
+        // próprias da raiz (também as colapsadas na implementação, "logic T v = M__v") e as
+        // variáveis novas dos refinamentos fundidos. lunh: Luhn declara sum_now (Luhn_sum) e
+        // Luhn_1, importada, também (colapsada em Luhn_1_i) — sem qualificar a de Luhn_1 (como o
+        // B2ACSLRules faz, Luhn_1__sum_now) o -acsl-import rejeita "already declared".
+        Map<String, String> machineByRealVarName = new HashMap<>();
+        for (MachineFile mf : machines) {
+            Element mr = mf.machine().getMachineElement();
+            if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
+                continue;
+            }
+            String machineName = mf.machine().getMachineName();
+            List<Element> mergedEls = new ArrayList<>();
+            for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
+                mergedEls.add(AcslGenerator.parseMachineElement(mp));
+            }
+            for (String v : realLogicVariableNames(mr, mergedEls)) {
+                machineByRealVarName.putIfAbsent(v, machineName);
+            }
+        }
 
         // Limpa antes do loop: GhostOperationsCiGenerator.write() ACRESCENTA (não sobrescreve) a
         // cada chamada — ver comentário abaixo — por isso o ficheiro precisa de começar vazio a
@@ -491,8 +511,12 @@ public final class B2ACSLPipeline {
                         mergedEls.add(AcslGenerator.parseMachineElement(mp));
                     }
                     Set<String> collidingVars =
-                            collidingAbstractVarNames(
-                                    machineRoot, mergedEls, machineName, machineByOwnedVarName);
+                            new LinkedHashSet<>(collidingAbstractVarNames(
+                                    machineRoot, mergedEls, machineName, machineByOwnedVarName));
+                    for (String v : realLogicVariableNames(machineRoot, mergedEls)) {
+                        String owner = machineByRealVarName.get(v);
+                        if (owner != null && !owner.equals(machineName)) collidingVars.add(v);
+                    }
                     if (!collidingVars.isEmpty()) {
                         qualifyCollidingRealAcslNames(acsl.get(), machineName, collidingVars);
                     }
@@ -733,6 +757,20 @@ public final class B2ACSLPipeline {
         return GhostOperationsCiGenerator.listAbstractVariableNames(machineEl).stream()
                 .filter(v -> !collapsed.contains(v))
                 .toList();
+    }
+
+    /**
+     * Nomes lógicos de variável que o {@code .acsl} da raiz {@code machineEl} declara: as variáveis
+     * próprias (abstratas, inclusive as colapsadas na implementação) e as variáveis novas dos
+     * refinamentos fundidos (as que ganham {@code return_valid_v}).
+     */
+    private static Set<String> realLogicVariableNames(Element machineEl, List<Element> mergedMachineElements) {
+        Set<String> out = new LinkedHashSet<>(GhostOperationsCiGenerator.listAbstractVariableNames(machineEl));
+        for (com.example.bxml.BxmlConnectionAcsl.Link link
+                : com.example.bxml.BxmlConnectionAcsl.plan(machineEl, mergedMachineElements)) {
+            out.add(link.variable());
+        }
+        return out;
     }
 
     /**

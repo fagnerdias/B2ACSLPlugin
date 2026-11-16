@@ -571,7 +571,21 @@ public record BxmlTranslateContext(
                             abstractMachineElForSharedVariableTypes).keySet());
         }
         Map<String, String> variableTypes = BxmlMachineVariables.inferVariableLogicTypes(machineEl, tmp);
-        merged.putAll(variableTypes);
+        // Refinamento que redeclara uma variável da abstração (mesmo nome = mesma variável, como no
+        // B) sem tipá-la no próprio invariante: o tipo vem do typref cru, que não distingue \list
+        // de relação (lunh Luhn_sum num : seq(DIGIT) virava Relation<integer,integer> e size(num)
+        // ficava sem tradução). Mantém o tipo inferido na abstração.
+        Set<String> keepAbstractType = Set.of();
+        if (abstractMachineElForSharedVariableTypes != null
+                && "refinement".equalsIgnoreCase(machineEl.getAttribute("type").trim())) {
+            Set<String> explicit =
+                    BxmlMachineVariables.inferTypesFromInvariants(machineEl, types).keySet();
+            keepAbstractType = new java.util.HashSet<>(variableTypes.keySet());
+            keepAbstractType.removeIf(n -> explicit.contains(n) || !merged.containsKey(n));
+        }
+        for (Map.Entry<String, String> e : variableTypes.entrySet()) {
+            if (!keepAbstractType.contains(e.getKey())) merged.put(e.getKey(), e.getValue());
+        }
         stateNames.addAll(variableTypes.keySet());
         return new BxmlTranslateContext(
                 types, sharedComprehensions, merged, null, Map.of(), Map.of(), Set.of(),

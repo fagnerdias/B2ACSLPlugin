@@ -69,6 +69,37 @@ public final class BxmlPredicateToAcsl {
         return out;
     }
 
+    /**
+     * Elementos dos conjunctos de topo de {@code <Invariant>} (mesma divisão de {@link
+     * #translateInvariantConjuncts}, sem traduzir).
+     */
+    public static List<Element> topLevelConjunctElements(Element invariantEl) {
+        List<Element> out = new ArrayList<>();
+        collectTopLevelAndConjunctElements(BxmlDomUtils.firstPredChild(invariantEl), out);
+        return out;
+    }
+
+    private static void collectTopLevelAndConjunctElements(Element p, List<Element> out) {
+        if (p == null) return;
+        if ("Nary_Pred".equals(p.getLocalName()) && "&".equals(p.getAttribute("op"))) {
+            NodeList nl = p.getChildNodes();
+            for (int i = 0; i < nl.getLength(); i++) {
+                Node n = nl.item(i);
+                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
+                Element e = (Element) n;
+                if ("Attr".equals(e.getLocalName())) continue;
+                collectTopLevelAndConjunctElements(e, out);
+            }
+            return;
+        }
+        out.add(p);
+    }
+
+    /** Traduz um conjuncto já separado por {@link #topLevelConjunctElements}. */
+    public static String translateConjunct(Element conjunct, BxmlTranslateContext ctx) {
+        return translatePred(conjunct, ctx);
+    }
+
     /** Achata {@code Nary_Pred op='&'} de topo (recursivamente); outros nós viram uma folha só. */
     private static void collectTopLevelAndConjuncts(
             Element p, BxmlTranslateContext ctx, List<String> out) {

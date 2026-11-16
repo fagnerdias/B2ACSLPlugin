@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -44,100 +45,192 @@ public final class BxmlConnectionAcsl {
     }
 
     /**
-     * Escreve {@code connection.acsl} em {@code outputDir} (junto ao {@code <baseName>.acsl}) e devolve o
-     * path se houver pelo menos um elo abstração→refinamento com invariante traduzível. Várias raízes no mesmo
-     * diretório sobrescrevem o ficheiro.
+     * Uma função {@code return_valid_<v>} para a variável {@code v} introduzida pelo refinamento
+     * {@code owner} (forma do B2ACSLRules, helpers {@code refinedVars}/{@code glueVars}/{@code
+     * relConjuncts}/{@code absConjuncts}).
+     *
+     * @param glueVariables variáveis abstratas de componentes anteriores citadas no invariante de
+     *     {@code owner} (ordem da cadeia, sem repetir nomes): os parâmetros da função
+     * @param glueOwners componente que declara cada variável colada (mesma ordem), para o tipo
+     * @param relConjuncts conjunctos do invariante de {@code owner} que citam {@code v} e nenhuma
+     *     outra variável nova de {@code owner}
+     * @param absConjuncts conjunctos dos invariantes anteriores que só falam das variáveis coladas,
+     *     com o componente de cada um
      */
-    public static Optional<Path> writeConnectionAcsl(
-            Path outputDir,
-            String baseName,
-            Element rootMachine,
-            List<Element> mergedOrdered,
-            Map<String, String> gluing)
-            throws IOException {
-        if (baseName == null || baseName.isBlank()) return Optional.empty();
-        List<Element> chain = new ArrayList<>();
-        chain.add(rootMachine);
-        if (mergedOrdered != null) {
-            chain.addAll(mergedOrdered);
-        }
-        if (chain.size() < 2) {
-            return Optional.empty();
+    public record Link(
+            Element owner,
+            String variable,
+            List<String> glueVariables,
+            List<Element> glueOwners,
+            List<Element> relConjuncts,
+            List<Map.Entry<Element, Element>> absConjuncts) {
+
+        /** Nome do parâmetro que representa a variável colada {@code g}: {@code s} ou {@code s_<g>}. */
+        public String param(String g) {
+            return glueVariables.size() == 1 ? "s" : "s_" + g;
         }
 
+        /** {@code return_valid_<v>(<variáveis coladas>)}, o valor de {@code v} no bloco {@code _variables}. */
+        public String callWithGlueVariables() {
+            return "return_valid_" + variable + "(" + String.join(", ", glueVariables) + ")";
+        }
+    }
+
+    /**
+     * Elos de colagem da cadeia {@code root → merged} (só refinamentos): para cada variável que o
+     * refinamento introduz (não declarada antes na cadeia; uma redeclaração com o mesmo nome é a
+     * mesma variável, como no B), as variáveis coladas e os conjunctos que as relacionam.
+     * Estrutural: não traduz nada (pode correr antes da tradução dos invariantes).
+     */
+    public static List<Link> plan(Element rootMachine, List<Element> mergedOrdered) {
+        List<Element> chain = new ArrayList<>();
+        chain.add(rootMachine);
+        if (mergedOrdered != null) chain.addAll(mergedOrdered);
+        Set<String> chainVarNames = new LinkedHashSet<>();
+        for (Element m : chain) {
+            chainVarNames.addAll(listIdValuesInSection(m, "Abstract_Variables"));
+            chainVarNames.addAll(listIdValuesInSection(m, "Concrete_Variables"));
+        }
+        List<Link> links = new ArrayList<>();
+        Set<String> earlierNames = new LinkedHashSet<>();
+        LinkedHashMap<String, Element> earlierAbstract = new LinkedHashMap<>();
+        for (int i = 0; i < chain.size(); i++) {
+            Element m = chain.get(i);
+            List<String> av = listIdValuesInSection(m, "Abstract_Variables");
+            if (i > 0 && "refinement".equalsIgnoreCase(m.getAttribute("type").trim())) {
+                List<String> newVars = av.stream().filter(v -> !earlierNames.contains(v)).toList();
+                List<Element> conjuncts = invariantConjuncts(m);
+                Set<String> used = new LinkedHashSet<>();
+                for (Element c : conjuncts) used.addAll(varNames(c, chainVarNames));
+                List<String> glue = new ArrayList<>();
+                List<Element> glueOwners = new ArrayList<>();
+                for (Map.Entry<String, Element> e : earlierAbstract.entrySet()) {
+                    if (used.contains(e.getKey())) {
+                        glue.add(e.getKey());
+                        glueOwners.add(e.getValue());
+                    }
+                }
+                for (String v : newVars) {
+                    List<Element> rel = new ArrayList<>();
+                    for (Element c : conjuncts) {
+                        Set<String> names = varNames(c, chainVarNames);
+                        if (!names.contains(v)) continue;
+                        boolean other = names.stream().anyMatch(n -> !n.equals(v) && newVars.contains(n));
+                        if (!other) rel.add(c);
+                    }
+                    if (rel.isEmpty() || glue.isEmpty()) continue;
+                    List<Map.Entry<Element, Element>> abs = new ArrayList<>();
+                    for (int j = 0; j < i; j++) {
+                        Element earlier = chain.get(j);
+                        for (Element c : invariantConjuncts(earlier)) {
+                            Set<String> names = varNames(c, chainVarNames);
+                            if (!names.isEmpty() && glue.containsAll(names)) {
+                                abs.add(Map.entry(earlier, c));
+                            }
+                        }
+                    }
+                    links.add(new Link(m, v, List.copyOf(glue), List.copyOf(glueOwners), rel, abs));
+                }
+            }
+            for (String v : av) {
+                if (!earlierNames.contains(v)) earlierAbstract.put(v, m);
+            }
+            earlierNames.addAll(av);
+            earlierNames.addAll(listIdValuesInSection(m, "Concrete_Variables"));
+        }
+        return links;
+    }
+
+    /**
+     * Texto de {@code connection.acsl} para os elos de {@link #plan}; cada conjuncto é traduzido no
+     * contexto do seu componente ({@code contextFor}, com os registos de funções da raiz: um SIGMA
+     * ou lambda da colagem reaproveita a função do invariante).
+     */
+    public static String render(
+            String baseName, List<Link> links, Function<Element, BxmlTranslateContext> contextFor) {
         StringBuilder sb = new StringBuilder();
         sb.append("/* connection: funções lógicas refinamento (gerado) — máquina raiz ")
                 .append(baseName)
                 .append(" */\n");
         sb.append("axiomatic Connection_").append(baseName).append(" {\n\n");
-
-        boolean any = false;
-        for (int i = 1; i < chain.size(); i++) {
-            Element parent = chain.get(i - 1);
-            Element child = chain.get(i);
-            if (isImplementationMachine(child)) {
-                continue;
+        for (Link link : links) {
+            BxmlTranslateContext cctx = contextFor.apply(link.owner());
+            String v = link.variable();
+            String vType = typeOrInteger(cctx.variableLogicTypes().get(v));
+            String fn = "return_valid_" + v;
+            List<String> typedParams = new ArrayList<>();
+            Map<String, String> glueToParam = new LinkedHashMap<>();
+            for (int k = 0; k < link.glueVariables().size(); k++) {
+                String g = link.glueVariables().get(k);
+                String gType = typeOrInteger(
+                        contextFor.apply(link.glueOwners().get(k)).variableLogicTypes().get(g));
+                typedParams.add(gType + " " + link.param(g));
+                glueToParam.put(g, link.param(g));
             }
-            BxmlTranslateContext pctx = BxmlTranslateContext.forMachine(parent, gluing);
-            BxmlTranslateContext cctx = BxmlTranslateContext.forMachine(child, gluing);
+            String params = String.join(", ", typedParams);
+            String args = String.join(", ", glueToParam.values());
 
-            String childInvRaw = firstInvariantBody(child, cctx);
-            if (childInvRaw.isBlank()) continue;
-
-            List<Element> parentInvEls = BxmlInvariantTranslator.listDirectInvariants(parent);
-            if (parentInvEls.isEmpty()) continue;
-            String parentInvRaw =
-                    BxmlPredicateToAcsl.translateInvariantContent(parentInvEls.get(0), pctx);
-            if (parentInvRaw.isBlank()) continue;
-
-            Map<String, String> parentTypes =
-                    BxmlMachineVariables.inferVariableLogicTypes(parent, pctx);
-            Map<String, String> childTypes =
-                    BxmlMachineVariables.inferVariableLogicTypes(child, cctx);
-
-            Set<String> invIds = collectIdValuesInInvariant(child);
-            Set<String> parentDeclared = new LinkedHashSet<>(parentTypes.keySet());
-
-            for (String refinedName : listIntroducedVariableNames(child)) {
-                if (!childTypes.containsKey(refinedName)) continue;
-                Optional<String> abstractName = pickLinkingAbstractName(parentDeclared, invIds, refinedName);
-                if (abstractName.isEmpty()) continue;
-                String abs = abstractName.get();
-                if (!parentTypes.containsKey(abs)) continue;
-
-                String absType = parentTypes.get(abs);
-                String refType = childTypes.get(refinedName);
-                String fn = "return_valid_" + refinedName;
-
-                String hypExists = replaceIdentifier(childInvRaw, abs, "s", refinedName, "out");
-                String hypConc = replaceIdentifier(childInvRaw, abs, "s", refinedName, fn + "(s)");
-                String parentScoped = replaceIdentifierSingle(parentInvRaw, abs, "s");
-
-                sb.append("  logic ").append(refType).append(" ").append(fn).append("(").append(absType).append(" s);\n\n");
-
-                sb.append("  axiom ").append(fn).append("_spec:\n");
-                sb.append("    \\forall ").append(absType).append(" s;\n");
-                sb.append("      (\\exists ").append(refType).append(" out; ").append(hypExists).append(") ==>\n");
-                sb.append("      ").append(hypConc).append(";\n\n");
-
-                sb.append("  axiom ").append(fn).append("_exists:\n");
-                sb.append("    \\forall ").append(absType).append(" s;\n");
-                sb.append("      ").append(parentScoped).append(" ==>\n");
-                sb.append("      (\\exists ").append(refType).append(" out; ").append(hypExists).append(");\n\n");
-
-                any = true;
+            List<String> rel = new ArrayList<>();
+            for (Element c : link.relConjuncts()) {
+                rel.add(BxmlPredicateToAcsl.translateConjunct(c, cctx));
             }
+            List<String> abs = new ArrayList<>();
+            for (Map.Entry<Element, Element> e : link.absConjuncts()) {
+                abs.add(BxmlPredicateToAcsl.translateConjunct(e.getValue(), contextFor.apply(e.getKey())));
+            }
+            Map<String, String> outEnv = new LinkedHashMap<>(glueToParam);
+            outEnv.put(v, "out");
+            Map<String, String> retEnv = new LinkedHashMap<>(glueToParam);
+            retEnv.put(v, fn + "(" + args + ")");
+            String relOut = applyReplacements(String.join(" && ", rel), outEnv);
+            String relRet = applyReplacements(String.join(" && ", rel), retEnv);
+            String absText = applyReplacements(String.join(" && ", abs), glueToParam);
+
+            sb.append("  logic ").append(vType).append(" ").append(fn).append("(").append(params).append(");\n\n");
+
+            sb.append("  axiom ").append(fn).append("_spec:\n");
+            sb.append("    \\forall ").append(params).append(";\n");
+            sb.append("      (\\exists ").append(vType).append(" out; ").append(relOut).append(") ==>\n");
+            sb.append("      ").append(relRet).append(";\n\n");
+
+            sb.append("  axiom ").append(fn).append("_exists:\n");
+            sb.append("    \\forall ").append(params).append(";\n");
+            if (!absText.isBlank()) {
+                sb.append("      ").append(absText).append(" ==>\n");
+            }
+            sb.append("      (\\exists ").append(vType).append(" out; ").append(relOut).append(");\n\n");
         }
-
         sb.append("}\n");
-        if (!any) {
-            return Optional.empty();
-        }
+        return sb.toString();
+    }
 
+    /** Escreve {@code connection.acsl} em {@code outputDir} (várias raízes no mesmo diretório sobrescrevem). */
+    public static Path write(Path outputDir, String text) throws IOException {
         Files.createDirectories(outputDir);
         Path out = outputDir.resolve("connection.acsl");
-        Files.writeString(out, sb.toString());
-        return Optional.of(out);
+        Files.writeString(out, text);
+        return out;
+    }
+
+    private static String typeOrInteger(String t) {
+        return t == null || t.isBlank() ? "integer" : t;
+    }
+
+    /** Conjunctos de topo de todos os {@code <Invariant>} da máquina. */
+    private static List<Element> invariantConjuncts(Element machineEl) {
+        List<Element> out = new ArrayList<>();
+        for (Element inv : BxmlInvariantTranslator.listDirectInvariants(machineEl)) {
+            out.addAll(BxmlPredicateToAcsl.topLevelConjunctElements(inv));
+        }
+        return out;
+    }
+
+    /** Nomes de variáveis da cadeia citados no elemento (helper {@code varNames} do rules). */
+    private static Set<String> varNames(Element el, Set<String> chainVarNames) {
+        Set<String> ids = new LinkedHashSet<>();
+        collectIdsRecursive(el, ids);
+        ids.retainAll(chainVarNames);
+        return ids;
     }
 
     /** Identificadores {@code Id} referidos nos invariantes da máquina (para dependências de refinamento). */
@@ -148,12 +241,6 @@ public final class BxmlConnectionAcsl {
     /** Variáveis de estado introduzidas: {@code Abstract_Variables} (refinamento) ou {@code Concrete_Variables} (implementação). */
     public static List<String> introducedStateVariableIds(Element machineEl) {
         return listIntroducedVariableNames(machineEl);
-    }
-
-    private static String firstInvariantBody(Element machineEl, BxmlTranslateContext ctx) {
-        List<Element> invs = BxmlInvariantTranslator.listDirectInvariants(machineEl);
-        if (invs.isEmpty()) return "";
-        return BxmlPredicateToAcsl.translateInvariantContent(invs.get(0), ctx);
     }
 
     /**
@@ -226,42 +313,22 @@ public final class BxmlConnectionAcsl {
         }
     }
 
-    private static boolean isImplementationMachine(Element machineEl) {
-        String t = machineEl.getAttribute("type");
-        return t != null && "implementation".equalsIgnoreCase(t.trim());
-    }
-
-    /**
-     * Substitui {@code abstractName} e {@code refinedName} por tokens ACSL (ex. {@code s}, {@code out},
-     * {@code fn(s)}). Ordem: nomes mais longos primeiro para não cortar prefixos ({@code ss} vs {@code
-     * ss_r}).
-     */
-    private static String replaceIdentifier(
-            String expr,
-            String abstractName,
-            String abstractTok,
-            String refinedName,
-            String refinedReplacement) {
-        Map<String, String> map = new LinkedHashMap<>();
-        map.put(refinedName, refinedReplacement);
-        map.put(abstractName, abstractTok);
-        return applyReplacements(expr, map);
-    }
-
-    private static String replaceIdentifierSingle(String expr, String name, String tok) {
-        return applyReplacements(expr, Map.of(name, tok));
-    }
-
+    /** Troca cada identificador inteiro de {@code repl} numa passada só (um substituto nunca é retrocado). */
     private static String applyReplacements(String expr, Map<String, String> repl) {
-        List<Map.Entry<String, String>> entries = new ArrayList<>(repl.entrySet());
-        entries.sort((a, b) -> Integer.compare(b.getKey().length(), a.getKey().length()));
-        String result = expr;
-        for (Map.Entry<String, String> e : entries) {
-            String k = e.getKey();
-            String v = e.getValue();
-            Pattern pat = Pattern.compile("\\b" + Pattern.quote(k) + "\\b");
-            result = pat.matcher(result).replaceAll(Matcher.quoteReplacement(v));
+        if (repl.isEmpty() || expr.isEmpty()) return expr;
+        List<String> keys = new ArrayList<>(repl.keySet());
+        keys.sort((a, b) -> Integer.compare(b.length(), a.length()));
+        StringBuilder alt = new StringBuilder();
+        for (String k : keys) {
+            if (alt.length() > 0) alt.append('|');
+            alt.append(Pattern.quote(k));
         }
-        return result;
+        Matcher m = Pattern.compile("\\b(?:" + alt + ")\\b").matcher(expr);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            m.appendReplacement(out, Matcher.quoteReplacement(repl.get(m.group())));
+        }
+        m.appendTail(out);
+        return out.toString();
     }
 }
