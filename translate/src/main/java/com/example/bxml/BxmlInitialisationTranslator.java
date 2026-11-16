@@ -1399,6 +1399,11 @@ public final class BxmlInitialisationTranslator {
             }
             return base;
         }
+        if (BxmlPredicateToAcsl.isFinTypingExp(setExp)) {
+            // v :: FIN(S) / FIN1(S): mesmo predicado de tipagem de v : FIN(S) (FIN não é um
+            // conjunto da B2ACSLLib, então belongs(v, FIN(S)) não importaria).
+            return BxmlPredicateToAcsl.finMembership(v, setExp, false, ctx);
+        }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) return null;
         return "belongs(" + v + ", " + setExprText + ")";

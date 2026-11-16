@@ -13,10 +13,12 @@ import org.w3c.dom.NodeList;
  * <p>{@code v : iseq(T)} → {@code iSeq}; {@code v : seq(T)} → {@code belongs(v, seq(T))} (mesmo
  * padrão de {@code POW}/{@code pow_set} abaixo — {@code is_seq_of} fica só como implementação
  * interna do axioma-ponte {@code seq_def}, nunca emitido diretamente);
- * {@code ss : POW(S)} → {@code belongs(ss, pow_set(S))}; {@code ss : FIN(ss)} → {@code is_finite(ss)};
+ * {@code ss : POW(S)} → {@code belongs(ss, pow_set(S))};
+ * {@code ss : FIN(S)} → {@code is_finite(ss) && inclusion(ss, S)} ({@code ss : FIN(ss)}, a forma
+ * "ss é finito", → só {@code is_finite(ss)});
  * {@code ss : POW1(S)} → {@code belongs(ss, pow_set(S)) && card(ss) > 0} (mesma base de POW, mais
- * não-vazio via {@code card}); {@code ss : FIN1(S)} → {@code is_finite(ss) && card(ss) > 0}
- * (mesma base de FIN);
+ * não-vazio via {@code card}); {@code ss : FIN1(S)} → {@code is_finite(ss) && inclusion(ss, S) &&
+ * card(ss) > 0} (mesma base de FIN; a forma e a ordem são as do B2ACSLRules);
  * {@code x : BOOL} → {@code belongs(x, BOOL)}; {@code x : NAT} → {@code belongs(x, NAT)};
  * {@code x : INT} → {@code belongs(x, INT)};
  * {@code x /: s} → {@code not_belongs(x, s)}; {@code ss <: tt} → {@code inclusion(ss, tt)};
@@ -313,7 +315,7 @@ public final class BxmlPredicateToAcsl {
             String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
             return translateStructMembership(left, rightEl, ctx);
         }
-        // ss : POW(S) → belongs(ss, pow_set(S)); ss : FIN(ss) → is_finite(ss)
+        // ss : POW(S) → belongs(ss, pow_set(S)); ss : FIN(S) → is_finite(ss) && inclusion(ss, S)
         if ("Unary_Exp".equals(rightEl.getLocalName())) {
             String uop = rightEl.getAttribute("op");
             if ("POW".equals(uop)) {
@@ -322,9 +324,13 @@ public final class BxmlPredicateToAcsl {
                 String setAtom = powDomainSetAtom(inner, ctx);
                 return powSetMembership(left, setAtom);
             }
-            if ("FIN".equals(uop) || "fin".equals(uop)) {
+            // ss : FIN(S) — subconjuntos finitos de S: is_finite(ss) && inclusion(ss, S). A forma
+            // ss : FIN(ss) ("ss é finito", ex. PLAYER : FIN(PLAYER)) fica só is_finite(ss). Compara o
+            // value dos Id do BXML, não o texto traduzido (PLAYER vira RulerOfTheSeas_PLAYER).
+            if (isFinTypingExp(rightEl)) {
                 String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                return "is_finite(" + left + ")";
+                Element inner = BxmlDomUtils.firstNonAttrElementChild(rightEl);
+                return finMembership(left, rightEl, isSameIdentifier(leftEl, inner), ctx);
             }
             // ss : POW1(S) — subconjuntos NÃO-VAZIOS de S (POW menos {}); mesma base de POW
             // (pow_set), acrescida de card(ss) > 0.
@@ -333,12 +339,6 @@ public final class BxmlPredicateToAcsl {
                 Element inner = BxmlDomUtils.firstNonAttrElementChild(rightEl);
                 String setAtom = powDomainSetAtom(inner, ctx);
                 return powSetMembership(left, setAtom) + " && (card(" + left + ") > 0)";
-            }
-            // ss : FIN1(S) — subconjuntos finitos NÃO-VAZIOS de S; mesma base de FIN (is_finite,
-            // domínio S não verificado — idem à limitação já existente em FIN), mais card(ss) > 0.
-            if ("FIN1".equals(uop) || "fin1".equals(uop)) {
-                String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                return "is_finite(" + left + ") && (card(" + left + ") > 0)";
             }
             if ("iseq".equals(uop)) {
                 String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
@@ -733,6 +733,37 @@ public final class BxmlPredicateToAcsl {
         return typeArg != null && "Id".equals(typeArg.getLocalName())
                 ? bTypeArgToSeqOfSetName(typeArg, ctx)
                 : BxmlExpressionToAcsl.translate(typeArg, ctx);
+    }
+
+    /** {@code FIN(S)} ou {@code FIN1(S)}. */
+    static boolean isFinTypingExp(Element e) {
+        if (e == null || !"Unary_Exp".equals(e.getLocalName())) return false;
+        String op = e.getAttribute("op");
+        return "FIN".equalsIgnoreCase(op) || "FIN1".equalsIgnoreCase(op);
+    }
+
+    /**
+     * {@code ss : FIN(S)} → {@code is_finite(ss) && inclusion(ss, S)}; {@code ss : FIN1(S)} →
+     * idem {@code && (card(ss) > 0)} (forma e ordem do B2ACSLRules). Com {@code selfForm}
+     * ({@code ss : FIN(ss)}, "ss é finito") a inclusão sai. Também usado por {@code ss :: FIN(S)}.
+     */
+    static String finMembership(String left, Element finExp, boolean selfForm, BxmlTranslateContext ctx) {
+        Element inner = BxmlDomUtils.firstNonAttrElementChild(finExp);
+        StringBuilder sb = new StringBuilder("is_finite(").append(left).append(")");
+        if (!selfForm) {
+            sb.append(" && inclusion(").append(left).append(", ").append(powDomainSetAtom(inner, ctx)).append(")");
+        }
+        if ("FIN1".equalsIgnoreCase(finExp.getAttribute("op"))) {
+            sb.append(" && (card(").append(left).append(") > 0)");
+        }
+        return sb.toString();
+    }
+
+    /** Os dois elementos são {@code Id} com o mesmo {@code value} (ex. {@code ss : FIN(ss)}). */
+    private static boolean isSameIdentifier(Element a, Element b) {
+        return a != null && b != null
+                && "Id".equals(a.getLocalName()) && "Id".equals(b.getLocalName())
+                && a.getAttribute("value").equals(b.getAttribute("value"));
     }
 
     /** {@code ss : POW(S)} / {@code ss : POW1(S)} → {@code belongs(ss, pow_set(S))} (set_functions/pow_set.acsl). */

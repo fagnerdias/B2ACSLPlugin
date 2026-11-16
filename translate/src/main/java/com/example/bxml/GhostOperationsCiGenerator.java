@@ -1054,6 +1054,9 @@ public final class GhostOperationsCiGenerator {
             }
             return base;
         }
+        if (BxmlPredicateToAcsl.isFinTypingExp(setExp)) {
+            return BxmlPredicateToAcsl.finMembership("dummy_" + v, setExp, false, ctx);
+        }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) return null;
         return "becomes_element_of(dummy_" + v + ", " + setExprText + ")";
