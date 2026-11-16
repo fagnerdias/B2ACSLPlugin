@@ -1,13 +1,16 @@
 package com.example.bxml;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Registo de funções lambda B ({@code % x.(P | E)}) extraídas durante a tradução BXML→ACSL.
  *
  * <p>Cada lambda é transformada numa declaração nomeada — {@code lambda_func01}, {@code
- * lambda_func02}, … (contador único, partilhado pelas três formas abaixo, na ordem de registo) —
+ * lambda_func02}, … (contador único, partilhado pelas três formas abaixo, na ordem de registo; uma
+ * definição idêntica a uma já registada devolve o mesmo nome) —
  * recolhida num bloco {@code axiomatic lambda_functions { … }} inserido no {@code .acsl} gerado.
  * Nunca {@code \lambda} nativo do ACSL: este não compõe com o resto do sistema de tipos B2ACSL
  * baseado em ADTs ({@code Function<A,B>}, {@code \list}, …) — não pode ser passado a funções da lib
@@ -61,6 +64,12 @@ public final class LambdaFunctionRegistry {
 
     private int counter = 0;
     private final List<LambdaEntry> entries = new ArrayList<>();
+    /**
+     * Definição (entrada com nome vazio) → nome já dado. Um lambda traduzido duas vezes (ex. os dois
+     * lados de {@code V = %…} e depois a forma pontual) ou repetido (invariante e colagem) reaproveita
+     * a função em vez de gerar uma cópia morta com outro número.
+     */
+    private final Map<LambdaEntry, String> namesByDefinition = new HashMap<>();
 
     /**
      * Regista uma nova função lambda de corpo booleano (modelo de mapa) e retorna o nome gerado
@@ -116,11 +125,9 @@ public final class LambdaFunctionRegistry {
             List<String> freeVarNames, List<String> freeVarTypes, List<String> boundVarNames,
             String body, String returnType, String guard, boolean sequenceBuilder,
             String bodyForLoPlusK) {
-        counter++;
-        String name = String.format("lambda_func%02d", counter);
-        entries.add(
+        LambdaEntry definition =
                 new LambdaEntry(
-                        name,
+                        "",
                         List.copyOf(freeVarNames),
                         freeVarTypes == null ? List.of() : List.copyOf(freeVarTypes),
                         List.copyOf(boundVarNames),
@@ -128,12 +135,35 @@ public final class LambdaFunctionRegistry {
                         returnType,
                         guard,
                         sequenceBuilder,
+                        bodyForLoPlusK);
+        String existing = namesByDefinition.get(definition);
+        if (existing != null) {
+            return existing;
+        }
+        counter++;
+        String name = String.format("lambda_func%02d", counter);
+        entries.add(
+                new LambdaEntry(
+                        name,
+                        definition.freeVarNames(),
+                        definition.freeVarTypes(),
+                        definition.boundVarNames(),
+                        body,
+                        returnType,
+                        guard,
+                        sequenceBuilder,
                         bodyForLoPlusK));
+        namesByDefinition.put(definition, name);
         return name;
     }
 
     public boolean isEmpty() {
         return entries.isEmpty();
+    }
+
+    /** Nomes das funções registadas, na ordem. */
+    public List<String> names() {
+        return entries.stream().map(LambdaEntry::name).toList();
     }
 
     public int size() {

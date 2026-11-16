@@ -1,7 +1,9 @@
 package com.example.bxml;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -90,6 +92,8 @@ public final class UnionInterFunctionRegistry {
 
     private int counter = 0;
     private final List<Entry> entries = new ArrayList<>();
+    /** Definição (entrada com nome vazio) → nome já dado: o mesmo quantificador traduzido de novo reaproveita a função. */
+    private final Map<Entry, String> namesByDefinition = new HashMap<>();
 
     /** §2/§2b/§3/§3b: domínio-intervalo. */
     public String registerInterval(
@@ -97,6 +101,16 @@ public final class UnionInterFunctionRegistry {
             String elementType, String bodyForLo, String bodyForHi, String filterForLo,
             String filterForHi, boolean hasUniverse, String universeExpr,
             String congrVarName, String congrVarType) {
+        Entry definition = new Entry(
+                "", op, Kind.INTERVAL,
+                List.copyOf(freeVarNames),
+                freeVarTypes == null ? List.of() : List.copyOf(freeVarTypes),
+                sourceComment, elementType, bodyForLo, bodyForHi, filterForLo, filterForHi,
+                hasUniverse, universeExpr, congrVarName, congrVarType, null, null, null);
+        String existing = namesByDefinition.get(definition);
+        if (existing != null) {
+            return existing;
+        }
         counter++;
         String name = String.format("%s%02d", op.namePrefix, counter);
         entries.add(new Entry(
@@ -105,6 +119,7 @@ public final class UnionInterFunctionRegistry {
                 freeVarTypes == null ? List.of() : List.copyOf(freeVarTypes),
                 sourceComment, elementType, bodyForLo, bodyForHi, filterForLo, filterForHi,
                 hasUniverse, universeExpr, congrVarName, congrVarType, null, null, null));
+        namesByDefinition.put(definition, name);
         return name;
     }
 
@@ -122,6 +137,16 @@ public final class UnionInterFunctionRegistry {
     public String registerSet(
             Op op, List<String> freeVarNames, List<String> freeVarTypes, String sourceComment,
             String elementType, String boundVarType, String bodyForX, String domainExprText) {
+        Entry definition = new Entry(
+                "", op, Kind.SET,
+                List.copyOf(freeVarNames),
+                freeVarTypes == null ? List.of() : List.copyOf(freeVarTypes),
+                sourceComment, elementType, null, null, null, null, false, null, null, null,
+                boundVarType, bodyForX, domainExprText);
+        String existing = namesByDefinition.get(definition);
+        if (existing != null) {
+            return existing;
+        }
         counter++;
         String name = String.format("%s%02d", op.namePrefix, counter);
         entries.add(new Entry(
@@ -130,6 +155,7 @@ public final class UnionInterFunctionRegistry {
                 freeVarTypes == null ? List.of() : List.copyOf(freeVarTypes),
                 sourceComment, elementType, null, null, null, null, false, null, null, null,
                 boundVarType, bodyForX, domainExprText));
+        namesByDefinition.put(definition, name);
         return name;
     }
 

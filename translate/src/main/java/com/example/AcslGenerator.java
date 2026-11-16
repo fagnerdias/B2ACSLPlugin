@@ -452,7 +452,11 @@ public final class AcslGenerator {
                         .withCrossMachineVariableLogicTypes(
                                 BxmlMachineVariables.transitiveCrossMachineVariableLogicTypes(
                                         invariantSourceMachineNames, bxmlDirectory))
-                        .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
+                        .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes)
+                        .withSeenGlobalLogicNames(
+                                BxmlSetsTranslator.listDependencyGlobalLogicNames(
+                                        machineEl, mergedMachineElements, bxmlDirectory,
+                                        seesGraph, importsGraph));
         state.ctx = ctx;
         // deferredSetTypedParameterNames NÃO é preenchido aqui: é por-OPERAÇÃO (nomes de parâmetro
         // colidem entre operações diferentes da mesma máquina com papéis diferentes — ver javadoc
@@ -793,7 +797,8 @@ public final class AcslGenerator {
                 .withUnionInterRegistry(ctx.unionInterRegistry())
                 .withCrossMachineVariableNames(ctx.crossMachineVariableNames())
                 .withCrossMachineVariableLogicTypes(ctx.crossMachineVariableLogicTypes())
-                .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
+                .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes)
+                .withSeenGlobalLogicNames(ctx.seenGlobalLogicNames());
     }
 
     private static void appendMachineVariableBlocks(AcslGenerationState state) {
@@ -1004,7 +1009,8 @@ public final class AcslGenerator {
                 mergedInvariantsSb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
                 ctx.enumeratedSetRenames(), mergedVariableRenames, ctx.lambdaRegistry(), ctx.sigmaRegistry(),
                 ctx.unionInterRegistry(), ctx.crossMachineVariableNames(),
-                ctx.crossMachineVariableLogicTypes(), refinementChainVariableLogicTypes);
+                ctx.crossMachineVariableLogicTypes(), refinementChainVariableLogicTypes,
+                ctx.seenGlobalLogicNames());
 
         // 2b/2c) Lambdas e SIGMA/PI/MIN/MAX (emissão tardia, após variáveis: ambos podem referenciar
         // variáveis de estado só declaradas nos blocos de variáveis acima). A ORDEM relativa entre
@@ -1023,6 +1029,12 @@ public final class AcslGenerator {
                 lambdaRegistry != null && lambdaRegistry.size() > lambdaEmittedUpTo
                         ? lambdaRegistry.formatAxiomaticBlockFrom(lambdaEmittedUpTo)
                         : null;
+        if (lambdaBlock != null
+                && !anyNameReferenced(lambdaRegistry.names(), lambdaUseSites(state, invariantPredicates, mergedInvariantsSb))) {
+            // Nenhuma função do bloco é usada (ex. Biblioteca copiesQuery: o ensures com a lambda
+            // de uma saída array é removido depois de registada): não emite o bloco morto.
+            lambdaBlock = null;
+        }
 
         // Ao contrário dos lambdas (só predicate/logic escalares), o bloco SIGMA/PI/MIN/MAX usa
         // Set<A> genérico (ex.: Set<integer> no caso de domínio-conjunto) — -acsl-import só aceita
@@ -1120,6 +1132,36 @@ public final class AcslGenerator {
         sb.append("\n");
         sb.append("include \"").append(sigmaFileName).append("\";\n");
         sb.append("\n");
+    }
+
+    /** Textos onde uma função lambda pode ser chamada (tudo o que vai para o .acsl, menos o próprio bloco). */
+    private static String lambdaUseSites(
+            AcslGenerationState state, String invariantPredicates, CharSequence mergedInvariants) {
+        StringBuilder all = new StringBuilder(state.sb).append('\n')
+                .append(state.libScanRemovedBodies).append('\n')
+                .append(invariantPredicates).append('\n')
+                .append(mergedInvariants).append('\n')
+                .append(state.propertiesBlock).append('\n');
+        BxmlTranslateContext ctx = state.ctx;
+        if (ctx.sigmaRegistry() != null) all.append(ctx.sigmaRegistry().formatAxiomaticBlock()).append('\n');
+        if (ctx.unionInterRegistry() != null) all.append(ctx.unionInterRegistry().formatAxiomaticBlock()).append('\n');
+        if (state.isAbstraction && state.init != null) {
+            all.append(state.init.toContractText()).append('\n');
+            for (OperationAcsl op : state.operations) {
+                all.append(op.toContractSketch()).append('\n');
+            }
+        }
+        return all.toString();
+    }
+
+    private static boolean anyNameReferenced(List<String> names, String text) {
+        for (String n : names) {
+            if (java.util.regex.Pattern.compile("\\b" + java.util.regex.Pattern.quote(n) + "\\s*\\(")
+                    .matcher(text).find()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void appendFunctionsSection(AcslGenerationState state) {
@@ -1417,7 +1459,8 @@ public final class AcslGenerator {
             UnionInterFunctionRegistry unionInterRegistry,
             Set<String> crossMachineVariableNames,
             Map<String, String> crossMachineVariableLogicTypes,
-            Map<String, String> refinementChainVariableLogicTypes) {
+            Map<String, String> refinementChainVariableLogicTypes,
+            Set<String> seenGlobalLogicNames) {
         if (mergedMachineRoots == null || mergedMachineRoots.isEmpty()) {
             return;
         }
@@ -1431,7 +1474,8 @@ public final class AcslGenerator {
                     .withUnionInterRegistry(unionInterRegistry)
                     .withCrossMachineVariableNames(crossMachineVariableNames)
                     .withCrossMachineVariableLogicTypes(crossMachineVariableLogicTypes)
-                    .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes);
+                    .withAdditionalVariableLogicTypes(refinementChainVariableLogicTypes)
+                    .withSeenGlobalLogicNames(seenGlobalLogicNames);
             String inv = BxmlInvariantTranslator.formatInvariantPredicates(mel, ctx);
             if (inv.isBlank()) continue;
             Map<String, String> renameMap = variableRenamesByMachine.get(mel);

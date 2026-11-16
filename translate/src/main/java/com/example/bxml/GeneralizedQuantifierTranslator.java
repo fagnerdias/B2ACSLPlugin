@@ -1040,6 +1040,8 @@ final class GeneralizedQuantifierTranslator {
         allIds.remove(boundVarName);
         allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
+        allIds.removeAll(ctx.seenGlobalLogicNames());
+        allIds.removeAll(ctx.enumValueRenames().keySet());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
@@ -1106,6 +1108,10 @@ final class GeneralizedQuantifierTranslator {
         // o axioma _def não tem rótulo e valeria para todo estado de memória.
         allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
+        // Constantes e conjuntos das máquinas vistas e valores enumerados: globais lógicos, lidos
+        // pelo nome (um conjunto como uint32_t não pode nem ser nome de parâmetro: é typedef C).
+        allIds.removeAll(ctx.seenGlobalLogicNames());
+        allIds.removeAll(ctx.enumValueRenames().keySet());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
