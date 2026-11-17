@@ -413,6 +413,11 @@ public final class GhostOperationsCiGenerator {
             Map<String, List<String>> abstractConstParams) {
         List<GhostOp> ops = new ArrayList<>();
         List<String> initEnsures = collectGhostEnsuresFromInit(abstractMachineEl, abstractSet, ctx);
+        if (initEnsures.stream().anyMatch(Unsupported::in)) {
+            // INITIALISATION sem tradução: a função ghost fica só com o assigns (como o rules);
+            // o AVISO sai do lado real.
+            initEnsures = List.of();
+        }
         Set<String> initAssigned = new LinkedHashSet<>();
         collectAssignedAbstractVarsInInit(abstractMachineEl, abstractSet, initAssigned);
         if (!initAssigned.isEmpty()) {
@@ -500,6 +505,11 @@ public final class GhostOperationsCiGenerator {
                         GhostParamTypeResolver.appendOutputParametersAsPointers(GhostParamTypeResolver.listInputParameters(op), op, false);
                 List<String> ensures = new ArrayList<>();
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
+                if (ensures.stream().anyMatch(Unsupported::in)) {
+                    // corpo sem tradução: a função ghost fica só com o assigns (como o rules), para o
+                    // "at return: assert ghost__op" do contrato real continuar com alvo
+                    ensures.clear();
+                }
                 BxmlOperationsTranslator.rewriteAcslListForArrayBackedParams(ensures, arrayParams);
                 List<String> ghostEnsures = new ArrayList<>();
                 for (String e : ensures) {
@@ -524,7 +534,6 @@ public final class GhostOperationsCiGenerator {
                     ge = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
-                if (ghostEnsures.isEmpty()) continue;
 
                 ops.add(
                         new GhostOp(
@@ -1017,7 +1026,8 @@ public final class GhostOperationsCiGenerator {
                         collectGhostEnsuresFromSubstitution(ch, abstractSet, ctx, out);
                     }
                 } else {
-                    collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, ctx, out);
+                    // CHOICE: só o 1º ramo seria MAIS forte que o B (um dos ramos acontece)
+                    out.add(Unsupported.marker("Nary_Sub " + op));
                 }
             }
             case "Bloc_Sub" -> collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, ctx, out);
@@ -1027,6 +1037,8 @@ public final class GhostOperationsCiGenerator {
                     collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, ctx, out);
                 }
             }
+            // IF, SELECT, Becomes_Such_That, …: este walker (só INITIALISATION ghost) não os traduz;
+            // deixá-los de fora só enfraquece o ghost (o lado real traduz e avisa).
             default -> { }
         }
     }
@@ -1135,7 +1147,12 @@ public final class GhostOperationsCiGenerator {
                         collectAssignedInSubstitution(ch, abstractSet, out);
                     }
                 } else {
-                    collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, out);
+                    // CHOICE: todos os ramos (só o 1º deixava o assigns menor que o que a operação escreve)
+                    for (Node n = sub.getFirstChild(); n != null; n = n.getNextSibling()) {
+                        if (n instanceof Element ch && !"Attr".equals(ch.getLocalName())) {
+                            collectAssignedInSubstitution(ch, abstractSet, out);
+                        }
+                    }
                 }
             }
             case "Bloc_Sub" -> collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, out);
@@ -1157,7 +1174,15 @@ public final class GhostOperationsCiGenerator {
                     collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, out);
                 }
             }
-            default -> { }
+            case "Skip" -> { }
+            // LET, CASE, ASSERT, …: desce nos filhos (o frame ghost tem de cobrir o que escrevem)
+            default -> {
+                for (Node n = sub.getFirstChild(); n != null; n = n.getNextSibling()) {
+                    if (n instanceof Element ch && !"Attr".equals(ch.getLocalName())) {
+                        collectAssignedInSubstitution(ch, abstractSet, out);
+                    }
+                }
+            }
         }
     }
 

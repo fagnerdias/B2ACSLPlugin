@@ -91,6 +91,11 @@ public final class BxmlInitialisationTranslator {
         Element abstractInit = BxmlDomUtils.firstChildElement(machineEl, "Initialisation");
         if (abstractInit != null) {
             walkSubstitution(BxmlDomUtils.firstSubChild(abstractInit), ensures, ctx);
+            if (ensures.stream().anyMatch(Unsupported::in)) {
+                // como o B2ACSLRules: sem ensures da INITIALISATION, com AVISO
+                ensures.clear();
+                TranslationWarnings.add(machineName + ": INITIALISATION nao traduzida para ensures");
+            }
         }
         // Laços C da inicialização, numa só passada e numa só contagem: o açúcar
         // `ARRAY := DOMAIN*{VALUE}` (um laço for, dois no caso 2D) e os WHILE escritos à mão (com
@@ -266,23 +271,24 @@ public final class BxmlInitialisationTranslator {
                 } else if ("CHOICE".equals(op)) {
                     parseChoiceAsDisjunctiveEnsures(sub, ensures, ctx, oldNames);
                 } else {
-                    walkSubstitution(BxmlDomUtils.firstSubChild(sub), ensures, ctx, oldNames);
+                    ensures.add(Unsupported.marker("Nary_Sub " + op));
                 }
             }
             case "Skip" -> { /* nada */ }
             case "Bloc_Sub" -> walkSubstitution(BxmlDomUtils.firstSubChild(sub), ensures, ctx, oldNames);
             case "ANY_Sub" -> {
                 String t = translateAnySubAsExists(sub, ctx, oldNames);
-                if (!t.isBlank()) {
-                    ensures.add(t);
-                }
+                ensures.add(t.isBlank() ? Unsupported.marker("ANY") : t);
             }
             case "Becomes_In" -> parseBecomesInSub(sub, ensures, ctx);
             case "Becomes_Such_That" -> parseBecomesSuchThatSub(sub, ensures, ctx);
             case "Select" -> parseSelectAsConditionalEnsures(sub, ensures, ctx, oldNames);
             case "If_Sub" -> parseIfSubAsConditionalEnsures(sub, ensures, ctx, oldNames);
             case "Operation_Call" -> parseOperationCall(sub, ensures, ctx, oldNames);
-            default -> { /* outras substituições: extensão futura */ }
+            // LET, CASE, ASSERT, VAR, WHILE, …: sem tradução para ensures. O marcador faz a
+            // montagem omitir o corpo inteiro com AVISO (como o B2ACSLRules), em vez de descartar
+            // só esta parte em silêncio.
+            default -> ensures.add(Unsupported.marker(ln));
         }
     }
 
@@ -987,8 +993,29 @@ public final class BxmlInitialisationTranslator {
      */
     private static void parseOperationCall(
             Element call, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
-        for (String c : OperationCallOutputSpecs.outputClauses(call, ctx)) {
+        List<String> clauses = OperationCallOutputSpecs.outputClauses(call, ctx);
+        for (String c : clauses) {
             ensures.add(oldNames == null || oldNames.isEmpty() ? c : wrapLhsVarsInRhsWithOld(c, oldNames));
+        }
+        Element outs = BxmlDomUtils.firstChildElement(call, "Output_Parameters");
+        if (clauses.isEmpty() && outs != null && !BxmlDomUtils.directExpChildren(outs).isEmpty()) {
+            // como o B2ACSLRules: a chamada não entra no ensures (o resto do corpo sim), com AVISO
+            String opName = "?";
+            for (Node n = call.getParentNode(); n instanceof Element e; n = n.getParentNode()) {
+                if ("Operation".equals(e.getLocalName())) {
+                    opName = e.getAttribute("name");
+                    break;
+                }
+                if ("Initialisation".equals(e.getLocalName())) {
+                    opName = "INITIALISATION";
+                    break;
+                }
+            }
+            Element nameEl = BxmlDomUtils.firstChildElement(call, "Name");
+            Element nameId = nameEl == null ? null : BxmlDomUtils.firstChildElement(nameEl, "Id");
+            String callee = nameId == null ? "?" : nameId.getAttribute("value").trim();
+            TranslationWarnings.add(TranslationWarnings.component(call) + "." + opName + ": chamada de "
+                    + callee + " omitida do ensures (linha " + TranslationWarnings.line(call) + ")");
         }
     }
 
@@ -1068,7 +1095,16 @@ public final class BxmlInitialisationTranslator {
                     collectAssignedLhsNames(BxmlDomUtils.firstSubChild(then), out);
                 }
             }
-            default -> { /* Skip, etc. — nada a coletar */ }
+            case "Skip" -> { /* nada a coletar */ }
+            // LET, CASE, ASSERT, VAR, WHILE, …: desce nos filhos — o corpo pode ficar sem ensures
+            // (sem tradução), mas o que ele atribui continua no frame (\old, assigns).
+            default -> {
+                for (org.w3c.dom.Node n = sub.getFirstChild(); n != null; n = n.getNextSibling()) {
+                    if (n instanceof Element child && !"Attr".equals(child.getLocalName())) {
+                        collectAssignedLhsNames(child, out);
+                    }
+                }
+            }
         }
     }
 
@@ -1160,7 +1196,10 @@ public final class BxmlInitialisationTranslator {
         condOldNames.addAll(elseAssigned);
 
         String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
-        if (cond == null || cond.isBlank()) return;
+        if (cond == null || cond.isBlank()) {
+            ensures.add(Unsupported.marker("condicao do IF"));
+            return;
+        }
         if (!condOldNames.isEmpty()) {
             cond = applyOldWrapping(cond, condOldNames);
         }
@@ -1256,7 +1295,10 @@ public final class BxmlInitialisationTranslator {
         List<List<String>> whenEffects = new ArrayList<>();
         for (int i = 0; i < condEls.size(); i++) {
             String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEls.get(i), ctx);
-            if (cond == null || cond.isBlank()) continue;
+            if (cond == null || cond.isBlank()) {
+                ensures.add(Unsupported.marker("condicao do WHEN"));
+                continue;
+            }
             if (!condOldNames.isEmpty()) {
                 cond = applyOldWrapping(cond, condOldNames);
             }

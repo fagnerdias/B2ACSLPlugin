@@ -228,6 +228,9 @@ public final class BxmlConstantsAndProperties {
             }
 
             String pred = BxmlPredicateToAcsl.translatePropertyPred(e, ctx);
+            if (Unsupported.in(pred)) {
+                pred = translatablePropertyConjuncts(e, ctx, machineName);
+            }
             if (pred == null || pred.isBlank()) {
                 continue;
             }
@@ -242,6 +245,26 @@ public final class BxmlConstantsAndProperties {
         for (String ax : axioms) sb.append(ax).append("\n");
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /**
+     * PROPERTIES com construção sem tradução ({@link Unsupported}): como o B2ACSLRules, só as
+     * conjunções de topo traduzíveis, juntas num axioma; AVISO por cada uma que fica de fora.
+     */
+    private static String translatablePropertyConjuncts(Element pred, BxmlTranslateContext ctx, String machineName) {
+        List<Element> conjuncts = BxmlPredicateToAcsl.conjunctsOf(pred);
+        List<String> kept = new ArrayList<>();
+        for (Element c : conjuncts) {
+            String t = BxmlPredicateToAcsl.translatePropertyPred(c, ctx);
+            if (t == null || t.isBlank()) continue;
+            if (Unsupported.in(t)) {
+                TranslationWarnings.add(machineName + ": propriedade nao traduzida (linha "
+                        + TranslationWarnings.line(c) + ")");
+            } else {
+                kept.add(t);
+            }
+        }
+        return String.join(" && ", kept);
     }
 
     private static List<String> lambdaBoundVarNames(Element quantifiedExp) {
@@ -321,6 +344,10 @@ public final class BxmlConstantsAndProperties {
             String qualifyAs = deferredSetNames.contains(ident) ? abstractMachineName : null;
             String equality = formatValuationEquality(ident, valueExp, ctx, qualifyAs);
             if (equality == null || equality.isBlank()) continue;
+            if (Unsupported.in(equality)) {
+                TranslationWarnings.add(machineName + ": VALUES de " + ident + " nao traduzido");
+                continue;
+            }
             String axiomName = machineName + "_values_" + ident;
             axioms.add("    axiom " + axiomName + ": " + equality + ";");
         }

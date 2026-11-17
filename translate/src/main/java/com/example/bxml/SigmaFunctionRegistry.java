@@ -106,6 +106,9 @@ public final class SigmaFunctionRegistry {
             Op op, List<String> freeVarNames, List<String> freeVarTypes, String sourceComment,
             String bodyForLo, String bodyForHi, String filterForLo, String filterForHi,
             String congrVarName, String congrVarType) {
+        if (Unsupported.in(bodyForLo) || Unsupported.in(bodyForHi) || Unsupported.in(filterForLo) || Unsupported.in(filterForHi) || Unsupported.in(congrVarName) || Unsupported.in(congrVarType)) {
+            return Unsupported.marker("corpo de " + op.name());
+        }
         Entry definition = new Entry(
                 "", op, Kind.INTERVAL,
                 List.copyOf(freeVarNames),
@@ -142,6 +145,9 @@ public final class SigmaFunctionRegistry {
     public String registerSet(
             Op op, List<String> freeVarNames, List<String> freeVarTypes, String sourceComment,
             String boundVarType, String bodyForX, String domainExprText) {
+        if (Unsupported.in(boundVarType) || Unsupported.in(bodyForX) || Unsupported.in(domainExprText)) {
+            return Unsupported.marker("corpo de " + op.name());
+        }
         Entry definition = new Entry(
                 "", op, Kind.SET,
                 List.copyOf(freeVarNames),
@@ -397,7 +403,7 @@ public final class SigmaFunctionRegistry {
                     .append(op.combine(name + "(" + fa + "s)", name + "(" + fa + "t)")).append(";\n\n");
         }
 
-        sb.append("  /* TODO(b2acsl): finitude de ").append(e.domainExprText())
+        sb.append("  /* nota: finitude de ").append(e.domainExprText())
                 .append(" garantida pela tipagem de B (SIGMA/PI/MIN/MAX exigem domínio finito); se o WP ")
                 .append("não a derivar do contexto, adicione 'requires is_finite(")
                 .append(e.domainExprText()).append(");' à operação que usa ").append(name).append(" */\n\n");

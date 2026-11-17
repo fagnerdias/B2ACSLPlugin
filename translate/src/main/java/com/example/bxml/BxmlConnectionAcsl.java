@@ -170,13 +170,24 @@ public final class BxmlConnectionAcsl {
             String params = String.join(", ", typedParams);
             String args = String.join(", ", glueToParam.values());
 
+            // Conjunção sem tradução (Unsupported) fica de fora, como no B2ACSLRules (invList).
             List<String> rel = new ArrayList<>();
             for (Element c : link.relConjuncts()) {
-                rel.add(BxmlPredicateToAcsl.translateConjunct(c, cctx));
+                String t = BxmlPredicateToAcsl.translateConjunct(c, cctx);
+                if (!t.isBlank() && !Unsupported.in(t)) rel.add(t);
             }
             List<String> abs = new ArrayList<>();
             for (Map.Entry<Element, Element> e : link.absConjuncts()) {
-                abs.add(BxmlPredicateToAcsl.translateConjunct(e.getValue(), contextFor.apply(e.getKey())));
+                String t = BxmlPredicateToAcsl.translateConjunct(e.getValue(), contextFor.apply(e.getKey()));
+                if (!t.isBlank() && !Unsupported.in(t)) abs.add(t);
+            }
+            if (rel.isEmpty()) {
+                // sem invariante de colagem traduzível: a função fica só declarada (o bloco
+                // _variables do refinamento a usa) e sem axiomas
+                TranslationWarnings.add(TranslationWarnings.component(link.owner()) + ": " + v
+                        + " sem invariante de colagem; return_valid_" + v + " nao gerada");
+                sb.append("  logic ").append(vType).append(" ").append(fn).append("(").append(params).append(");\n\n");
+                continue;
             }
             Map<String, String> outEnv = new LinkedHashMap<>(glueToParam);
             outEnv.put(v, "out");

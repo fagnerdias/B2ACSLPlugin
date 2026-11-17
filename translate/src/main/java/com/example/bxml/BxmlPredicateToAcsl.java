@@ -39,7 +39,19 @@ public final class BxmlPredicateToAcsl {
         Element first = BxmlDomUtils.firstPredChild(predParent);
         if (first != null) {
             String t = translatePred(first, ctx);
-            if (!t.isBlank()) out.add(t);
+            if (Unsupported.in(t)) {
+                // Como o B2ACSLRules: um requires por conjunção traduzível, AVISO pelo resto.
+                for (Element c : topLevelConjunctElements(predParent)) {
+                    String ct = translatePred(c, ctx);
+                    if (!ct.isBlank() && !Unsupported.in(ct)) out.add(ct);
+                }
+                Node op = predParent.getParentNode();
+                String opName = op instanceof Element e ? e.getAttribute("name") : "?";
+                TranslationWarnings.add(TranslationWarnings.component(predParent) + "." + opName
+                        + ": pre-condicao traduzida so em parte (linha " + TranslationWarnings.line(predParent) + ")");
+            } else if (!t.isBlank()) {
+                out.add(t);
+            }
         }
         return out;
     }
@@ -64,9 +76,36 @@ public final class BxmlPredicateToAcsl {
      */
     public static List<String> translateInvariantConjuncts(Element invariantEl, BxmlTranslateContext ctx) {
         List<String> out = new ArrayList<>();
-        Element p = BxmlDomUtils.firstPredChild(invariantEl);
-        collectTopLevelAndConjuncts(p, ctx, out);
+        for (Element c : topLevelConjunctElements(invariantEl)) {
+            String t = translatePred(c, ctx);
+            if (t.isBlank()) continue;
+            if (Unsupported.in(t)) {
+                // Como o B2ACSLRules: a conjunção fica de fora (a numeração _invariant_k segue as que
+                // ficam, em todos os contextos: o marcador não depende do contexto), com AVISO.
+                TranslationWarnings.add(invariantWarning(invariantEl, c));
+                continue;
+            }
+            out.add(t);
+        }
         return out;
+    }
+
+    /** {@code C: invariante nao traduzido (linha N)} ou {@code M.op: invariante de laco nao traduzido (linha N)}. */
+    private static String invariantWarning(Element invariantEl, Element conjunct) {
+        String line = TranslationWarnings.line(conjunct);
+        String comp = TranslationWarnings.component(invariantEl);
+        Node parent = invariantEl.getParentNode();
+        if (parent instanceof Element pe && "While".equals(pe.getLocalName())) {
+            String unit = "INITIALISATION";
+            for (Node n = pe; n instanceof Element e; n = n.getParentNode()) {
+                if ("Operation".equals(e.getLocalName())) {
+                    unit = e.getAttribute("name");
+                    break;
+                }
+            }
+            return comp + "." + unit + ": invariante de laco nao traduzido (linha " + line + ")";
+        }
+        return comp + ": invariante nao traduzido (linha " + line + ")";
     }
 
     /**
@@ -76,6 +115,13 @@ public final class BxmlPredicateToAcsl {
     public static List<Element> topLevelConjunctElements(Element invariantEl) {
         List<Element> out = new ArrayList<>();
         collectTopLevelAndConjunctElements(BxmlDomUtils.firstPredChild(invariantEl), out);
+        return out;
+    }
+
+    /** Conjunctos de topo do próprio predicado {@code p} ({@code P & Q & R} → {@code [P, Q, R]}). */
+    public static List<Element> conjunctsOf(Element p) {
+        List<Element> out = new ArrayList<>();
+        collectTopLevelAndConjunctElements(p, out);
         return out;
     }
 
@@ -98,25 +144,6 @@ public final class BxmlPredicateToAcsl {
     /** Traduz um conjuncto já separado por {@link #topLevelConjunctElements}. */
     public static String translateConjunct(Element conjunct, BxmlTranslateContext ctx) {
         return translatePred(conjunct, ctx);
-    }
-
-    /** Achata {@code Nary_Pred op='&'} de topo (recursivamente); outros nós viram uma folha só. */
-    private static void collectTopLevelAndConjuncts(
-            Element p, BxmlTranslateContext ctx, List<String> out) {
-        if (p == null) return;
-        if ("Nary_Pred".equals(p.getLocalName()) && "&".equals(p.getAttribute("op"))) {
-            NodeList nl = p.getChildNodes();
-            for (int i = 0; i < nl.getLength(); i++) {
-                Node n = nl.item(i);
-                if (n.getNodeType() != Node.ELEMENT_NODE) continue;
-                Element e = (Element) n;
-                if ("Attr".equals(e.getLocalName())) continue;
-                collectTopLevelAndConjuncts(e, ctx, out);
-            }
-            return;
-        }
-        String t = translatePred(p, ctx);
-        if (!t.isBlank()) out.add(t);
     }
 
     /**
@@ -285,7 +312,7 @@ public final class BxmlPredicateToAcsl {
             case "Unary_Pred" -> translateUnaryPred(p, ctx);
             case "Binary_Pred" -> translateBinaryPred(p, ctx);
             case "Quantified_Pred" -> translateQuantifiedPred(p, ctx);
-            default -> "";
+            default -> Unsupported.marker(ln);
         };
     }
 
@@ -323,6 +350,9 @@ public final class BxmlPredicateToAcsl {
                     && BxmlExpressionToAcsl.isSetValued(rightEl, ctx)) {
                 return "!equals(" + left + ", " + right + ")";
             }
+        }
+        if (!java.util.Set.of("!=", "<", "<=", ">", ">=").contains(op)) {
+            return Unsupported.marker("comparacao " + op);
         }
         return "(" + left + " " + op + " " + right + ")";
     }
@@ -518,7 +548,7 @@ public final class BxmlPredicateToAcsl {
             if ("NAT".equals(right)) return "belongs(" + left + ", NAT)";
             if ("BOOL".equals(right)) return "belongs(" + left + ", BOOL)";
             if ("INT".equals(right)) return "belongs(" + left + ", INT)";
-            return "(" + left + " /* : " + right + " */)";
+            return Unsupported.marker(left + " : " + right);
         }
         return "belongs(" + left + ", " + right + ")";
     }
@@ -667,8 +697,20 @@ public final class BxmlPredicateToAcsl {
             if (part != null && !part.isBlank()) parts.add(part);
         }
         if (parts.isEmpty()) return "";
+        // Uma parte sem tradução numa disjunção deixaria o "ou" mais forte que o B: a unidade toda
+        // fica de fora (AVISO).
+        if ("or".equals(op) && parts.size() < countPredChildren(np)) return Unsupported.marker("parte de um or");
         if ("or".equals(op)) return String.join(" || ", parts);
         return String.join(" && ", parts);
+    }
+
+    private static int countPredChildren(Element np) {
+        int count = 0;
+        NodeList nl = np.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            if (nl.item(i) instanceof Element e && !"Attr".equals(e.getLocalName())) count++;
+        }
+        return count;
     }
 
     private static String translateUnaryPred(Element up, BxmlTranslateContext ctx) {
@@ -677,7 +719,7 @@ public final class BxmlPredicateToAcsl {
         if (child == null) return "";
         String c = translatePred(child, ctx);
         if ("not".equals(op)) return "!(" + c + ")";
-        return c;
+        return Unsupported.marker("Unary_Pred " + op);
     }
 
     private static String translateBinaryPred(Element bp, BxmlTranslateContext ctx) {
@@ -688,7 +730,7 @@ public final class BxmlPredicateToAcsl {
         String b = translatePred(pair[1], ctx);
         if ("=>".equals(op)) return "(" + a + " ==> " + b + ")";
         if ("<=>".equals(op)) return "(" + a + " <==> " + b + ")";
-        return "(" + a + " " + op + " " + b + ")";
+        return Unsupported.marker("Binary_Pred " + op);
     }
 
     private static boolean isPrimitiveTypeName(String right) {
@@ -851,11 +893,11 @@ public final class BxmlPredicateToAcsl {
                 varDecls.add(quantifiedBinderType(bodyEl, e, ctx) + " " + e.getAttribute("value"));
             }
         }
-        if (varDecls.isEmpty()) return "/* quantified pred */";
+        if (varDecls.isEmpty()) return Unsupported.marker("quantificador sem variaveis ou corpo");
 
-        if (bodyEl == null) return "/* quantified pred */";
+        if (bodyEl == null) return Unsupported.marker("quantificador sem variaveis ou corpo");
         Element bodyPred = BxmlDomUtils.firstPredChild(bodyEl);
-        if (bodyPred == null) return "/* quantified pred */";
+        if (bodyPred == null) return Unsupported.marker("quantificador sem variaveis ou corpo");
 
         if ("#".equals(type) && varNames.size() == 1) {
             String letForm = tryExistsLetElimination(varNames.get(0), bodyPred, ctx);

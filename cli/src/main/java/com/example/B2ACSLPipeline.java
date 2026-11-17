@@ -138,12 +138,13 @@ public final class B2ACSLPipeline {
             BxmlImportsGraph importsGraph,
             List<Path> cFiles,
             List<String> specificationUsedTypes,
-            String projectName) {
+            String projectName,
+            List<String> warnings) {
 
         static GenerationResult failed(int exitCode, Path bdp) {
             return new GenerationResult(
                     exitCode, bdp, null, null, List.of(), List.of(), null, null, List.of(), List.of(),
-                    inferProjectNameFromBdp(bdp));
+                    inferProjectNameFromBdp(bdp), com.example.bxml.TranslationWarnings.all());
         }
     }
 
@@ -233,7 +234,20 @@ public final class B2ACSLPipeline {
      *
      * @param bdpPath Caminho da pasta bdp (contém os .bxml)
      */
+    /**
+     * Unidades omitidas por construções sem tradução ({@link com.example.bxml.Unsupported}), uma
+     * linha {@code AVISO: <mensagem>} cada, com o mesmo texto do B2ACSLRules.
+     */
+    private static List<String> printTranslationWarnings() {
+        List<String> warnings = com.example.bxml.TranslationWarnings.all();
+        for (String w : warnings) {
+            System.err.println("AVISO: " + w);
+        }
+        return warnings;
+    }
+
     public static GenerationResult generate(Path bdpPath) throws Exception {
+        com.example.bxml.TranslationWarnings.reset();
         Path bdp = bdpPath.toAbsolutePath().normalize();
         if (!Files.isDirectory(bdp)) {
             System.err.println("[B2ACSL] Caminho inválido (não é diretório): " + bdp);
@@ -585,7 +599,8 @@ public final class B2ACSLPipeline {
                     importsGraph,
                     cFiles,
                     specificationUsedTypes,
-                    inferProjectNameFromBdp(bdp));
+                    inferProjectNameFromBdp(bdp),
+                    printTranslationWarnings());
         } finally {
         }
     }

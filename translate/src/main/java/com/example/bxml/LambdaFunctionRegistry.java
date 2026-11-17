@@ -125,6 +125,11 @@ public final class LambdaFunctionRegistry {
             List<String> freeVarNames, List<String> freeVarTypes, List<String> boundVarNames,
             String body, String returnType, String guard, boolean sequenceBuilder,
             String bodyForLoPlusK) {
+        if (Unsupported.in(body) || Unsupported.in(guard) || Unsupported.in(bodyForLoPlusK)) {
+            // definição sem tradução: nada é registado; o marcador no lugar do nome derruba a
+            // unidade que chama a lambda (AVISO na montagem dela)
+            return Unsupported.marker("corpo de lambda");
+        }
         LambdaEntry definition =
                 new LambdaEntry(
                         "",

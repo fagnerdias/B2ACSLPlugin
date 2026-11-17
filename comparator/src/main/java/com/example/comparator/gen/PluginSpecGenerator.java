@@ -45,7 +45,7 @@ public final class PluginSpecGenerator implements SpecGenerator {
                     g.cFiles(),
                     g.specificationUsedTypes(),
                     SpecDiff.specFiles(g.cDir()).stream().map(p -> p.getFileName().toString()).toList(),
-                    List.of(),
+                    g.warnings(),
                     null);
         } catch (Exception e) {
             return GeneratedSpec.failed("GENERATION_ERROR", -1, elapsedMs(start), List.of(), e.toString());

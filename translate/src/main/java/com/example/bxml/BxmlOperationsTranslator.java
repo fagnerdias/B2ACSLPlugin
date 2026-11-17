@@ -473,6 +473,7 @@ public final class BxmlOperationsTranslator {
 
             List<String> ensures = new ArrayList<>();
             BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
+            dropBodyEnsuresIfUnsupported(ensures, declOp);
             applyStarPrefixToEnsures(ensures, outputParams);
 
             Set<String> assignedLhs = new LinkedHashSet<>();
@@ -611,6 +612,18 @@ public final class BxmlOperationsTranslator {
         return new OperationRequiresResult(requires, funcTypedOutputs);
     }
 
+    /**
+     * Corpo com construção sem tradução ({@link Unsupported}): como o B2ACSLRules, nenhum ensures do
+     * corpo (o assigns e o invariante ficam), com AVISO.
+     */
+    static void dropBodyEnsuresIfUnsupported(List<String> ensures, Element op) {
+        if (ensures.stream().anyMatch(Unsupported::in)) {
+            ensures.clear();
+            TranslationWarnings.add(TranslationWarnings.component(op) + "." + op.getAttribute("name")
+                    + ": corpo nao traduzido para ensures (linha " + TranslationWarnings.line(op) + ")");
+        }
+    }
+
     private static OperationEnsuresResult buildEnsuresForOperation(
             Element child,
             BxmlTranslateContext opCtx,
@@ -621,6 +634,7 @@ public final class BxmlOperationsTranslator {
         List<String> ensures = new ArrayList<>();
         if (body != null) {
             BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, opCtx);
+            dropBodyEnsuresIfUnsupported(ensures, child);
         }
         applyStarPrefixToEnsures(ensures, outputParams);
         // Antes de rewriteEnsuresBoolOutputEquality (que só troca o LHS "*p" por "(integer)(*p !=
