@@ -336,6 +336,13 @@ public final class BxmlOperationsTranslator {
             GhostSlugInfo ghostInfo =
                     computeGhostSlugInfo(child, opName, useGhostAbstraction, abstractVariableNames);
             String ghostSlug = ghostInfo.ghostSlug();
+            // ANY sem tradução que não altera variável abstrata: sem contrato ghost (nem a função no
+            // ghost_operations.ci, ver GhostOperationsCiGenerator), como o B2ACSLRules. Antes ficava
+            // "assert ghost__op" virando chamada a uma função ghost que não chegava ao merged_code.c
+            // (damas: visao_adversario).
+            if (ensuresResult.bodyUnsupported() && !ghostInfo.assignsAbstract()) {
+                ghostSlug = "";
+            }
             boolean assignsAbstract = ghostInfo.assignsAbstract();
             List<String> ghostBehaviorArgs = ghostInfo.ghostBehaviorArgs();
 
@@ -375,6 +382,10 @@ public final class BxmlOperationsTranslator {
 
             connectionConcreteAssigns =
                     mergeCalledOperationAssigns(connectionConcreteAssigns, importedOpAssigns, implOp);
+            connectionConcreteAssigns =
+                    addOwnConcreteVariableAssigns(
+                            connectionConcreteAssigns, child, implOp, rootAbstractMachineName, machineEl,
+                            mergedRefinementChain, opCtx, varRhsOverrides, bxmlDirectory);
 
             // Becomes_In (v :: S) compila para rand() → Frama-C exige __fc_random_counter no assigns.
             // Apenas o corpo da implementação é compilado para C; a abstrata pode ter Becomes_In
@@ -473,6 +484,7 @@ public final class BxmlOperationsTranslator {
 
             List<String> ensures = new ArrayList<>();
             BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
+            dropBodyEnsuresIfUnsupported(ensures, declOp);
             applyStarPrefixToEnsures(ensures, outputParams);
 
             Set<String> assignedLhs = new LinkedHashSet<>();
@@ -538,7 +550,8 @@ public final class BxmlOperationsTranslator {
 
     private record OperationRequiresResult(List<String> requires, Set<String> funcTypedOutputs) {}
 
-    private record OperationEnsuresResult(List<String> ensures, List<String> bodyEnsuresOnly) {}
+    private record OperationEnsuresResult(
+            List<String> ensures, List<String> bodyEnsuresOnly, boolean bodyUnsupported) {}
 
     private record GhostSlugInfo(
             String ghostSlug, boolean assignsAbstract, List<String> ghostBehaviorArgs) {}
@@ -611,6 +624,20 @@ public final class BxmlOperationsTranslator {
         return new OperationRequiresResult(requires, funcTypedOutputs);
     }
 
+    /**
+     * Corpo com construção sem tradução ({@link Unsupported}): como o B2ACSLRules, nenhum ensures do
+     * corpo (o assigns e o invariante ficam), com AVISO.
+     */
+    static boolean dropBodyEnsuresIfUnsupported(List<String> ensures, Element op) {
+        if (ensures.stream().anyMatch(Unsupported::in)) {
+            ensures.clear();
+            TranslationWarnings.add(TranslationWarnings.component(op) + "." + op.getAttribute("name")
+                    + ": corpo nao traduzido para ensures (linha " + TranslationWarnings.line(op) + ")");
+            return true;
+        }
+        return false;
+    }
+
     private static OperationEnsuresResult buildEnsuresForOperation(
             Element child,
             BxmlTranslateContext opCtx,
@@ -619,8 +646,10 @@ public final class BxmlOperationsTranslator {
             Set<String> funcTypedOutputs,
             List<String> invariantPredicateNames) {
         List<String> ensures = new ArrayList<>();
+        boolean bodyUnsupported = false;
         if (body != null) {
             BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, opCtx);
+            bodyUnsupported = dropBodyEnsuresIfUnsupported(ensures, child);
         }
         applyStarPrefixToEnsures(ensures, outputParams);
         // Antes de rewriteEnsuresBoolOutputEquality (que só troca o LHS "*p" por "(integer)(*p !=
@@ -664,7 +693,7 @@ public final class BxmlOperationsTranslator {
         for (String inv : invariantPredicateNames) {
             ensures.add(inv);
         }
-        return new OperationEnsuresResult(ensures, bodyEnsuresOnly);
+        return new OperationEnsuresResult(ensures, bodyEnsuresOnly, bodyUnsupported);
     }
 
     /**
@@ -853,6 +882,38 @@ public final class BxmlOperationsTranslator {
             }
         }
         return connectionConcreteAssigns;
+    }
+
+    /**
+     * Variáveis concretas que a operação escreve e que nenhum outro caminho do assigns cobre:
+     * as CONCRETE_VARIABLES da abstração atribuídas pela operação abstrata, e as da implementação
+     * atribuídas pela operação da implementação (JogoDados.lancar: semente). Ambas são globais C
+     * {@code Raiz__v}; sem elas, o assigns saía {@code \\nothing} ou incompleto.
+     */
+    private static List<String> addOwnConcreteVariableAssigns(
+            List<String> current, Element absOp, Element implOp, String rootAbstractMachineName,
+            Element machineEl, List<Element> mergedRefinementChain, BxmlTranslateContext ctx,
+            Map<String, String> varRhsOverrides, Path bxmlDirectory) {
+        if (rootAbstractMachineName == null || rootAbstractMachineName.isBlank() || machineEl == null) {
+            return current;
+        }
+        List<String> extra = new ArrayList<>();
+        Set<String> own = new LinkedHashSet<>(GhostOperationsCiGenerator.listConcreteVariableNames(machineEl));
+        if (varRhsOverrides != null) own.removeAll(varRhsOverrides.keySet());
+        extra.addAll(ConcreteAssignTargetResolver.ownConcreteAssignTargets(
+                rootAbstractMachineName, machineEl,
+                GhostContractPredicates.assignedAbstractVariablesInOperation(absOp, own), ctx, bxmlDirectory));
+        if (implOp != null && mergedRefinementChain != null) {
+            for (Element mel : mergedRefinementChain) {
+                if (!BxmlMachineVariables.isImplementationMachine(mel)) continue;
+                Set<String> implVars = new LinkedHashSet<>(GhostOperationsCiGenerator.listConcreteVariableNames(mel));
+                extra.addAll(ConcreteAssignTargetResolver.ownConcreteAssignTargets(
+                        rootAbstractMachineName, mel,
+                        GhostContractPredicates.assignedAbstractVariablesInOperation(implOp, implVars),
+                        ctx, bxmlDirectory));
+            }
+        }
+        return ConcreteAssignTargetResolver.mergeAssignTargets(current, extra);
     }
 
     private static List<String> addRandomCounterAssignIfNeeded(

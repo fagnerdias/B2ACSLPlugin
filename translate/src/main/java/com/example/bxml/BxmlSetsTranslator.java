@@ -772,6 +772,34 @@ public final class BxmlSetsTranslator {
     }
 
     /**
+     * Nomes B que são globais lógicos vindos das máquinas vistas/importadas (transitivamente):
+     * constantes concretas e abstratas e conjuntos declarados. Uma função lambda gerada lê-os pelo
+     * nome global, em vez de recebê-los como parâmetro (um conjunto como {@code uint32_t} usado
+     * como nome de parâmetro colide com o typedef C e é erro de sintaxe no -acsl-import).
+     */
+    public static Set<String> listDependencyGlobalLogicNames(
+            Element machineEl, List<Element> mergedMachineElements, Path bxmlDirectory,
+            BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
+        if (machineEl == null || bxmlDirectory == null || !Files.isDirectory(bxmlDirectory)) {
+            return Set.of();
+        }
+        Set<String> out = new LinkedHashSet<>(listSeenMachineConcreteConstantNames(
+                machineEl, mergedMachineElements, bxmlDirectory, seesGraph, importsGraph));
+        for (String depName : dependencyMachineNamesForTranslation(
+                machineEl, mergedMachineElements, seesGraph, importsGraph)) {
+            Path p = bxmlDirectory.resolve(depName + ".bxml");
+            if (!Files.isRegularFile(p)) {
+                continue;
+            }
+            try {
+                out.addAll(declaredSetNames(BxmlDocumentLoader.parseMachineElement(p)));
+            } catch (Exception ignored) {
+            }
+        }
+        return out;
+    }
+
+    /**
      * Tipo lógico ACSL (ex. {@code integer}, {@code Set<integer>}) de cada constante concreta
      * listada por {@link #listSeenMachineConcreteConstantNames}, resolvido a partir do PRÓPRIO
      * {@code typref} da máquina vista — {@code typref} é um índice local à tabela {@code

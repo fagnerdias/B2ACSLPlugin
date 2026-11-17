@@ -61,7 +61,7 @@ final class GeneralizedQuantifierTranslator {
             return translateUnionInterExp(qe, setOp, ctx);
         }
         if (!"%".equals(type)) {
-            return "/* TODO: Quantified_Exp type=" + type + " */";
+            return Unsupported.marker("Quantified_Exp " + type);
         }
 
         // 1. Variáveis ligadas pelo %
@@ -77,7 +77,7 @@ final class GeneralizedQuantifierTranslator {
                 boundVarNames.add(idEl.getAttribute("value"));
             }
         }
-        if (boundVarNames.isEmpty()) return "/* TODO: lambda vars */";
+        if (boundVarNames.isEmpty()) return Unsupported.marker("lambda sem variaveis");
 
         // 2. Guarda (domínio) do % — lado esquerdo do "|" em "% x.(P | E)". B trata % como função
         // PARCIAL: fora de P a lambda é indefinida, por isso a guarda tem de restringir a definição
@@ -87,9 +87,9 @@ final class GeneralizedQuantifierTranslator {
 
         // 3. Corpo da lambda
         Element bodyEl = BxmlExpressionToAcsl.childByLocalName(qe, "Body");
-        if (bodyEl == null) return "/* TODO: lambda body */";
+        if (bodyEl == null) return Unsupported.marker("lambda sem corpo");
         Element bodyExp = BxmlExpressionToAcsl.firstExpChild(bodyEl);
-        if (bodyExp == null) return "/* TODO: lambda body */";
+        if (bodyExp == null) return Unsupported.marker("lambda sem corpo");
 
         // 4. Classificação: sequência (caso a/b) vs mapa (caso c) — ver javadoc. Domínio-intervalo
         // por si só não basta: se o alvo (Id do lado esquerdo de "Id = %...") tiver uma tipagem B
@@ -457,24 +457,24 @@ final class GeneralizedQuantifierTranslator {
             }
         }
         if (boundVarNames.isEmpty()) {
-            return "/* TODO(b2acsl): " + opBSyntax(op) + " sem variáveis ligadas */";
+            return Unsupported.marker(opBSyntax(op) + " sem variaveis ligadas");
         }
 
         Element guardEl = BxmlExpressionToAcsl.childByLocalName(qe, "Pred");
         Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
 
         Element bodyEl = BxmlExpressionToAcsl.childByLocalName(qe, "Body");
-        if (bodyEl == null) return "/* TODO(b2acsl): " + opBSyntax(op) + " sem corpo */";
+        if (bodyEl == null) return Unsupported.marker(opBSyntax(op) + " sem corpo");
         Element bodyExp = BxmlExpressionToAcsl.firstExpChild(bodyEl);
-        if (bodyExp == null) return "/* TODO(b2acsl): " + opBSyntax(op) + " sem corpo */";
+        if (bodyExp == null) return Unsupported.marker(opBSyntax(op) + " sem corpo");
 
         SigmaFunctionRegistry registry = ctx.sigmaRegistry();
         if (registry == null) {
-            return "/* TODO(b2acsl): " + opBSyntax(op) + " sem registro no contexto */";
+            return Unsupported.noRegistry(opBSyntax(op));
         }
 
         if (boundVarNames.size() > 2) {
-            return "/* TODO(b2acsl): " + opBSyntax(op) + " com mais de 2 variáveis ligadas não suportado */";
+            return Unsupported.marker(opBSyntax(op) + " com mais de 2 variaveis ligadas");
         }
         if (boundVarNames.size() == 2) {
             return translateNestedGeneralizedSum(
@@ -484,7 +484,7 @@ final class GeneralizedQuantifierTranslator {
         String boundVarName = boundVarNames.get(0);
         DomainClassification dc = classifyDomain(guardPred, boundVarName, ctx);
         if (dc == null) {
-            return "/* TODO(b2acsl): domínio de " + opBSyntax(op) + "(" + boundVarName + ") não reconhecido */";
+            return Unsupported.marker("dominio de " + opBSyntax(op) + "(" + boundVarName + ")");
         }
         String sourceComment = describeGeneralizedSum(op, boundVarName, guardPred, bodyExp, ctx);
         if (dc.kind() == DomainKind.SET) {
@@ -746,9 +746,9 @@ final class GeneralizedQuantifierTranslator {
             rest.add(c);
         }
         if (outerBounds == null || innerBounds == null || !rest.isEmpty()) {
-            return "/* TODO(b2acsl): domínio de " + opBSyntax(op) + "(" + outerVar + "," + innerVar
+            return Unsupported.marker("domínio de " + opBSyntax(op) + "(" + outerVar + "," + innerVar
                     + ") não reconhecido — suportado apenas '" + outerVar + ":lo..hi & " + innerVar
-                    + ":lo..hi' (sem filtro extra) */";
+                    + ":lo..hi' (sem filtro extra)");
         }
 
         String bodyStr = BxmlExpressionToAcsl.translate(bodyExp, ctx.forHelperBody());
@@ -819,41 +819,41 @@ final class GeneralizedQuantifierTranslator {
             }
         }
         if (boundVarNames.isEmpty()) {
-            return "/* TODO(b2acsl): " + unionInterOpName(op) + " sem variáveis ligadas */";
+            return Unsupported.marker(unionInterOpName(op) + " sem variaveis ligadas");
         }
 
         Element guardEl = BxmlExpressionToAcsl.childByLocalName(qe, "Pred");
         Element guardPred = guardEl != null ? BxmlExpressionToAcsl.firstExpChild(guardEl) : null;
 
         Element bodyEl = BxmlExpressionToAcsl.childByLocalName(qe, "Body");
-        if (bodyEl == null) return "/* TODO(b2acsl): " + unionInterOpName(op) + " sem corpo */";
+        if (bodyEl == null) return Unsupported.marker(unionInterOpName(op) + " sem corpo");
         Element bodyExp = BxmlExpressionToAcsl.firstExpChild(bodyEl);
-        if (bodyExp == null) return "/* TODO(b2acsl): " + unionInterOpName(op) + " sem corpo */";
+        if (bodyExp == null) return Unsupported.marker(unionInterOpName(op) + " sem corpo");
 
         // isSetValued (genérico) só reconhece operadores ESTRUTURAIS de conjunto (união/interseção/
         // …), não uma aplicação funcional cujo CODOMÍNIO é um conjunto (ex.: player_islands(pp) :
         // Set<integer>, via player_islands : Relation<integer, Set<integer>>) — por isso a
         // verificação aqui é pelo TIPO (typref do próprio corpo), não pela forma estrutural.
         if (!isUnionInterBodySetValued(bodyExp, ctx)) {
-            return "/* TODO(b2acsl): " + unionInterOpName(op)
-                    + " com corpo não set-valued — construção B mal tipada, não improvisado */";
+            return Unsupported.marker("" + unionInterOpName(op)
+                    + " com corpo não set-valued — construção B mal tipada, não improvisado");
         }
 
         UnionInterFunctionRegistry registry = ctx.unionInterRegistry();
         if (registry == null) {
-            return "/* TODO(b2acsl): " + unionInterOpName(op) + " sem registro no contexto */";
+            return Unsupported.noRegistry(unionInterOpName(op));
         }
 
         if (boundVarNames.size() > 1) {
-            return "/* TODO(b2acsl): " + unionInterOpName(op)
-                    + " com mais de 1 variável ligada não suportado */";
+            return Unsupported.marker("" + unionInterOpName(op)
+                    + " com mais de 1 variável ligada não suportado");
         }
 
         String boundVarName = boundVarNames.get(0);
         DomainClassification dc = classifyDomain(guardPred, boundVarName, ctx);
         if (dc == null) {
-            return "/* TODO(b2acsl): domínio de " + unionInterOpName(op) + "(" + boundVarName
-                    + ") não reconhecido */";
+            return Unsupported.marker("domínio de " + unionInterOpName(op) + "(" + boundVarName
+                    + ") não reconhecido");
         }
         String elementType = elementTypeOfSetValuedExp(bodyExp, ctx);
         String sourceComment = describeUnionInter(op, boundVarName, guardPred, bodyExp, ctx);
@@ -977,8 +977,8 @@ final class GeneralizedQuantifierTranslator {
         // real). Verificar a MESMA condição aqui, antes de alocar o nome, evita o símbolo pendurado —
         // troca por um TODO visível, igual ao resto deste ficheiro para formas não suportadas.
         if (op == UnionInterFunctionRegistry.Op.INTER && !hasUniverse && filterForLo != null) {
-            return "/* TODO(b2acsl): INTER com filtro e sem universo tipado — não suportado (ver "
-                    + "UnionInterFunctionRegistry#appendIntervalEntry §3b) */";
+            return Unsupported.marker("INTER com filtro e sem universo tipado — não suportado (ver "
+                    + "UnionInterFunctionRegistry#appendIntervalEntry §3b)");
         }
         String name = registry.registerInterval(
                 op, freeVarNames, freeVarTypes, sourceComment, elementType, bodyForLo, bodyForHi,
@@ -1040,6 +1040,8 @@ final class GeneralizedQuantifierTranslator {
         allIds.remove(boundVarName);
         allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
+        allIds.removeAll(ctx.seenGlobalLogicNames());
+        allIds.removeAll(ctx.enumValueRenames().keySet());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
@@ -1052,7 +1054,7 @@ final class GeneralizedQuantifierTranslator {
 
         LambdaFunctionRegistry registry = ctx.lambdaRegistry();
         if (registry == null) {
-            return "/* TODO: sequence lambda sem registro no contexto */";
+            return Unsupported.noRegistry("lambda sequencia");
         }
         String name = registry.registerSequenceBuilder(
                 freeVarNames, freeVarTypes, "integer", bodyForLo, bodyForLoPlusK);
@@ -1083,7 +1085,7 @@ final class GeneralizedQuantifierTranslator {
         Element scanRoot; // elemento cuja sub-árvore será varrida para IDs livres
         if (isBooleanBody) {
             Element innerPred = BxmlExpressionToAcsl.firstExpChild(bodyExp);
-            if (innerPred == null) return "/* TODO: lambda body */";
+            if (innerPred == null) return Unsupported.marker("lambda sem corpo");
             bodyStr = BxmlPredicateToAcsl.translatePropertyPred(innerPred, ctx.forHelperBody());
             scanRoot = innerPred;
         } else {
@@ -1106,6 +1108,10 @@ final class GeneralizedQuantifierTranslator {
         // o axioma _def não tem rótulo e valeria para todo estado de memória.
         allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
+        // Constantes e conjuntos das máquinas vistas e valores enumerados: globais lógicos, lidos
+        // pelo nome (um conjunto como uint32_t não pode nem ser nome de parâmetro: é typedef C).
+        allIds.removeAll(ctx.seenGlobalLogicNames());
+        allIds.removeAll(ctx.enumValueRenames().keySet());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();

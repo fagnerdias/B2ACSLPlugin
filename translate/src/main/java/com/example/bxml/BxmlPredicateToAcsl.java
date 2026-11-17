@@ -13,10 +13,12 @@ import org.w3c.dom.NodeList;
  * <p>{@code v : iseq(T)} → {@code iSeq}; {@code v : seq(T)} → {@code belongs(v, seq(T))} (mesmo
  * padrão de {@code POW}/{@code pow_set} abaixo — {@code is_seq_of} fica só como implementação
  * interna do axioma-ponte {@code seq_def}, nunca emitido diretamente);
- * {@code ss : POW(S)} → {@code belongs(ss, pow_set(S))}; {@code ss : FIN(ss)} → {@code is_finite(ss)};
+ * {@code ss : POW(S)} → {@code belongs(ss, pow_set(S))};
+ * {@code ss : FIN(S)} → {@code is_finite(ss) && inclusion(ss, S)} ({@code ss : FIN(ss)}, a forma
+ * "ss é finito", → só {@code is_finite(ss)});
  * {@code ss : POW1(S)} → {@code belongs(ss, pow_set(S)) && card(ss) > 0} (mesma base de POW, mais
- * não-vazio via {@code card}); {@code ss : FIN1(S)} → {@code is_finite(ss) && card(ss) > 0}
- * (mesma base de FIN);
+ * não-vazio via {@code card}); {@code ss : FIN1(S)} → {@code is_finite(ss) && inclusion(ss, S) &&
+ * card(ss) > 0} (mesma base de FIN; a forma e a ordem são as do B2ACSLRules);
  * {@code x : BOOL} → {@code belongs(x, BOOL)}; {@code x : NAT} → {@code belongs(x, NAT)};
  * {@code x : INT} → {@code belongs(x, INT)};
  * {@code x /: s} → {@code not_belongs(x, s)}; {@code ss <: tt} → {@code inclusion(ss, tt)};
@@ -37,7 +39,19 @@ public final class BxmlPredicateToAcsl {
         Element first = BxmlDomUtils.firstPredChild(predParent);
         if (first != null) {
             String t = translatePred(first, ctx);
-            if (!t.isBlank()) out.add(t);
+            if (Unsupported.in(t)) {
+                // Como o B2ACSLRules: um requires por conjunção traduzível, AVISO pelo resto.
+                for (Element c : topLevelConjunctElements(predParent)) {
+                    String ct = translatePred(c, ctx);
+                    if (!ct.isBlank() && !Unsupported.in(ct)) out.add(ct);
+                }
+                Node op = predParent.getParentNode();
+                String opName = op instanceof Element e ? e.getAttribute("name") : "?";
+                TranslationWarnings.add(TranslationWarnings.component(predParent) + "." + opName
+                        + ": pre-condicao traduzida so em parte (linha " + TranslationWarnings.line(predParent) + ")");
+            } else if (!t.isBlank()) {
+                out.add(t);
+            }
         }
         return out;
     }
@@ -62,14 +76,56 @@ public final class BxmlPredicateToAcsl {
      */
     public static List<String> translateInvariantConjuncts(Element invariantEl, BxmlTranslateContext ctx) {
         List<String> out = new ArrayList<>();
-        Element p = BxmlDomUtils.firstPredChild(invariantEl);
-        collectTopLevelAndConjuncts(p, ctx, out);
+        for (Element c : topLevelConjunctElements(invariantEl)) {
+            String t = translatePred(c, ctx);
+            if (t.isBlank()) continue;
+            if (Unsupported.in(t)) {
+                // Como o B2ACSLRules: a conjunção fica de fora (a numeração _invariant_k segue as que
+                // ficam, em todos os contextos: o marcador não depende do contexto), com AVISO.
+                TranslationWarnings.add(invariantWarning(invariantEl, c));
+                continue;
+            }
+            out.add(t);
+        }
         return out;
     }
 
-    /** Achata {@code Nary_Pred op='&'} de topo (recursivamente); outros nós viram uma folha só. */
-    private static void collectTopLevelAndConjuncts(
-            Element p, BxmlTranslateContext ctx, List<String> out) {
+    /** {@code C: invariante nao traduzido (linha N)} ou {@code M.op: invariante de laco nao traduzido (linha N)}. */
+    private static String invariantWarning(Element invariantEl, Element conjunct) {
+        String line = TranslationWarnings.line(conjunct);
+        String comp = TranslationWarnings.component(invariantEl);
+        Node parent = invariantEl.getParentNode();
+        if (parent instanceof Element pe && "While".equals(pe.getLocalName())) {
+            String unit = "INITIALISATION";
+            for (Node n = pe; n instanceof Element e; n = n.getParentNode()) {
+                if ("Operation".equals(e.getLocalName())) {
+                    unit = e.getAttribute("name");
+                    break;
+                }
+            }
+            return comp + "." + unit + ": invariante de laco nao traduzido (linha " + line + ")";
+        }
+        return comp + ": invariante nao traduzido (linha " + line + ")";
+    }
+
+    /**
+     * Elementos dos conjunctos de topo de {@code <Invariant>} (mesma divisão de {@link
+     * #translateInvariantConjuncts}, sem traduzir).
+     */
+    public static List<Element> topLevelConjunctElements(Element invariantEl) {
+        List<Element> out = new ArrayList<>();
+        collectTopLevelAndConjunctElements(BxmlDomUtils.firstPredChild(invariantEl), out);
+        return out;
+    }
+
+    /** Conjunctos de topo do próprio predicado {@code p} ({@code P & Q & R} → {@code [P, Q, R]}). */
+    public static List<Element> conjunctsOf(Element p) {
+        List<Element> out = new ArrayList<>();
+        collectTopLevelAndConjunctElements(p, out);
+        return out;
+    }
+
+    private static void collectTopLevelAndConjunctElements(Element p, List<Element> out) {
         if (p == null) return;
         if ("Nary_Pred".equals(p.getLocalName()) && "&".equals(p.getAttribute("op"))) {
             NodeList nl = p.getChildNodes();
@@ -78,12 +134,16 @@ public final class BxmlPredicateToAcsl {
                 if (n.getNodeType() != Node.ELEMENT_NODE) continue;
                 Element e = (Element) n;
                 if ("Attr".equals(e.getLocalName())) continue;
-                collectTopLevelAndConjuncts(e, ctx, out);
+                collectTopLevelAndConjunctElements(e, out);
             }
             return;
         }
-        String t = translatePred(p, ctx);
-        if (!t.isBlank()) out.add(t);
+        out.add(p);
+    }
+
+    /** Traduz um conjuncto já separado por {@link #topLevelConjunctElements}. */
+    public static String translateConjunct(Element conjunct, BxmlTranslateContext ctx) {
+        return translatePred(conjunct, ctx);
     }
 
     /**
@@ -119,7 +179,8 @@ public final class BxmlPredicateToAcsl {
             name = "";
         }
         name = name.trim();
-        Element p0 = BxmlDomUtils.firstPredChild(predParent);
+        // predParent nulo: variável sem predicado de tipagem (ex. a de um LET); só o typref conta.
+        Element p0 = predParent == null ? null : BxmlDomUtils.firstPredChild(predParent);
         Element arrow = p0 != null ? findFunctionArrowRhsForVariable(p0, name) : null;
         if (arrow != null) {
             return functionArrowBinaryToAcslFunctionType(arrow, ctx.types());
@@ -252,7 +313,7 @@ public final class BxmlPredicateToAcsl {
             case "Unary_Pred" -> translateUnaryPred(p, ctx);
             case "Binary_Pred" -> translateBinaryPred(p, ctx);
             case "Quantified_Pred" -> translateQuantifiedPred(p, ctx);
-            default -> "";
+            default -> Unsupported.marker(ln);
         };
     }
 
@@ -291,6 +352,9 @@ public final class BxmlPredicateToAcsl {
                 return "!equals(" + left + ", " + right + ")";
             }
         }
+        if (!java.util.Set.of("!=", "<", "<=", ">", ">=").contains(op)) {
+            return Unsupported.marker("comparacao " + op);
+        }
         return "(" + left + " " + op + " " + right + ")";
     }
 
@@ -313,7 +377,7 @@ public final class BxmlPredicateToAcsl {
             String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
             return translateStructMembership(left, rightEl, ctx);
         }
-        // ss : POW(S) → belongs(ss, pow_set(S)); ss : FIN(ss) → is_finite(ss)
+        // ss : POW(S) → belongs(ss, pow_set(S)); ss : FIN(S) → is_finite(ss) && inclusion(ss, S)
         if ("Unary_Exp".equals(rightEl.getLocalName())) {
             String uop = rightEl.getAttribute("op");
             if ("POW".equals(uop)) {
@@ -322,9 +386,13 @@ public final class BxmlPredicateToAcsl {
                 String setAtom = powDomainSetAtom(inner, ctx);
                 return powSetMembership(left, setAtom);
             }
-            if ("FIN".equals(uop) || "fin".equals(uop)) {
+            // ss : FIN(S) — subconjuntos finitos de S: is_finite(ss) && inclusion(ss, S). A forma
+            // ss : FIN(ss) ("ss é finito", ex. PLAYER : FIN(PLAYER)) fica só is_finite(ss). Compara o
+            // value dos Id do BXML, não o texto traduzido (PLAYER vira RulerOfTheSeas_PLAYER).
+            if (isFinTypingExp(rightEl)) {
                 String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                return "is_finite(" + left + ")";
+                Element inner = BxmlDomUtils.firstNonAttrElementChild(rightEl);
+                return finMembership(left, rightEl, isSameIdentifier(leftEl, inner), ctx);
             }
             // ss : POW1(S) — subconjuntos NÃO-VAZIOS de S (POW menos {}); mesma base de POW
             // (pow_set), acrescida de card(ss) > 0.
@@ -333,12 +401,6 @@ public final class BxmlPredicateToAcsl {
                 Element inner = BxmlDomUtils.firstNonAttrElementChild(rightEl);
                 String setAtom = powDomainSetAtom(inner, ctx);
                 return powSetMembership(left, setAtom) + " && (card(" + left + ") > 0)";
-            }
-            // ss : FIN1(S) — subconjuntos finitos NÃO-VAZIOS de S; mesma base de FIN (is_finite,
-            // domínio S não verificado — idem à limitação já existente em FIN), mais card(ss) > 0.
-            if ("FIN1".equals(uop) || "fin1".equals(uop)) {
-                String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
-                return "is_finite(" + left + ") && (card(" + left + ") > 0)";
             }
             if ("iseq".equals(uop)) {
                 String left = BxmlExpressionToAcsl.translate(leftEl, ctx);
@@ -380,8 +442,8 @@ public final class BxmlPredicateToAcsl {
                 if (setAtom == null) return "";
                 String base = "belongs(" + left + ", seq(" + setAtom + "))";
                 return switch (uop) {
-                    case "seq1" -> base + " && (" + left + " != [| |])";
-                    case "iseq1" -> base + " && (" + left + " != [| |]) && iSeq(" + left + ")";
+                    case "seq1" -> base + " && (" + left + " != \\Nil)";
+                    case "iseq1" -> base + " && (" + left + " != \\Nil) && iSeq(" + left + ")";
                     default -> base + " && iSeq(" + left + ") && equals(sequence_ran(" + left + "), " + setAtom + ")";
                 };
             }
@@ -487,7 +549,7 @@ public final class BxmlPredicateToAcsl {
             if ("NAT".equals(right)) return "belongs(" + left + ", NAT)";
             if ("BOOL".equals(right)) return "belongs(" + left + ", BOOL)";
             if ("INT".equals(right)) return "belongs(" + left + ", INT)";
-            return "(" + left + " /* : " + right + " */)";
+            return Unsupported.marker(left + " : " + right);
         }
         return "belongs(" + left + ", " + right + ")";
     }
@@ -578,11 +640,11 @@ public final class BxmlPredicateToAcsl {
         }
         if (BxmlExpressionToAcsl.isListValued(leftEl, ctx)
                 && BxmlExpressionToAcsl.isRelationOrFunctionValued(rightEl, ctx)) {
-            return "(" + right + " == list_to_function(" + left + "))";
+            return "equals(" + right + ", list_to_function(" + left + "))";
         }
         if (BxmlExpressionToAcsl.isListValued(rightEl, ctx)
                 && BxmlExpressionToAcsl.isRelationOrFunctionValued(leftEl, ctx)) {
-            return "(" + left + " == list_to_function(" + right + "))";
+            return "equals(" + left + ", list_to_function(" + right + "))";
         }
         // V = %x.(x:D | {y|Q}) — lambda "mapa" valorado-em-conjunto (ver
         // BxmlExpressionToAcsl#setValuedMapLambdaPointwiseEquality): V é a relação inteira, o
@@ -636,8 +698,20 @@ public final class BxmlPredicateToAcsl {
             if (part != null && !part.isBlank()) parts.add(part);
         }
         if (parts.isEmpty()) return "";
+        // Uma parte sem tradução numa disjunção deixaria o "ou" mais forte que o B: a unidade toda
+        // fica de fora (AVISO).
+        if ("or".equals(op) && parts.size() < countPredChildren(np)) return Unsupported.marker("parte de um or");
         if ("or".equals(op)) return String.join(" || ", parts);
         return String.join(" && ", parts);
+    }
+
+    private static int countPredChildren(Element np) {
+        int count = 0;
+        NodeList nl = np.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            if (nl.item(i) instanceof Element e && !"Attr".equals(e.getLocalName())) count++;
+        }
+        return count;
     }
 
     private static String translateUnaryPred(Element up, BxmlTranslateContext ctx) {
@@ -646,7 +720,7 @@ public final class BxmlPredicateToAcsl {
         if (child == null) return "";
         String c = translatePred(child, ctx);
         if ("not".equals(op)) return "!(" + c + ")";
-        return c;
+        return Unsupported.marker("Unary_Pred " + op);
     }
 
     private static String translateBinaryPred(Element bp, BxmlTranslateContext ctx) {
@@ -657,7 +731,7 @@ public final class BxmlPredicateToAcsl {
         String b = translatePred(pair[1], ctx);
         if ("=>".equals(op)) return "(" + a + " ==> " + b + ")";
         if ("<=>".equals(op)) return "(" + a + " <==> " + b + ")";
-        return "(" + a + " " + op + " " + b + ")";
+        return Unsupported.marker("Binary_Pred " + op);
     }
 
     private static boolean isPrimitiveTypeName(String right) {
@@ -735,6 +809,37 @@ public final class BxmlPredicateToAcsl {
                 : BxmlExpressionToAcsl.translate(typeArg, ctx);
     }
 
+    /** {@code FIN(S)} ou {@code FIN1(S)}. */
+    static boolean isFinTypingExp(Element e) {
+        if (e == null || !"Unary_Exp".equals(e.getLocalName())) return false;
+        String op = e.getAttribute("op");
+        return "FIN".equalsIgnoreCase(op) || "FIN1".equalsIgnoreCase(op);
+    }
+
+    /**
+     * {@code ss : FIN(S)} → {@code is_finite(ss) && inclusion(ss, S)}; {@code ss : FIN1(S)} →
+     * idem {@code && (card(ss) > 0)} (forma e ordem do B2ACSLRules). Com {@code selfForm}
+     * ({@code ss : FIN(ss)}, "ss é finito") a inclusão sai. Também usado por {@code ss :: FIN(S)}.
+     */
+    static String finMembership(String left, Element finExp, boolean selfForm, BxmlTranslateContext ctx) {
+        Element inner = BxmlDomUtils.firstNonAttrElementChild(finExp);
+        StringBuilder sb = new StringBuilder("is_finite(").append(left).append(")");
+        if (!selfForm) {
+            sb.append(" && inclusion(").append(left).append(", ").append(powDomainSetAtom(inner, ctx)).append(")");
+        }
+        if ("FIN1".equalsIgnoreCase(finExp.getAttribute("op"))) {
+            sb.append(" && (card(").append(left).append(") > 0)");
+        }
+        return sb.toString();
+    }
+
+    /** Os dois elementos são {@code Id} com o mesmo {@code value} (ex. {@code ss : FIN(ss)}). */
+    private static boolean isSameIdentifier(Element a, Element b) {
+        return a != null && b != null
+                && "Id".equals(a.getLocalName()) && "Id".equals(b.getLocalName())
+                && a.getAttribute("value").equals(b.getAttribute("value"));
+    }
+
     /** {@code ss : POW(S)} / {@code ss : POW1(S)} → {@code belongs(ss, pow_set(S))} (set_functions/pow_set.acsl). */
     private static String powSetMembership(String left, String setAtom) {
         return "belongs(" + left + ", pow_set(" + setAtom + "))";
@@ -789,11 +894,11 @@ public final class BxmlPredicateToAcsl {
                 varDecls.add(quantifiedBinderType(bodyEl, e, ctx) + " " + e.getAttribute("value"));
             }
         }
-        if (varDecls.isEmpty()) return "/* quantified pred */";
+        if (varDecls.isEmpty()) return Unsupported.marker("quantificador sem variaveis ou corpo");
 
-        if (bodyEl == null) return "/* quantified pred */";
+        if (bodyEl == null) return Unsupported.marker("quantificador sem variaveis ou corpo");
         Element bodyPred = BxmlDomUtils.firstPredChild(bodyEl);
-        if (bodyPred == null) return "/* quantified pred */";
+        if (bodyPred == null) return Unsupported.marker("quantificador sem variaveis ou corpo");
 
         if ("#".equals(type) && varNames.size() == 1) {
             String letForm = tryExistsLetElimination(varNames.get(0), bodyPred, ctx);

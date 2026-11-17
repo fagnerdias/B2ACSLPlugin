@@ -1,7 +1,9 @@
 package com.example.bxml;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -96,12 +98,27 @@ public final class SigmaFunctionRegistry {
 
     private int counter = 0;
     private final List<Entry> entries = new ArrayList<>();
+    /** Definição (entrada com nome vazio) → nome já dado: o mesmo quantificador traduzido de novo reaproveita a função. */
+    private final Map<Entry, String> namesByDefinition = new HashMap<>();
 
     /** §2/§2b/§4: domínio-intervalo (recursão para SIGMA/PI; declaração+axiomas para MIN/MAX). */
     public String registerInterval(
             Op op, List<String> freeVarNames, List<String> freeVarTypes, String sourceComment,
             String bodyForLo, String bodyForHi, String filterForLo, String filterForHi,
             String congrVarName, String congrVarType) {
+        if (Unsupported.in(bodyForLo) || Unsupported.in(bodyForHi) || Unsupported.in(filterForLo) || Unsupported.in(filterForHi) || Unsupported.in(congrVarName) || Unsupported.in(congrVarType)) {
+            return Unsupported.marker("corpo de " + op.name());
+        }
+        Entry definition = new Entry(
+                "", op, Kind.INTERVAL,
+                List.copyOf(freeVarNames),
+                freeVarTypes == null ? List.of() : List.copyOf(freeVarTypes),
+                sourceComment, bodyForLo, bodyForHi, filterForLo, filterForHi,
+                congrVarName, congrVarType, null, null, null);
+        String existing = namesByDefinition.get(definition);
+        if (existing != null) {
+            return existing;
+        }
         counter++;
         String name = String.format("%s%02d", op.namePrefix, counter);
         entries.add(new Entry(
@@ -110,6 +127,7 @@ public final class SigmaFunctionRegistry {
                 freeVarTypes == null ? List.of() : List.copyOf(freeVarTypes),
                 sourceComment, bodyForLo, bodyForHi, filterForLo, filterForHi,
                 congrVarName, congrVarType, null, null, null));
+        namesByDefinition.put(definition, name);
         return name;
     }
 
@@ -127,6 +145,19 @@ public final class SigmaFunctionRegistry {
     public String registerSet(
             Op op, List<String> freeVarNames, List<String> freeVarTypes, String sourceComment,
             String boundVarType, String bodyForX, String domainExprText) {
+        if (Unsupported.in(boundVarType) || Unsupported.in(bodyForX) || Unsupported.in(domainExprText)) {
+            return Unsupported.marker("corpo de " + op.name());
+        }
+        Entry definition = new Entry(
+                "", op, Kind.SET,
+                List.copyOf(freeVarNames),
+                freeVarTypes == null ? List.of() : List.copyOf(freeVarTypes),
+                sourceComment, null, null, null, null, null, null,
+                boundVarType, bodyForX, domainExprText);
+        String existing = namesByDefinition.get(definition);
+        if (existing != null) {
+            return existing;
+        }
         counter++;
         String name = String.format("%s%02d", op.namePrefix, counter);
         entries.add(new Entry(
@@ -135,6 +166,7 @@ public final class SigmaFunctionRegistry {
                 freeVarTypes == null ? List.of() : List.copyOf(freeVarTypes),
                 sourceComment, null, null, null, null, null, null,
                 boundVarType, bodyForX, domainExprText));
+        namesByDefinition.put(definition, name);
         return name;
     }
 
@@ -371,7 +403,7 @@ public final class SigmaFunctionRegistry {
                     .append(op.combine(name + "(" + fa + "s)", name + "(" + fa + "t)")).append(";\n\n");
         }
 
-        sb.append("  /* TODO(b2acsl): finitude de ").append(e.domainExprText())
+        sb.append("  /* nota: finitude de ").append(e.domainExprText())
                 .append(" garantida pela tipagem de B (SIGMA/PI/MIN/MAX exigem domínio finito); se o WP ")
                 .append("não a derivar do contexto, adicione 'requires is_finite(")
                 .append(e.domainExprText()).append(");' à operação que usa ").append(name).append(" */\n\n");

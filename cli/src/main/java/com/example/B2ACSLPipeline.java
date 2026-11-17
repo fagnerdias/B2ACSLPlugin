@@ -6,8 +6,11 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -138,12 +141,13 @@ public final class B2ACSLPipeline {
             BxmlImportsGraph importsGraph,
             List<Path> cFiles,
             List<String> specificationUsedTypes,
-            String projectName) {
+            String projectName,
+            List<String> warnings) {
 
         static GenerationResult failed(int exitCode, Path bdp) {
             return new GenerationResult(
                     exitCode, bdp, null, null, List.of(), List.of(), null, null, List.of(), List.of(),
-                    inferProjectNameFromBdp(bdp));
+                    inferProjectNameFromBdp(bdp), com.example.bxml.TranslationWarnings.all());
         }
     }
 
@@ -233,7 +237,20 @@ public final class B2ACSLPipeline {
      *
      * @param bdpPath Caminho da pasta bdp (contém os .bxml)
      */
+    /**
+     * Unidades omitidas por construções sem tradução ({@link com.example.bxml.Unsupported}), uma
+     * linha {@code AVISO: <mensagem>} cada, com o mesmo texto do B2ACSLRules.
+     */
+    private static List<String> printTranslationWarnings() {
+        List<String> warnings = com.example.bxml.TranslationWarnings.all();
+        for (String w : warnings) {
+            System.err.println("AVISO: " + w);
+        }
+        return warnings;
+    }
+
     public static GenerationResult generate(Path bdpPath) throws Exception {
+        com.example.bxml.TranslationWarnings.reset();
         Path bdp = bdpPath.toAbsolutePath().normalize();
         if (!Files.isDirectory(bdp)) {
             System.err.println("[B2ACSL] Caminho inválido (não é diretório): " + bdp);
@@ -357,6 +374,26 @@ public final class B2ACSLPipeline {
                 machineByOwnedVarName.putIfAbsent(v, machineName);
             }
         }
+        // Idem para os nomes lógicos REAIS de cada .acsl (não só os ghost acima): as variáveis
+        // próprias da raiz (também as colapsadas na implementação, "logic T v = M__v") e as
+        // variáveis novas dos refinamentos fundidos. lunh: Luhn declara sum_now (Luhn_sum) e
+        // Luhn_1, importada, também (colapsada em Luhn_1_i) — sem qualificar a de Luhn_1 (como o
+        // B2ACSLRules faz, Luhn_1__sum_now) o -acsl-import rejeita "already declared".
+        Map<String, String> machineByRealVarName = new HashMap<>();
+        for (MachineFile mf : machines) {
+            Element mr = mf.machine().getMachineElement();
+            if (AcslGenerator.getAbstractionReferenceName(mr).isPresent()) {
+                continue;
+            }
+            String machineName = mf.machine().getMachineName();
+            List<Element> mergedEls = new ArrayList<>();
+            for (Path mp : mergePathsByRootAbstract.getOrDefault(machineName, List.of())) {
+                mergedEls.add(AcslGenerator.parseMachineElement(mp));
+            }
+            for (String v : realLogicVariableNames(mr, mergedEls)) {
+                machineByRealVarName.putIfAbsent(v, machineName);
+            }
+        }
 
         // Limpa antes do loop: GhostOperationsCiGenerator.write() ACRESCENTA (não sobrescreve) a
         // cada chamada — ver comentário abaixo — por isso o ficheiro precisa de começar vazio a
@@ -472,6 +509,18 @@ public final class B2ACSLPipeline {
                 String machineName = mf.machine().getMachineName();
                 List<Path> mergePaths =
                         mergePathsByRootAbstract.getOrDefault(machineName, List.of());
+                // O portador dos includes da lib é gerado por último: a sua varredura de símbolos
+                // recebe o texto de TODOS os .acsl já gerados nesta execução (e dos arquivos locais
+                // que eles incluem: _lambda_functions, _sigma_functions, connection...). Antes só a
+                // 1.ª raiz e as suas dependências eram varridas, e num projeto com várias raízes
+                // (safetyflasher, railmap) faltavam includes (seq1, function_to_list, ...).
+                String libScanExtraText = ghostCiStripped;
+                if (machineName.equals(libIncludeCarrierMachineName)) {
+                    libScanExtraText =
+                            joinNonBlankText(
+                                    ghostCiStripped,
+                                    generatedAcslTextForLibScan(acslDir, acslByMachineName.values()));
+                }
                 Optional<Path> acsl =
                         AcslGenerator.generateAcsl(
                                 mf.machine(),
@@ -484,15 +533,19 @@ public final class B2ACSLPipeline {
                                 importsGraph,
                                 libIncludeCarrierMachineName,
                                 libIncludeScanRootMachineName,
-                                ghostCiStripped);
+                                libScanExtraText);
                 if (acsl.isPresent()) {
                     List<Element> mergedEls = new ArrayList<>();
                     for (Path mp : mergePaths) {
                         mergedEls.add(AcslGenerator.parseMachineElement(mp));
                     }
                     Set<String> collidingVars =
-                            collidingAbstractVarNames(
-                                    machineRoot, mergedEls, machineName, machineByOwnedVarName);
+                            new LinkedHashSet<>(collidingAbstractVarNames(
+                                    machineRoot, mergedEls, machineName, machineByOwnedVarName));
+                    for (String v : realLogicVariableNames(machineRoot, mergedEls)) {
+                        String owner = machineByRealVarName.get(v);
+                        if (owner != null && !owner.equals(machineName)) collidingVars.add(v);
+                    }
                     if (!collidingVars.isEmpty()) {
                         qualifyCollidingRealAcslNames(acsl.get(), machineName, collidingVars);
                     }
@@ -561,7 +614,8 @@ public final class B2ACSLPipeline {
                     importsGraph,
                     cFiles,
                     specificationUsedTypes,
-                    inferProjectNameFromBdp(bdp));
+                    inferProjectNameFromBdp(bdp),
+                    printTranslationWarnings());
         } finally {
         }
     }
@@ -733,6 +787,20 @@ public final class B2ACSLPipeline {
         return GhostOperationsCiGenerator.listAbstractVariableNames(machineEl).stream()
                 .filter(v -> !collapsed.contains(v))
                 .toList();
+    }
+
+    /**
+     * Nomes lógicos de variável que o {@code .acsl} da raiz {@code machineEl} declara: as variáveis
+     * próprias (abstratas, inclusive as colapsadas na implementação) e as variáveis novas dos
+     * refinamentos fundidos (as que ganham {@code return_valid_v}).
+     */
+    private static Set<String> realLogicVariableNames(Element machineEl, List<Element> mergedMachineElements) {
+        Set<String> out = new LinkedHashSet<>(GhostOperationsCiGenerator.listAbstractVariableNames(machineEl));
+        for (com.example.bxml.BxmlConnectionAcsl.Link link
+                : com.example.bxml.BxmlConnectionAcsl.plan(machineEl, mergedMachineElements)) {
+            out.add(link.variable());
+        }
+        return out;
     }
 
     /**
@@ -908,6 +976,36 @@ public final class B2ACSLPipeline {
      * Portador único dos includes da {@code B2ACSLLib} na importação Frama-C multi-ficheiro: primeira
      * dependência transitiva da raiz, ou a própria raiz se não houver dependências.
      */
+    /**
+     * Texto dos {@code .acsl} gerados nesta execução ({@code generated}) e dos arquivos locais que
+     * eles incluem ({@code include "X.acsl";}, sem pasta: funções lambda/SIGMA/UNION, tipos-tupla,
+     * {@code connection.acsl}), para a varredura de símbolos da lib do portador. Só segue o que foi
+     * gerado agora: arquivos de execuções anteriores na mesma pasta não entram.
+     */
+    static String generatedAcslTextForLibScan(Path acslDir, Collection<Path> generated) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        Set<Path> seen = new LinkedHashSet<>();
+        Deque<Path> pending = new ArrayDeque<>(generated);
+        Pattern localInclude = Pattern.compile("include\\s+\"([^\"/]+\\.acsl)\"");
+        while (!pending.isEmpty()) {
+            Path f = pending.removeFirst().toAbsolutePath().normalize();
+            if (!seen.add(f) || !Files.isRegularFile(f)) continue;
+            String text = Files.readString(f, StandardCharsets.UTF_8);
+            sb.append(text).append('\n');
+            Matcher m = localInclude.matcher(text);
+            while (m.find()) {
+                pending.addLast(acslDir.resolve(m.group(1)));
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String joinNonBlankText(String a, String b) {
+        if (a == null || a.isBlank()) return b;
+        if (b == null || b.isBlank()) return a;
+        return a + "\n" + b;
+    }
+
     private static String resolveLibIncludeCarrierMachineName(
             String rootMachineName, BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
         if (rootMachineName == null || rootMachineName.isBlank()) {

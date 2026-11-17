@@ -1,6 +1,8 @@
 package com.example.bxml;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -186,7 +188,37 @@ public final class BxmlTypeRegistry {
             }
             return "Set<" + acslElementTypeNameStatic(inner) + ">";
         }
+        // Produto fora de POW: a variável é um par/n-upla (pos : (1..TAM) * (1..TAM)) →
+        // Tuple<A, B> (n-upla aninhada à esquerda, como o B), como o B2ACSLRules. Antes caía em
+        // integer e "pos == couple(1, 1)" não importava.
+        List<String> productParts = splitTopLevelProduct(r);
+        if (productParts.size() > 1) {
+            String acc = rawBTypeToAcslVariableLogicType(productParts.get(0));
+            for (int i = 1; i < productParts.size(); i++) {
+                String next = rawBTypeToAcslVariableLogicType(productParts.get(i));
+                acc = "Tuple<" + acc + ", " + next + (next.endsWith(">") ? " " : "") + ">";
+            }
+            return acc;
+        }
         return "integer";
+    }
+
+    /** Partes de {@code A*B*C} separadas nos {@code *} fora de parênteses. */
+    private static List<String> splitTopLevelProduct(String r) {
+        List<String> parts = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i < r.length(); i++) {
+            char c = r.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == '*' && depth == 0) {
+                parts.add(r.substring(start, i).trim());
+                start = i + 1;
+            }
+        }
+        parts.add(r.substring(start).trim());
+        return parts;
     }
 
     /**

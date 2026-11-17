@@ -141,6 +141,7 @@ public final class AcslLibIncludes {
             "relation_functions/prj1.acsl",
             "relation_functions/prj2.acsl",
             "relation_functions/direct_product.acsl",
+            "relation_functions/parallel_product.acsl",
             "relation_functions/composition.acsl",
             "relation_functions/closure1.acsl",
             "relation_functions/succ.acsl",

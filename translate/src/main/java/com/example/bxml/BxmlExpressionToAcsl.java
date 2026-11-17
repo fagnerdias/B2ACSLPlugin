@@ -40,17 +40,19 @@ public final class BxmlExpressionToAcsl {
         if (overwriteWithLambda != null) {
             return overwriteWithLambda;
         }
+        // sequência (\\list) de um lado e relação/função do outro: equals(R, list_to_function(L)),
+        // como o B2ACSLRules
         if (isListValued(leftExp, ctx) && isRelationOrFunctionValued(rightExp, ctx)) {
-            return translate(rightExp, ctx)
-                    + " == list_to_function("
+            return "equals(" + translate(rightExp, ctx)
+                    + ", list_to_function("
                     + translate(leftExp, ctx)
-                    + ")";
+                    + "))";
         }
         if (isListValued(rightExp, ctx) && isRelationOrFunctionValued(leftExp, ctx)) {
-            return translate(leftExp, ctx)
-                    + " == list_to_function("
+            return "equals(" + translate(leftExp, ctx)
+                    + ", list_to_function("
                     + translate(rightExp, ctx)
-                    + ")";
+                    + "))";
         }
         String l = translate(leftExp, ctx);
         String r = translate(rightExp, ctx);
@@ -278,6 +280,7 @@ public final class BxmlExpressionToAcsl {
                         || isRangeSubtractionOp(op)
                         || isIntervalBinaryExp(exp)
                         || isDirectProductOp(op)
+                        || isParallelProductOp(op)
                         || "prj1".equals(op) || "prj2".equals(op)
                         || "<+".equals(op)
                         || ";".equals(op == null ? "" : op.trim())
@@ -471,7 +474,8 @@ public final class BxmlExpressionToAcsl {
                 // function_to_list(...) antes de restrict_front (esse só aceita \list<A>), e o
                 // -acsl-import rejeitava com "incompatible types Relation<integer,integer> and
                 // \list<A>".
-                yield isDomainRestrictionOp(bOp) || ";".equals(bOp == null ? "" : bOp.trim());
+                yield isDomainRestrictionOp(bOp) || ";".equals(bOp == null ? "" : bOp.trim())
+                        || isParallelProductOp(bOp);
             }
             default -> false;
         };
@@ -482,6 +486,24 @@ public final class BxmlExpressionToAcsl {
             return false;
         }
         return t.startsWith("Relation_") || t.startsWith("Function_");
+    }
+
+    /**
+     * Como {@link #isRelationLikeVariableType}, aceitando também os tipos genéricos de hoje
+     * ({@code Relation<A,B>}, {@code Function<A,B>}, {@code Set<Tuple<A,B> >}). Só para o tipo
+     * DECLARADO da variável: sem isto, "sq : (1..3) --> 0..255" não era vista como relação e
+     * "sq := [1, 2, 3]" saía "sq == [| 1, 2, 3 |]" (tipos incompatíveis). O tipo inferido pelo
+     * typref não pode usá-lo: uma sequência B tem typref POW(INTEGER*INTEGER), que dá Relation<…>
+     * (ex. o \\let aseq de RobustFifo, uma \\list).
+     */
+    private static boolean isRelationLikeDeclaredType(String t) {
+        if (t == null || t.isBlank()) {
+            return false;
+        }
+        String s = t.trim();
+        return isRelationLikeVariableType(s)
+                || s.startsWith("Relation<") || s.startsWith("Function<")
+                || s.replace(" ", "").startsWith("Set<Tuple<");
     }
 
     private static boolean isRelationOrFunctionValuedId(Element idEl, BxmlTranslateContext ctx) {
@@ -498,7 +520,7 @@ public final class BxmlExpressionToAcsl {
         // errado em "queue == queue <- ee" e gerando "incompatible types DRelation<...> and
         // \list<integer>" no Frama-C.
         if (t != null) {
-            return isRelationLikeVariableType(t);
+            return isRelationLikeDeclaredType(t);
         }
         String trAttr = idEl.getAttribute("typref");
         if (trAttr == null || trAttr.isBlank()) {
@@ -528,7 +550,7 @@ public final class BxmlExpressionToAcsl {
      */
     public static String intervalOrSetComprehensionRef(Element e, BxmlTranslateContext ctx) {
         if (e == null) {
-            return "/* null */";
+            return Unsupported.marker("expressao ausente");
         }
         if (isIntervalBinaryExp(e)) {
             Element[] pair = twoDirectExpChildren(e);
@@ -625,6 +647,21 @@ public final class BxmlExpressionToAcsl {
         return ">->>".equals(o) || "&gt;-&gt;&gt;".equals(o);
     }
 
+    /** {@code Id} cujo tipo B (typref) é produto ou conjunto, ou cujo tipo lógico declarado não é escalar. */
+    static boolean isNonScalarTypedId(Element id, BxmlTranslateContext ctx) {
+        if (id == null || ctx == null) return false;
+        String declared = ctx.variableLogicTypes().get(id.getAttribute("value"));
+        if (declared != null && declared.contains("<")) return true;
+        String tr = id.getAttribute("typref");
+        if (tr == null || tr.isBlank()) return false;
+        try {
+            String raw = ctx.types().getRawType(Integer.parseInt(tr.trim()));
+            return raw != null && (raw.contains("*") || raw.startsWith("POW("));
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     /** B maplet {@code cc |-> bb} → {@code couple(cc, bb)} (ACSL_Lib/tuple_functions/tuple_couple.acsl). */
     private static boolean isMapletOp(String op) {
         if (op == null) return false;
@@ -649,8 +686,14 @@ public final class BxmlExpressionToAcsl {
      * nem a algo já explicitamente convertido (evita {@code (integer)(integer)x} redundante, e
      * NUNCA entra dentro de um {@code \old(...)} já aplicado pelo caso {@code "Id"}).
      */
-    private static String castBareIntegerIdForTuple(Element component, String translated) {
+    private static String castBareIntegerIdForTuple(
+            Element component, String translated, BxmlTranslateContext ctx) {
         if (component == null || translated == null || !"Id".equals(component.getLocalName())) {
+            return translated;
+        }
+        // Id de tipo não escalar (par, conjunto, relação: pos : (1..TAM) * (1..TAM)) não leva
+        // (integer) — "invalid cast from Tuple<integer, integer>"
+        if (isNonScalarTypedId(component, ctx)) {
             return translated;
         }
         if (translated.startsWith("(integer)")
@@ -785,6 +828,14 @@ public final class BxmlExpressionToAcsl {
         if (op == null) return false;
         String o = op.trim();
         return "><".equals(o) || "&gt;&lt;".equals(o);
+    }
+
+    /**
+     * B produto paralelo de relações {@code R1 || R2} (numa expressão; não a substituição paralela)
+     * → {@code parallel_product(R1, R2)} (ACSL_Lib/relation_functions/parallel_product.acsl).
+     */
+    private static boolean isParallelProductOp(String op) {
+        return op != null && "||".equals(op.trim());
     }
 
     /** {@code e - 1}, com parênteses quando {@code e} não é um identificador ou literal simples. */
@@ -966,7 +1017,7 @@ public final class BxmlExpressionToAcsl {
             case "Boolean_Exp" -> translateBooleanExp(exp, ctx);
             case "Quantified_Exp" -> GeneralizedQuantifierTranslator.translateQuantifiedExp(exp, ctx);
             case "Record_Field_Access" -> translateRecordFieldAccess(exp, ctx);
-            default -> "/* TODO: " + ln + " */";
+            default -> Unsupported.marker(ln);
         };
     }
 
@@ -984,12 +1035,12 @@ public final class BxmlExpressionToAcsl {
         String label = exp.getAttribute("label");
         Element base = BxmlDomUtils.firstNonAttrElementChild(exp);
         if (base == null || label == null || label.isBlank()) {
-            return "/* TODO: Record_Field_Access */";
+            return Unsupported.marker("Record_Field_Access");
         }
         if ("Record".equals(base.getLocalName())) {
             Element item = recordItemByLabel(base, label);
             Element valueEl = item == null ? null : BxmlDomUtils.firstNonAttrElementChild(item);
-            return valueEl == null ? "/* TODO: Record_Field_Access */" : translate(valueEl, ctx);
+            return valueEl == null ? Unsupported.marker("Record_Field_Access") : translate(valueEl, ctx);
         }
         return translate(base, ctx) + "__" + label;
     }
@@ -1018,7 +1069,7 @@ public final class BxmlExpressionToAcsl {
         }
         Element vars = BxmlDomUtils.firstChildElement(qs, "Variables");
         Element body = BxmlDomUtils.firstChildElement(qs, "Body");
-        if (vars == null || body == null) return "/* quantified_set */";
+        if (vars == null || body == null) return Unsupported.marker("compreensao sem variaveis ou corpo");
         java.util.List<String> names = new java.util.ArrayList<>();
         NodeList vnodes = vars.getChildNodes();
         for (int i = 0; i < vnodes.getLength(); i++) {
@@ -1035,11 +1086,8 @@ public final class BxmlExpressionToAcsl {
         // de fingerprinting (BxmlComprehensionRegistry#emptyForFingerprinting) também passa aqui,
         // só para calcular chaves de deduplicação: nesse caso não há aviso.
         String text = "{ " + vs + " | " + pred + " }";
-        if (ctx.comprehensions().size() > 0) {
-            System.err.println("[B2ACSL] AVISO: compreensao sem traducao suportada em " + ctx.machineName()
-                    + ": " + text);
-        }
-        return "/* B2ACSL-UNSUPPORTED compreensao " + text.replace("*/", "* /") + " */";
+        // O AVISO sai na montagem da unidade que contém a compreensão (TranslationWarnings).
+        return Unsupported.marker("compreensao " + text);
     }
 
     private static String translateEmptySet(Element emptySet, BxmlTranslateContext ctx) {
@@ -1126,7 +1174,7 @@ public final class BxmlExpressionToAcsl {
     private static String translateUnary(Element u, BxmlTranslateContext ctx) {
         String op = u.getAttribute("op");
         Element arg = firstExpChild(u);
-        if (arg == null) return "/* unary */";
+        if (arg == null) return Unsupported.marker("Unary_Exp sem operando");
         if ("card".equals(op) && "Quantified_Set".equals(arg.getLocalName())) {
             return "card(" + translateQuantifiedSet(arg, ctx) + ")"; // card.acsl
         }
@@ -1135,6 +1183,9 @@ public final class BxmlExpressionToAcsl {
         return switch (opTrim) {
             case "card" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : "card(" + a + ")";
+            // size sobre o que não é reconhecido como sequência fica cru: o reconhecimento depende do
+            // contexto (os contextos auxiliares de nomes não sabem que uma variável abstrata é
+            // \list), e um marcador aqui mudaria a numeração _invariant_k só nesses contextos.
             case "size" ->
                     isListValued(arg, ctx) ? "\\length(" + a + ")" : opTrim + "(" + a + ")";
             // B ran: sequence_ran (\list, ACSL_Lib/sequence_functions/range.acsl) vs
@@ -1176,14 +1227,22 @@ public final class BxmlExpressionToAcsl {
             // declarada), "unbound logic function i", só descoberto ao corrigir a tipagem de
             // variável livre deixar de mascarar este erro com um erro mais cedo no mesmo ficheiro.
             case "-i" -> "(-" + a + ")";
-            default -> opTrim + "(" + a + ")";
+            // Operador B com função homónima na B2ACSLLib (dom, first, tail, closure, rel, …) sai
+            // como chamada; um nome que a lib não tem (iseq, perm, FIN, POW1, árvores, …) seria
+            // "unbound logic function" no -acsl-import: marcador, e a unidade fica de fora com AVISO.
+            default -> isLibrarySymbol(opTrim) ? opTrim + "(" + a + ")" : Unsupported.marker("operador " + opTrim);
         };
+    }
+
+    private static boolean isLibrarySymbol(String name) {
+        com.example.AcslLibSymbolDependencyMap m = com.example.AcslLibSymbolDependencyMap.instance();
+        return !m.isLoaded() || m.allKnownSymbols().contains(name);
     }
 
     private static String translateBinary(Element b, BxmlTranslateContext ctx) {
         String op = b.getAttribute("op");
         Element[] pair = twoDirectExpChildren(b);
-        if (pair[0] == null || pair[1] == null) return "/* binary */";
+        if (pair[0] == null || pair[1] == null) return Unsupported.marker("Binary_Exp sem operando");
         if (isDomainRestrictionOp(op)) {
             String setRef = intervalOrSetComprehensionRef(pair[0], ctx);
             String rel = translate(pair[1], ctx);
@@ -1205,8 +1264,8 @@ public final class BxmlExpressionToAcsl {
             return "range_subtraction(" + rel + ", " + setRef + ")";
         }
         if (isMapletOp(op)) {
-            String left = castBareIntegerIdForTuple(pair[0], translate(pair[0], ctx));
-            String right = castBareIntegerIdForTuple(pair[1], translate(pair[1], ctx));
+            String left = castBareIntegerIdForTuple(pair[0], translate(pair[0], ctx), ctx);
+            String right = castBareIntegerIdForTuple(pair[1], translate(pair[1], ctx), ctx);
             return "couple(" + left + ", " + right + ")";
         }
         if (isFunctionApplicationOp(op)) {
@@ -1282,10 +1341,10 @@ public final class BxmlExpressionToAcsl {
             return "interval_set(" + left + ", " + right + ")";
         }
         if (isSequenceAppendOp(op)) {
-            return "(" + "\\concat(" + left + ", [|" + right + "|])" + ")";
+            return "(" + "\\concat(" + left + ", [| " + right + " |])" + ")";
         }
         if (isSequencePrependOp(op)) {
-            return "\\concat([|" + left + "|], " + right + ")";
+            return "\\concat([| " + left + " |], " + right + ")";
         }
         if (isSequenceConcatOp(op)) {
             return "\\concat(" + left + ", " + right + ")";
@@ -1326,6 +1385,10 @@ public final class BxmlExpressionToAcsl {
         if (isDirectProductOp(opTrimmed)) {
             return "direct_product(" + left + ", " + right + ")";
         }
+        // B: R1 || R2 — produto paralelo (ACSL_Lib/relation_functions/parallel_product.acsl).
+        if (isParallelProductOp(opTrimmed)) {
+            return "parallel_product(" + left + ", " + right + ")";
+        }
         // B: iterate(r,n) — r composta consigo própria n vezes (ACSL_Lib/relation_functions/
         // iterate.acsl). Binary_Exp com dois filhos diretos (r, n), mesma forma AST de prj1/prj2
         // acima (chamada de função com 2 argumentos, não operador infixo B) — sem caso próprio
@@ -1345,7 +1408,7 @@ public final class BxmlExpressionToAcsl {
             // reservada em FramaCRunner tentando "curar" o que era, na verdade, um problema de
             // FORMA da expressão, não de nome. TODO visível em vez de infixo cru: a PRÓXIMA
             // ocorrência fica achável por grep, não por essa mesma investigação outra vez.
-            return "/* TODO: Binary_Exp op='" + opTrimmed + "' não reconhecido */";
+            return Unsupported.marker("Binary_Exp " + opTrimmed);
         }
         String infix = integerBinaryOpToAcsl(op);
         return "(" + left + " " + infix + " " + right + ")";
@@ -1421,7 +1484,7 @@ public final class BxmlExpressionToAcsl {
             }
             return "[| " + String.join(", ", parts) + " |]";
         }
-        return "/* nary " + op + " */";
+        return Unsupported.marker("Nary_Exp " + op);
     }
 
     static Element firstExpChild(Element parent) {
@@ -1488,7 +1551,7 @@ public final class BxmlExpressionToAcsl {
             String pred = BxmlPredicateToAcsl.translatePropertyPred(child, ctx);
             return "(" + pred + " ? \\true : \\false)";
         }
-        return "/* bool_exp */";
+        return Unsupported.marker("Boolean_Exp");
     }
 
     /** Primeiro filho elemento cujo {@code localName} corresponda a {@code name}. */

@@ -108,6 +108,25 @@ public final class MachineAxiomaticBlockFormatter {
             Map<String, String> varRhsOverrides,
             Path bxmlDirectory,
             Set<String> excludeVariableNames) {
+        return formatAxiomaticBlockWithGhostDummyReads(
+                machineEl, ctx, rootAbstractForConcreteLink, abstractVarNamesForGhostRead,
+                varRhsOverrides, bxmlDirectory, excludeVariableNames, Map.of());
+    }
+
+    /**
+     * Como acima, com {@code perVariableLinkRoot}: variáveis ligadas a {@code Raiz__v} uma a uma
+     * quando {@code rootAbstractForConcreteLink} é nulo (CONCRETE_VARIABLES da abstração, que são
+     * sempre globais C, mesmo quando a implementação declara variáveis próprias).
+     */
+    public static String formatAxiomaticBlockWithGhostDummyReads(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractForConcreteLink,
+            Set<String> abstractVarNamesForGhostRead,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory,
+            Set<String> excludeVariableNames,
+            Map<String, String> perVariableLinkRoot) {
         return formatAxiomaticBlock(
                 machineEl,
                 ctx,
@@ -117,7 +136,9 @@ public final class MachineAxiomaticBlockFormatter {
                 abstractVarNamesForGhostRead,
                 varRhsOverrides == null ? Map.of() : varRhsOverrides,
                 bxmlDirectory,
-                excludeVariableNames);
+                excludeVariableNames,
+                null,
+                perVariableLinkRoot);
     }
 
     /**
@@ -215,6 +236,43 @@ public final class MachineAxiomaticBlockFormatter {
             Map<String, String> varRhsOverrides,
             Path bxmlDirectory,
             Set<String> excludeVariableNames) {
+        return formatAxiomaticBlock(
+                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing,
+                ghostDummyReadsForAbstractVars, varRhsOverrides, bxmlDirectory, excludeVariableNames, null,
+                Map.of());
+    }
+
+    /**
+     * Bloco de variáveis de um refinamento fundido: sem as variáveis em {@code excludeVariableNames}
+     * (redeclaradas com o mesmo nome: são as da abstração) e com {@code v = return_valid_v(...)} só
+     * para as variáveis em {@code refinementLinks} (ver {@link BxmlConnectionAcsl#plan}).
+     */
+    public static String formatRefinementAxiomaticBlock(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractMachineName,
+            Element refinementParent,
+            Map<String, String> gluing,
+            Path bxmlDirectory,
+            Set<String> excludeVariableNames,
+            Map<String, String> refinementLinks) {
+        return formatAxiomaticBlock(
+                machineEl, ctx, rootAbstractMachineName, refinementParent, gluing, null,
+                Map.of(), bxmlDirectory, excludeVariableNames, refinementLinks, Map.of());
+    }
+
+    private static String formatAxiomaticBlock(
+            Element machineEl,
+            BxmlTranslateContext ctx,
+            String rootAbstractMachineName,
+            Element refinementParent,
+            Map<String, String> gluing,
+            Set<String> ghostDummyReadsForAbstractVars,
+            Map<String, String> varRhsOverrides,
+            Path bxmlDirectory,
+            Set<String> excludeVariableNames,
+            Map<String, String> refinementLinks,
+            Map<String, String> perVariableLinkRoot) {
         String machineName = machineEl.getAttribute("name");
         if (machineName == null || machineName.isBlank()) return "";
         boolean linkConcrete =
@@ -241,7 +299,9 @@ public final class MachineAxiomaticBlockFormatter {
                 ghostDummyReadsForAbstractVars,
                 ctx,
                 varRhsOverrides,
-                bxmlDirectory);
+                bxmlDirectory,
+                refinementLinks,
+                perVariableLinkRoot == null ? Map.of() : perVariableLinkRoot);
     }
 
     private static String formatVariablesBlock(
@@ -255,7 +315,9 @@ public final class MachineAxiomaticBlockFormatter {
             Set<String> ghostDummyReadsForAbstractVars,
             BxmlTranslateContext ctx,
             Map<String, String> varRhsOverrides,
-            Path bxmlDirectory) {
+            Path bxmlDirectory,
+            Map<String, String> refinementLinks,
+            Map<String, String> perVariableLinkRoot) {
         if (types.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         sb.append("axiomatic ").append(blockName).append("_variables {\n");
@@ -279,7 +341,7 @@ public final class MachineAxiomaticBlockFormatter {
                     sb,
                     var,
                     logicType,
-                    rootAbstractForImplRhs,
+                    rootAbstractForImplRhs != null ? rootAbstractForImplRhs : perVariableLinkRoot.get(var),
                     refinementWithParent,
                     refinementParent,
                     refinementChild,
@@ -287,7 +349,8 @@ public final class MachineAxiomaticBlockFormatter {
                     ghostDummyReadsForAbstractVars,
                     ctx,
                     varRhsOverrides,
-                    bxmlDirectory);
+                    bxmlDirectory,
+                    refinementLinks);
         }
         sb.append("}\n");
         return sb.toString();
@@ -305,7 +368,8 @@ public final class MachineAxiomaticBlockFormatter {
             Set<String> ghostDummyReadsForAbstractVars,
             BxmlTranslateContext ctx,
             Map<String, String> varRhsOverrides,
-            Path bxmlDirectory) {
+            Path bxmlDirectory,
+            Map<String, String> refinementLinks) {
         String implRhs = null;
         if (rootAbstractForImplRhs != null
                 && refinementChild != null
@@ -346,6 +410,11 @@ public final class MachineAxiomaticBlockFormatter {
                 }
             }
             sb.append(" = ").append(rhs);
+        } else if (refinementWithParent && refinementLinks != null) {
+            String call = refinementLinks.get(var);
+            if (call != null) {
+                sb.append(" = ").append(call);
+            }
         } else if (refinementWithParent) {
             Optional<String> abs =
                     BxmlConnectionAcsl.linkingAbstractVariableName(

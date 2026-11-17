@@ -629,8 +629,13 @@ public final class BxmlComprehensionRegistry {
             }
             forall.append(";\n");
             sb.append(forall);
-            String v0 = idNodes.get(0).getAttribute("value");
-            sb.append("        belongs(").append(v0).append(", ").append(ref).append(") <==>\n");
+            // {x1, ..., xn | P}: conjunto de n-uplas, elemento couple(couple(x1, x2), ...), como o
+            // B2ACSLRules (antes só x1 entrava, e o axioma descrevia outro conjunto)
+            String element = idNodes.get(0).getAttribute("value");
+            for (int i = 1; i < idNodes.size(); i++) {
+                element = "couple(" + element + ", " + idNodes.get(i).getAttribute("value") + ")";
+            }
+            sb.append("        belongs(").append(element).append(", ").append(ref).append(") <==>\n");
             sb.append("            ").append(pred).append(";\n");
         }
     }
@@ -793,6 +798,24 @@ public final class BxmlComprehensionRegistry {
     }
 
     private static String acslSetTypeForElement(Element el, BxmlTypeRegistry types) {
+        // {x1, ..., xn | P} com n > 1: Set<Tuple<Tuple<T1, T2>, ...> > pelos tipos das variáveis
+        Element vars = BxmlDomUtils.firstChildElement(el, "Variables");
+        if (vars != null) {
+            List<String> varTypes = new ArrayList<>();
+            for (Node n = vars.getFirstChild(); n != null; n = n.getNextSibling()) {
+                if (n instanceof Element id && "Id".equals(id.getLocalName())) {
+                    String vtr = id.getAttribute("typref");
+                    varTypes.add(types.acslLogicTypeForValueTypref(vtr.isBlank() ? -1 : Integer.parseInt(vtr.trim())));
+                }
+            }
+            if (varTypes.size() > 1) {
+                String tuple = varTypes.get(0);
+                for (int i = 1; i < varTypes.size(); i++) {
+                    tuple = "Tuple<" + tuple + ", " + varTypes.get(i) + ">";
+                }
+                return "Set<" + tuple + " >";
+            }
+        }
         String tr = el.getAttribute("typref");
         int typref = tr.isBlank() ? -1 : Integer.parseInt(tr.trim());
         String elem = types.elementTypeNameForSetTypref(typref);

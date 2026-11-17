@@ -91,6 +91,11 @@ public final class BxmlInitialisationTranslator {
         Element abstractInit = BxmlDomUtils.firstChildElement(machineEl, "Initialisation");
         if (abstractInit != null) {
             walkSubstitution(BxmlDomUtils.firstSubChild(abstractInit), ensures, ctx);
+            if (ensures.stream().anyMatch(Unsupported::in)) {
+                // como o B2ACSLRules: sem ensures da INITIALISATION, com AVISO
+                ensures.clear();
+                TranslationWarnings.add(machineName + ": INITIALISATION nao traduzida para ensures");
+            }
         }
         // Laços C da inicialização, numa só passada e numa só contagem: o açúcar
         // `ARRAY := DOMAIN*{VALUE}` (um laço for, dois no caso 2D) e os WHILE escritos à mão (com
@@ -196,7 +201,7 @@ public final class BxmlInitialisationTranslator {
             }
             case "Becomes_In" -> {
                 if (leafVariableNamesMatch(sub, keepNames)) {
-                    parseBecomesInSub(sub, ensures, ctx);
+                    parseBecomesInSub(sub, ensures, ctx, oldNames);
                 }
             }
             case "Becomes_Such_That" -> {
@@ -266,23 +271,26 @@ public final class BxmlInitialisationTranslator {
                 } else if ("CHOICE".equals(op)) {
                     parseChoiceAsDisjunctiveEnsures(sub, ensures, ctx, oldNames);
                 } else {
-                    walkSubstitution(BxmlDomUtils.firstSubChild(sub), ensures, ctx, oldNames);
+                    ensures.add(Unsupported.marker("Nary_Sub " + op));
                 }
             }
             case "Skip" -> { /* nada */ }
             case "Bloc_Sub" -> walkSubstitution(BxmlDomUtils.firstSubChild(sub), ensures, ctx, oldNames);
             case "ANY_Sub" -> {
                 String t = translateAnySubAsExists(sub, ctx, oldNames);
-                if (!t.isBlank()) {
-                    ensures.add(t);
-                }
+                ensures.add(t.isBlank() ? Unsupported.marker("ANY") : t);
             }
-            case "Becomes_In" -> parseBecomesInSub(sub, ensures, ctx);
+            case "LET_Sub" -> ensures.add(translateLetSubAsExists(sub, ctx, oldNames));
+            case "Becomes_In" -> parseBecomesInSub(sub, ensures, ctx, oldNames);
             case "Becomes_Such_That" -> parseBecomesSuchThatSub(sub, ensures, ctx);
             case "Select" -> parseSelectAsConditionalEnsures(sub, ensures, ctx, oldNames);
             case "If_Sub" -> parseIfSubAsConditionalEnsures(sub, ensures, ctx, oldNames);
+            case "Case_Sub" -> parseCaseSubAsConditionalEnsures(sub, ensures, ctx, oldNames);
             case "Operation_Call" -> parseOperationCall(sub, ensures, ctx, oldNames);
-            default -> { /* outras substituições: extensão futura */ }
+            // ASSERT, VAR, WHILE, …: sem tradução para ensures. O marcador faz a
+            // montagem omitir o corpo inteiro com AVISO (como o B2ACSLRules), em vez de descartar
+            // só esta parte em silêncio.
+            default -> ensures.add(Unsupported.marker(ln));
         }
     }
 
@@ -881,6 +889,54 @@ public final class BxmlInitialisationTranslator {
         return "\\exists " + String.join(", ", binders) + "; " + guardText + " && " + thenText;
     }
 
+    /**
+     * {@code LET x, y BE x = E & y = F IN S END} → {@code \\exists T x, T y; (x == E) && (y == F)
+     * && post(S)}, como o B2ACSLRules. Os valores e o corpo leem o pré-estado ({@code \\old}) das
+     * variáveis que o corpo atribui; um LET aninhado gera um {@code \\exists} dentro do outro.
+     */
+    private static String translateLetSubAsExists(
+            Element letSub, BxmlTranslateContext ctx, Set<String> outerOldNames) {
+        Element varsEl = BxmlDomUtils.firstChildElement(letSub, "Variables");
+        Element valuesEl = BxmlDomUtils.firstChildElement(letSub, "Values");
+        Element thenEl = BxmlDomUtils.firstChildElement(letSub, "Then");
+        Element thenSub = thenEl == null ? null : BxmlDomUtils.firstSubChild(thenEl);
+        if (varsEl == null || valuesEl == null || thenSub == null) {
+            return Unsupported.marker("LET");
+        }
+        Map<String, Element> idByName = new LinkedHashMap<>();
+        for (Element id : BxmlDomUtils.directExpChildren(varsEl)) {
+            if ("Id".equals(id.getLocalName())) {
+                idByName.put(id.getAttribute("value").trim(), id);
+            }
+        }
+        Set<String> assignedRealNames = new LinkedHashSet<>();
+        collectAssignedLhsNames(thenSub, assignedRealNames);
+        if (outerOldNames != null) {
+            assignedRealNames.addAll(outerOldNames);
+        }
+        List<String> binders = new ArrayList<>();
+        for (Map.Entry<String, Element> e : idByName.entrySet()) {
+            binders.add(BxmlPredicateToAcsl.acslQuantifierLogicTypeForAnyVariable(null, e.getValue(), ctx)
+                    + " " + e.getKey());
+        }
+        List<String> parts = new ArrayList<>();
+        for (Node n = valuesEl.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (!(n instanceof Element val) || !"Valuation".equals(val.getLocalName())) continue;
+            Element idEl = idByName.get(val.getAttribute("ident").trim());
+            List<Element> exps = BxmlDomUtils.directExpChildren(val);
+            if (idEl == null || exps.isEmpty()) {
+                return Unsupported.marker("LET");
+            }
+            String eq = BxmlExpressionToAcsl.formatEquality(idEl, exps.get(0), ctx);
+            parts.add(assignedRealNames.isEmpty() ? eq : applyOldWrapping(eq, assignedRealNames));
+        }
+        List<String> thenParts = new ArrayList<>();
+        walkSubstitution(thenSub, thenParts, ctx, assignedRealNames);
+        parts.addAll(thenParts);
+        String body = parts.isEmpty() ? "\\true" : String.join(" && ", parenthesizeEach(parts));
+        return binders.isEmpty() ? body : "\\exists " + String.join(", ", binders) + "; " + body;
+    }
+
     private static List<String> parenthesizeEach(List<String> parts) {
         List<String> out = new ArrayList<>(parts.size());
         for (String p : parts) {
@@ -964,7 +1020,7 @@ public final class BxmlInitialisationTranslator {
             if ("Assignement_Sub".equals(ch.getLocalName())) {
                 parseAssignementSub(ch, ensures, ctx, allLhsNames);
             } else if ("Becomes_In".equals(ch.getLocalName())) {
-                parseBecomesInSub(ch, ensures, ctx);
+                parseBecomesInSub(ch, ensures, ctx, allLhsNames);
             } else if ("Becomes_Such_That".equals(ch.getLocalName())) {
                 parseBecomesSuchThatSub(ch, ensures, ctx);
             } else if ("If_Sub".equals(ch.getLocalName())) {
@@ -987,8 +1043,29 @@ public final class BxmlInitialisationTranslator {
      */
     private static void parseOperationCall(
             Element call, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
-        for (String c : OperationCallOutputSpecs.outputClauses(call, ctx)) {
+        List<String> clauses = OperationCallOutputSpecs.outputClauses(call, ctx);
+        for (String c : clauses) {
             ensures.add(oldNames == null || oldNames.isEmpty() ? c : wrapLhsVarsInRhsWithOld(c, oldNames));
+        }
+        Element outs = BxmlDomUtils.firstChildElement(call, "Output_Parameters");
+        if (clauses.isEmpty() && outs != null && !BxmlDomUtils.directExpChildren(outs).isEmpty()) {
+            // como o B2ACSLRules: a chamada não entra no ensures (o resto do corpo sim), com AVISO
+            String opName = "?";
+            for (Node n = call.getParentNode(); n instanceof Element e; n = n.getParentNode()) {
+                if ("Operation".equals(e.getLocalName())) {
+                    opName = e.getAttribute("name");
+                    break;
+                }
+                if ("Initialisation".equals(e.getLocalName())) {
+                    opName = "INITIALISATION";
+                    break;
+                }
+            }
+            Element nameEl = BxmlDomUtils.firstChildElement(call, "Name");
+            Element nameId = nameEl == null ? null : BxmlDomUtils.firstChildElement(nameEl, "Id");
+            String callee = nameId == null ? "?" : nameId.getAttribute("value").trim();
+            TranslationWarnings.add(TranslationWarnings.component(call) + "." + opName + ": chamada de "
+                    + callee + " omitida do ensures (linha " + TranslationWarnings.line(call) + ")");
         }
     }
 
@@ -1068,7 +1145,16 @@ public final class BxmlInitialisationTranslator {
                     collectAssignedLhsNames(BxmlDomUtils.firstSubChild(then), out);
                 }
             }
-            default -> { /* Skip, etc. — nada a coletar */ }
+            case "Skip" -> { /* nada a coletar */ }
+            // LET, CASE, ASSERT, VAR, WHILE, …: desce nos filhos — o corpo pode ficar sem ensures
+            // (sem tradução), mas o que ele atribui continua no frame (\old, assigns).
+            default -> {
+                for (org.w3c.dom.Node n = sub.getFirstChild(); n != null; n = n.getNextSibling()) {
+                    if (n instanceof Element child && !"Attr".equals(child.getLocalName())) {
+                        collectAssignedLhsNames(child, out);
+                    }
+                }
+            }
         }
     }
 
@@ -1160,11 +1246,29 @@ public final class BxmlInitialisationTranslator {
         condOldNames.addAll(elseAssigned);
 
         String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEl, ctx);
-        if (cond == null || cond.isBlank()) return;
+        if (cond == null || cond.isBlank()) {
+            ensures.add(Unsupported.marker("condicao do IF"));
+            return;
+        }
         if (!condOldNames.isEmpty()) {
             cond = applyOldWrapping(cond, condOldNames);
         }
 
+        emitConditionalEnsures(
+                cond, thenSub, thenAssigned,
+                out -> walkSubstitution(elseSub, out, ctx, oldNames), elseAssigned,
+                ensures, ctx, oldNames);
+    }
+
+    /**
+     * Núcleo comum do IF e do CASE: {@code (cond) ==> (e)} para cada ensures do ramo "então",
+     * {@code !(cond) ==> (e)} para cada ensures do "senão" (produzido por {@code elseProducer},
+     * depois do "então", na ordem do fonte) e os frames das variáveis atribuídas só num dos lados.
+     */
+    private static void emitConditionalEnsures(
+            String cond, Element thenSub, Set<String> thenAssigned,
+            java.util.function.Consumer<List<String>> elseProducer, Set<String> elseAssigned,
+            List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
         List<String> thenEnsures = new ArrayList<>();
         walkSubstitution(thenSub, thenEnsures, ctx, oldNames);
         for (String e : thenEnsures) {
@@ -1172,12 +1276,135 @@ public final class BxmlInitialisationTranslator {
         }
 
         List<String> elseEnsures = new ArrayList<>();
-        walkSubstitution(elseSub, elseEnsures, ctx, oldNames);
+        elseProducer.accept(elseEnsures);
         for (String e : elseEnsures) {
             ensures.add("!(" + cond + ") ==> (" + e + ")");
         }
 
         appendFrameEnsuresForAsymmetricBranches(thenAssigned, elseAssigned, cond, ensures, ctx);
+    }
+
+    /**
+     * {@code CASE E OF EITHER v1 THEN S1 OR v2, v3 THEN S2 … ELSE S END END} com a estrutura do IF
+     * equivalente {@code IF E = v1 THEN S1 ELSIF E = v2 or E = v3 THEN S2 … ELSE S END} (sem ELSE:
+     * {@code ELSE skip}), como o B2ACSLRules. A condição de cada escolha é traduzida como a de um
+     * IF (o predicado {@code E = v} é montado com cópias de E e dos valores) e lê o pré-estado das
+     * variáveis que algum ramo do CASE atribui.
+     */
+    private static void parseCaseSubAsConditionalEnsures(
+            Element caseSub, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
+        Element valueEl = BxmlDomUtils.firstChildElement(caseSub, "Value");
+        List<Element> caseExps = valueEl == null ? List.of() : BxmlDomUtils.directExpChildren(valueEl);
+        Element choicesEl = BxmlDomUtils.firstChildElement(caseSub, "Choices");
+        List<Element> choices = new ArrayList<>();
+        if (choicesEl != null) {
+            for (Node n = choicesEl.getFirstChild(); n != null; n = n.getNextSibling()) {
+                if (n instanceof Element c && "Choice".equals(c.getLocalName())) choices.add(c);
+            }
+        }
+        Element elseEl = BxmlDomUtils.firstChildElement(caseSub, "Else");
+        Element elseSub = elseEl == null ? null : BxmlDomUtils.firstSubChild(elseEl);
+        if (caseExps.isEmpty() || choices.isEmpty()) {
+            ensures.add(Unsupported.marker("CASE"));
+            return;
+        }
+        Set<String> condOldNames = new LinkedHashSet<>(oldNames);
+        for (Element c : choices) {
+            collectAssignedLhsNames(caseChoiceThen(c), condOldNames);
+        }
+        collectAssignedLhsNames(elseSub, condOldNames);
+        emitCaseChain(caseExps.get(0), choices, 0, elseSub, condOldNames, ensures, ctx, oldNames);
+    }
+
+    private static void emitCaseChain(
+            Element caseExp, List<Element> choices, int i, Element elseSub, Set<String> condOldNames,
+            List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
+        Element choice = choices.get(i);
+        Element thenSub = caseChoiceThen(choice);
+        // OR v2, v3 THEN …: um <Value> por valor da escolha
+        List<Element> values = new ArrayList<>();
+        for (Node n = choice.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n instanceof Element v && "Value".equals(v.getLocalName())) {
+                values.addAll(BxmlDomUtils.directExpChildren(v));
+            }
+        }
+        String cond =
+                values.isEmpty()
+                        ? ""
+                        : BxmlPredicateToAcsl.translateBodyPredicate(caseChoiceCondition(caseExp, values), ctx);
+        if (cond == null || cond.isBlank()) {
+            ensures.add(Unsupported.marker("condicao do CASE"));
+            return;
+        }
+        if (!condOldNames.isEmpty()) {
+            cond = applyOldWrapping(cond, condOldNames);
+        }
+        Set<String> thenAssigned = new LinkedHashSet<>();
+        collectAssignedLhsNames(thenSub, thenAssigned);
+        Set<String> restAssigned = new LinkedHashSet<>();
+        for (int k = i + 1; k < choices.size(); k++) {
+            collectAssignedLhsNames(caseChoiceThen(choices.get(k)), restAssigned);
+        }
+        collectAssignedLhsNames(elseSub, restAssigned);
+        emitConditionalEnsures(
+                cond, thenSub, thenAssigned,
+                out -> {
+                    if (i + 1 < choices.size()) {
+                        emitCaseChain(caseExp, choices, i + 1, elseSub, condOldNames, out, ctx, oldNames);
+                    } else {
+                        walkSubstitution(elseSub, out, ctx, oldNames);
+                    }
+                },
+                restAssigned, ensures, ctx, oldNames);
+    }
+
+    /** {@code Id} que é parâmetro de saída da operação que o contém. */
+    private static boolean isOperationOutputParam(Element id) {
+        if (id == null || !"Id".equals(id.getLocalName())) return false;
+        String name = id.getAttribute("value").trim();
+        for (Node n = id.getParentNode(); n instanceof Element e; n = n.getParentNode()) {
+            if ("Operation".equals(e.getLocalName())) {
+                Element outs = BxmlDomUtils.firstChildElement(e, "Output_Parameters");
+                if (outs == null) return false;
+                for (Element o : BxmlDomUtils.directExpChildren(outs)) {
+                    if (name.equals(o.getAttribute("value").trim())) return true;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private static Element caseChoiceThen(Element choice) {
+        Element thenEl = BxmlDomUtils.firstChildElement(choice, "Then");
+        return thenEl == null ? null : BxmlDomUtils.firstSubChild(thenEl);
+    }
+
+    /**
+     * {@code <Condition>} com o predicado {@code E = v} (um valor) ou {@code E = v1 or E = v2 …},
+     * montado com cópias dos nós de E e dos valores (fora da árvore do documento).
+     */
+    private static Element caseChoiceCondition(Element caseExp, List<Element> values) {
+        org.w3c.dom.Document doc = caseExp.getOwnerDocument();
+        String ns = caseExp.getNamespaceURI();
+        Element cond = doc.createElementNS(ns, "Condition");
+        List<Element> comparisons = new ArrayList<>();
+        for (Element v : values) {
+            Element cmp = doc.createElementNS(ns, "Exp_Comparison");
+            cmp.setAttribute("op", "=");
+            cmp.appendChild(caseExp.cloneNode(true));
+            cmp.appendChild(v.cloneNode(true));
+            comparisons.add(cmp);
+        }
+        if (comparisons.size() == 1) {
+            cond.appendChild(comparisons.get(0));
+        } else {
+            Element or = doc.createElementNS(ns, "Nary_Pred");
+            or.setAttribute("op", "or");
+            for (Element cmp : comparisons) or.appendChild(cmp);
+            cond.appendChild(or);
+        }
+        return cond;
     }
 
     /**
@@ -1256,7 +1483,10 @@ public final class BxmlInitialisationTranslator {
         List<List<String>> whenEffects = new ArrayList<>();
         for (int i = 0; i < condEls.size(); i++) {
             String cond = BxmlPredicateToAcsl.translateBodyPredicate(condEls.get(i), ctx);
-            if (cond == null || cond.isBlank()) continue;
+            if (cond == null || cond.isBlank()) {
+                ensures.add(Unsupported.marker("condicao do WHEN"));
+                continue;
+            }
             if (!condOldNames.isEmpty()) {
                 cond = applyOldWrapping(cond, condOldNames);
             }
@@ -1336,7 +1566,16 @@ public final class BxmlInitialisationTranslator {
      * {@code Becomes_In} (B: {@code v :: E}) → {@code belongs(v, E)} para cada variável em
      * {@code Variables} (pós-estado da operação / inicialização).
      */
-    private static void parseBecomesInSub(Element becomesIn, List<String> ensures, BxmlTranslateContext ctx) {
+    /**
+     * {@code x :: S} → {@code belongs(x, S)} (ver {@link #becomesInMembershipEnsure}).
+     * {@code x1, …, xn :: S} → {@code belongs(couple(couple(x1, x2), …), S)}: pelo Manual de
+     * Referência do B (§6.12), S é um conjunto de n-uplas e {@code x1 |-> … |-> xn : S}. Com mais
+     * de uma variável e S seta ou tipagem (FIN…), não há tradução (marcador, como no B2ACSLRules).
+     * S é lido no pré-estado: as variáveis atribuídas (estas e as de {@code oldNames}) ficam com
+     * {@code \\old} dentro de S (ex. {@code dado1, dado2, posicao :: {… | … posicao …}}).
+     */
+    private static void parseBecomesInSub(
+            Element becomesIn, List<String> ensures, BxmlTranslateContext ctx, Set<String> oldNames) {
         Element vars = BxmlDomUtils.firstChildElement(becomesIn, "Variables");
         Element value = BxmlDomUtils.firstChildElement(becomesIn, "Value");
         if (vars == null || value == null) {
@@ -1350,18 +1589,49 @@ public final class BxmlInitialisationTranslator {
         if (setExp == null) {
             return;
         }
-        List<String> parts = new ArrayList<>();
+        Set<String> preStateNames = new LinkedHashSet<>(oldNames == null ? Set.of() : oldNames);
+        collectAssignedLhsNames(becomesIn, preStateNames);
+        List<String> varTexts = new ArrayList<>();
+        List<Boolean> varIsOutput = new ArrayList<>();
         for (Element varExp : BxmlDomUtils.directExpChildren(vars)) {
             String v = BxmlExpressionToAcsl.translate(varExp, ctx);
-            if (v == null || v.isBlank()) continue;
-            String part = becomesInMembershipEnsure(v, setExp, ctx);
-            if (part != null && !part.isBlank()) {
-                parts.add(part);
+            if (v != null && !v.isBlank()) {
+                varTexts.add(v);
+                varIsOutput.add(isOperationOutputParam(varExp));
             }
         }
-        if (!parts.isEmpty()) {
-            ensures.add(String.join(" && ", parts));
+        if (varTexts.isEmpty()) {
+            return;
         }
+        if (varTexts.size() == 1) {
+            String part = becomesInMembershipEnsure(varTexts.get(0), setExp, ctx, preStateNames);
+            if (part != null && !part.isBlank()) {
+                ensures.add(part);
+            }
+            return;
+        }
+        if (BxmlExpressionToAcsl.isFunctionArrowType(setExp)
+                || BxmlExpressionToAcsl.isTotalSurjectionArrowType(setExp)
+                || BxmlPredicateToAcsl.isFinTypingExp(setExp)) {
+            ensures.add(Unsupported.marker(":: de varias variaveis com seta ou tipagem"));
+            return;
+        }
+        // parâmetro de saída (*p, tipo C): (integer) dentro do couple, senão o Frama-C recusa
+        // "invalid cast from Tuple<int32_t, int32_t> to Tuple<integer, integer>"
+        List<String> terms = new ArrayList<>();
+        for (int k = 0; k < varTexts.size(); k++) {
+            String v = varTexts.get(k);
+            terms.add(varIsOutput.get(k) || v.startsWith("*") ? "(integer)" + v : v);
+        }
+        String element = terms.get(0);
+        for (int k = 1; k < terms.size(); k++) {
+            element = "couple(" + element + ", " + terms.get(k) + ")";
+        }
+        String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
+        if (setExprText == null || setExprText.isBlank()) {
+            return;
+        }
+        ensures.add("belongs(" + element + ", " + applyOldWrapping(setExprText, preStateNames) + ")");
     }
 
     /**
@@ -1386,22 +1656,29 @@ public final class BxmlInitialisationTranslator {
      * Espelha {@code GhostOperationsCiGenerator#ghostMembershipEnsure} para o universo NÃO-ghost —
      * a mesma lacuna que aquele método já resolvia do lado ghost nunca tinha sido replicada aqui.
      */
-    private static String becomesInMembershipEnsure(String v, Element setExp, BxmlTranslateContext ctx) {
+    private static String becomesInMembershipEnsure(
+            String v, Element setExp, BxmlTranslateContext ctx, Set<String> preStateNames) {
         if (BxmlExpressionToAcsl.isFunctionArrowType(setExp)
                 || BxmlExpressionToAcsl.isTotalSurjectionArrowType(setExp)) {
             Element[] domRng = BxmlExpressionToAcsl.twoDirectExpChildren(setExp);
             if (domRng[0] == null || domRng[1] == null) return null;
-            String domainSet = BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx);
-            String rangeSet = BxmlExpressionToAcsl.translate(domRng[1], ctx);
+            String domainSet = applyOldWrapping(
+                    BxmlExpressionToAcsl.intervalOrSetComprehensionRef(domRng[0], ctx), preStateNames);
+            String rangeSet = applyOldWrapping(BxmlExpressionToAcsl.translate(domRng[1], ctx), preStateNames);
             String base = "becomes_element_of(" + v + ", " + domainSet + ", " + rangeSet + ")";
             if (BxmlExpressionToAcsl.isTotalSurjectionArrowType(setExp)) {
                 return base + " && is_surjective(" + v + ", " + rangeSet + ")";
             }
             return base;
         }
+        if (BxmlPredicateToAcsl.isFinTypingExp(setExp)) {
+            // v :: FIN(S) / FIN1(S): mesmo predicado de tipagem de v : FIN(S) (FIN não é um
+            // conjunto da B2ACSLLib, então belongs(v, FIN(S)) não importaria).
+            return BxmlPredicateToAcsl.finMembership(v, setExp, false, ctx);
+        }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) return null;
-        return "belongs(" + v + ", " + setExprText + ")";
+        return "belongs(" + v + ", " + applyOldWrapping(setExprText, preStateNames) + ")";
     }
 
     /**

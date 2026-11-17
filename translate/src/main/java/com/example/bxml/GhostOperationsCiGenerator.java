@@ -169,6 +169,9 @@ public final class GhostOperationsCiGenerator {
         // "unbound logic variable" no front-end isolado (ex. INITIALISATION referenciando o próprio
         // ISLAND da máquina, não só de uma máquina SEEN).
         concreteConstants.addAll(BxmlSetsTranslator.buildDeferredSetRenames(abstractMachineEl).values());
+        // ABSTRACT_CONSTANTS que não são lambda: também dummy_<C> no texto ghost (declaradas no
+        // dummy_ghost, ver DummyGhostAxiomaticBuilder), não pelo nome sem prefixo
+        concreteConstants.addAll(nonLambdaAbstractConstantNames(abstractMachineEl));
 
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
                 BxmlSetsTranslator.listEnumeratedSetsWithSees(
@@ -178,6 +181,14 @@ public final class GhostOperationsCiGenerator {
                 BxmlConstantsAndProperties.collectLambdaDefsFromProperties(abstractMachineEl);
         Map<String, String> abstractConstDecls =
                 GhostParamTypeResolver.buildAbstractConstantDecls(abstractMachineEl, ctx, abstractConstParams);
+        // Só as constantes definidas por lambda (ID = %(..), logic boolean ID(..)) ficam no bloco
+        // que sobrevive ao merged_code.c: o ghost as usa sem prefixo, e o .acsl real as omite (ver
+        // AcslGenerator, ciDeclaredAbstractConsts). As outras o ghost usa como dummy_X; declará-las
+        // aqui sem prefixo duplicava a declaração do .acsl ("crc16 is already declared", cv_subst).
+        abstractConstDecls.keySet().removeIf(name -> {
+            List<String> ps = abstractConstParams.get(name);
+            return ps == null || ps.isEmpty();
+        });
         List<GhostOp> ghostOps =
                 buildGhostOperations(
                         abstractMachineEl,
@@ -413,6 +424,11 @@ public final class GhostOperationsCiGenerator {
             Map<String, List<String>> abstractConstParams) {
         List<GhostOp> ops = new ArrayList<>();
         List<String> initEnsures = collectGhostEnsuresFromInit(abstractMachineEl, abstractSet, ctx);
+        if (initEnsures.stream().anyMatch(Unsupported::in)) {
+            // INITIALISATION sem tradução: a função ghost fica só com o assigns (como o rules);
+            // o AVISO sai do lado real.
+            initEnsures = List.of();
+        }
         Set<String> initAssigned = new LinkedHashSet<>();
         collectAssignedAbstractVarsInInit(abstractMachineEl, abstractSet, initAssigned);
         if (!initAssigned.isEmpty()) {
@@ -482,6 +498,15 @@ public final class GhostOperationsCiGenerator {
                     existsForm = rewriteBoolOutputPredicateTernary(existsForm);
                     existsForm = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(existsForm, params);
                     String opSlug = GhostParamTypeResolver.sanitizeGhostFunctionName(opName);
+                    if (Unsupported.in(existsForm)) {
+                        // corpo sem tradução (ex. produto paralelo de relações no WHERE): a função
+                        // ghost fica só com o assigns; sem variável abstrata atribuída, não há função
+                        // ghost (o contrato real também não a chama, ver BxmlOperationsTranslator)
+                        if (!assigned.isEmpty()) {
+                            ops.add(new GhostOp(opSlug, params, assigned, List.of()));
+                        }
+                        continue;
+                    }
                     ops.add(new GhostOp(opSlug, params, assigned, List.of(existsForm)));
                     if (needsMarker) {
                         ops.add(
@@ -500,6 +525,11 @@ public final class GhostOperationsCiGenerator {
                         GhostParamTypeResolver.appendOutputParametersAsPointers(GhostParamTypeResolver.listInputParameters(op), op, false);
                 List<String> ensures = new ArrayList<>();
                 BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, ctx);
+                if (ensures.stream().anyMatch(Unsupported::in)) {
+                    // corpo sem tradução: a função ghost fica só com o assigns (como o rules), para o
+                    // "at return: assert ghost__op" do contrato real continuar com alvo
+                    ensures.clear();
+                }
                 BxmlOperationsTranslator.rewriteAcslListForArrayBackedParams(ensures, arrayParams);
                 List<String> ghostEnsures = new ArrayList<>();
                 for (String e : ensures) {
@@ -524,7 +554,6 @@ public final class GhostOperationsCiGenerator {
                     ge = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(ge, params);
                     ghostEnsures.add(ge);
                 }
-                if (ghostEnsures.isEmpty()) continue;
 
                 ops.add(
                         new GhostOp(
@@ -574,6 +603,23 @@ public final class GhostOperationsCiGenerator {
     }
 
     /** Nomes em {@code Concrete_Constants} (ordem de declaração no BXML). */
+    /** ABSTRACT_CONSTANTS da máquina que não são definidas por lambda ({@code ID = %(..)}). */
+    static Set<String> nonLambdaAbstractConstantNames(Element machineEl) {
+        Set<String> out = new LinkedHashSet<>();
+        if (machineEl == null) return out;
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Abstract_Constants");
+        if (block == null) return out;
+        Map<String, List<String>> lambdas = BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl);
+        for (Node n = block.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n instanceof Element e && "Id".equals(e.getLocalName())) {
+                String v = e.getAttribute("value").trim();
+                List<String> ps = lambdas.get(v);
+                if (!v.isBlank() && (ps == null || ps.isEmpty())) out.add(v);
+            }
+        }
+        return out;
+    }
+
     private static Set<String> concreteConstantNames(Element machineEl) {
         Set<String> out = new LinkedHashSet<>();
         Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");
@@ -991,6 +1037,9 @@ public final class GhostOperationsCiGenerator {
                     break;
                 }
                 if (valExp == null) return;
+                // x1, ..., xn :: S (S conjunto de n-uplas): sem ensures no ghost da INITIALISATION,
+                // que só enfraquece o ghost (o lado real gera belongs(couple(...), S)).
+                if (BxmlDomUtils.directExpChildren(vars).size() > 1) return;
                 List<String> parts = new ArrayList<>();
                 for (Element varExp : BxmlDomUtils.directExpChildren(vars)) {
                     if (!"Id".equals(varExp.getLocalName())) continue;
@@ -1017,7 +1066,8 @@ public final class GhostOperationsCiGenerator {
                         collectGhostEnsuresFromSubstitution(ch, abstractSet, ctx, out);
                     }
                 } else {
-                    collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, ctx, out);
+                    // CHOICE: só o 1º ramo seria MAIS forte que o B (um dos ramos acontece)
+                    out.add(Unsupported.marker("Nary_Sub " + op));
                 }
             }
             case "Bloc_Sub" -> collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, ctx, out);
@@ -1027,6 +1077,8 @@ public final class GhostOperationsCiGenerator {
                     collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, ctx, out);
                 }
             }
+            // IF, SELECT, Becomes_Such_That, …: este walker (só INITIALISATION ghost) não os traduz;
+            // deixá-los de fora só enfraquece o ghost (o lado real traduz e avisa).
             default -> { }
         }
     }
@@ -1053,6 +1105,9 @@ public final class GhostOperationsCiGenerator {
                 return base + " && is_surjective(dummy_" + v + ", " + rangeSet + ")";
             }
             return base;
+        }
+        if (BxmlPredicateToAcsl.isFinTypingExp(setExp)) {
+            return BxmlPredicateToAcsl.finMembership("dummy_" + v, setExp, false, ctx);
         }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) return null;
@@ -1132,7 +1187,12 @@ public final class GhostOperationsCiGenerator {
                         collectAssignedInSubstitution(ch, abstractSet, out);
                     }
                 } else {
-                    collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, out);
+                    // CHOICE: todos os ramos (só o 1º deixava o assigns menor que o que a operação escreve)
+                    for (Node n = sub.getFirstChild(); n != null; n = n.getNextSibling()) {
+                        if (n instanceof Element ch && !"Attr".equals(ch.getLocalName())) {
+                            collectAssignedInSubstitution(ch, abstractSet, out);
+                        }
+                    }
                 }
             }
             case "Bloc_Sub" -> collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(sub), abstractSet, out);
@@ -1154,7 +1214,15 @@ public final class GhostOperationsCiGenerator {
                     collectAssignedInSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, out);
                 }
             }
-            default -> { }
+            case "Skip" -> { }
+            // LET, CASE, ASSERT, …: desce nos filhos (o frame ghost tem de cobrir o que escrevem)
+            default -> {
+                for (Node n = sub.getFirstChild(); n != null; n = n.getNextSibling()) {
+                    if (n instanceof Element ch && !"Attr".equals(ch.getLocalName())) {
+                        collectAssignedInSubstitution(ch, abstractSet, out);
+                    }
+                }
+            }
         }
     }
 
@@ -1182,8 +1250,17 @@ public final class GhostOperationsCiGenerator {
 
     /** Nomes em {@code Abstract_Variables} (ordem do BXML). */
     public static List<String> listAbstractVariableNames(Element machineEl) {
+        return listVariableNames(machineEl, "Abstract_Variables");
+    }
+
+    /** Nomes de {@code CONCRETE_VARIABLES} da máquina (sem camada ghost). */
+    public static List<String> listConcreteVariableNames(Element machineEl) {
+        return listVariableNames(machineEl, "Concrete_Variables");
+    }
+
+    private static List<String> listVariableNames(Element machineEl, String section) {
         List<String> out = new ArrayList<>();
-        Element block = BxmlDomUtils.firstChildElement(machineEl, "Abstract_Variables");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, section);
         if (block == null) return out;
         NodeList ch = block.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {
