@@ -179,7 +179,8 @@ public final class BxmlPredicateToAcsl {
             name = "";
         }
         name = name.trim();
-        Element p0 = BxmlDomUtils.firstPredChild(predParent);
+        // predParent nulo: variável sem predicado de tipagem (ex. a de um LET); só o typref conta.
+        Element p0 = predParent == null ? null : BxmlDomUtils.firstPredChild(predParent);
         Element arrow = p0 != null ? findFunctionArrowRhsForVariable(p0, name) : null;
         if (arrow != null) {
             return functionArrowBinaryToAcslFunctionType(arrow, ctx.types());

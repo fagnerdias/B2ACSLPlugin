@@ -1000,6 +1000,9 @@ public final class GhostOperationsCiGenerator {
                     break;
                 }
                 if (valExp == null) return;
+                // x1, ..., xn :: S (S conjunto de n-uplas): sem ensures no ghost da INITIALISATION,
+                // que só enfraquece o ghost (o lado real gera belongs(couple(...), S)).
+                if (BxmlDomUtils.directExpChildren(vars).size() > 1) return;
                 List<String> parts = new ArrayList<>();
                 for (Element varExp : BxmlDomUtils.directExpChildren(vars)) {
                     if (!"Id".equals(varExp.getLocalName())) continue;
