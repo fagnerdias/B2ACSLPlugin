@@ -6,8 +6,11 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -506,6 +509,18 @@ public final class B2ACSLPipeline {
                 String machineName = mf.machine().getMachineName();
                 List<Path> mergePaths =
                         mergePathsByRootAbstract.getOrDefault(machineName, List.of());
+                // O portador dos includes da lib é gerado por último: a sua varredura de símbolos
+                // recebe o texto de TODOS os .acsl já gerados nesta execução (e dos arquivos locais
+                // que eles incluem: _lambda_functions, _sigma_functions, connection...). Antes só a
+                // 1.ª raiz e as suas dependências eram varridas, e num projeto com várias raízes
+                // (safetyflasher, railmap) faltavam includes (seq1, function_to_list, ...).
+                String libScanExtraText = ghostCiStripped;
+                if (machineName.equals(libIncludeCarrierMachineName)) {
+                    libScanExtraText =
+                            joinNonBlankText(
+                                    ghostCiStripped,
+                                    generatedAcslTextForLibScan(acslDir, acslByMachineName.values()));
+                }
                 Optional<Path> acsl =
                         AcslGenerator.generateAcsl(
                                 mf.machine(),
@@ -518,7 +533,7 @@ public final class B2ACSLPipeline {
                                 importsGraph,
                                 libIncludeCarrierMachineName,
                                 libIncludeScanRootMachineName,
-                                ghostCiStripped);
+                                libScanExtraText);
                 if (acsl.isPresent()) {
                     List<Element> mergedEls = new ArrayList<>();
                     for (Path mp : mergePaths) {
@@ -961,6 +976,36 @@ public final class B2ACSLPipeline {
      * Portador único dos includes da {@code B2ACSLLib} na importação Frama-C multi-ficheiro: primeira
      * dependência transitiva da raiz, ou a própria raiz se não houver dependências.
      */
+    /**
+     * Texto dos {@code .acsl} gerados nesta execução ({@code generated}) e dos arquivos locais que
+     * eles incluem ({@code include "X.acsl";}, sem pasta: funções lambda/SIGMA/UNION, tipos-tupla,
+     * {@code connection.acsl}), para a varredura de símbolos da lib do portador. Só segue o que foi
+     * gerado agora: arquivos de execuções anteriores na mesma pasta não entram.
+     */
+    static String generatedAcslTextForLibScan(Path acslDir, Collection<Path> generated) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        Set<Path> seen = new LinkedHashSet<>();
+        Deque<Path> pending = new ArrayDeque<>(generated);
+        Pattern localInclude = Pattern.compile("include\\s+\"([^\"/]+\\.acsl)\"");
+        while (!pending.isEmpty()) {
+            Path f = pending.removeFirst().toAbsolutePath().normalize();
+            if (!seen.add(f) || !Files.isRegularFile(f)) continue;
+            String text = Files.readString(f, StandardCharsets.UTF_8);
+            sb.append(text).append('\n');
+            Matcher m = localInclude.matcher(text);
+            while (m.find()) {
+                pending.addLast(acslDir.resolve(m.group(1)));
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String joinNonBlankText(String a, String b) {
+        if (a == null || a.isBlank()) return b;
+        if (b == null || b.isBlank()) return a;
+        return a + "\n" + b;
+    }
+
     private static String resolveLibIncludeCarrierMachineName(
             String rootMachineName, BxmlSeesGraph seesGraph, BxmlImportsGraph importsGraph) {
         if (rootMachineName == null || rootMachineName.isBlank()) {
