@@ -165,6 +165,7 @@ final class DummyGhostAxiomaticBuilder {
         }
 
         appendDummyConcreteConstantDeclarations(sb, machineEl, ctx);
+        appendDummyAbstractConstantDeclarations(sb, machineEl, ctx, abstractConstDecls, ghostText);
 
         appendSeenConcreteConstantDeclarations(
                 sb, ghostText, machineEl, bxmlDirectory, mergedMachineElements, seesGraph, importsGraph);
@@ -754,6 +755,52 @@ final class DummyGhostAxiomaticBuilder {
                 sb.append("        logic DSet<integer> dummy_").append(name).append(";\n\n");
             }
         }
+    }
+
+    /**
+     * {@code logic <D-tipo> dummy_<C>;} para as ABSTRACT_CONSTANTS que o texto ghost usa e que não
+     * estão no bloco de constantes que sobrevive ao merged_code.c ({@code abstractConstDecls}, só as
+     * definidas por lambda): o ghost as escreve como {@code dummy_<C>} (como as concretas), e no
+     * merged_code.c o prefixo sai e fica a declaração real do .acsl.
+     */
+    private static void appendDummyAbstractConstantDeclarations(
+            StringBuilder sb, Element machineEl, BxmlTranslateContext ctx,
+            Map<String, String> abstractConstDecls, String ghostText) {
+        if (machineEl == null || ctx == null) {
+            return;
+        }
+        for (String name : GhostOperationsCiGenerator.nonLambdaAbstractConstantNames(machineEl)) {
+            if (abstractConstDecls != null && abstractConstDecls.containsKey(name)) continue;
+            if (ghostText == null || !Pattern.compile("\\bdummy_" + Pattern.quote(name) + "\\b").matcher(ghostText).find()) {
+                continue;
+            }
+            String logicType = ctx.variableLogicTypes().get(name);
+            if (logicType == null) {
+                logicType = "integer";
+                Element id = abstractConstantId(machineEl, name);
+                String tr = id == null ? "" : id.getAttribute("typref");
+                if (!tr.isBlank()) {
+                    try {
+                        String t = ctx.types().acslVariableLogicTypeFromTypref(Integer.parseInt(tr.trim()));
+                        if (t != null && !t.isBlank()) logicType = t;
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+            sb.append("        logic ").append(dummyComprehensionParamType(logicType))
+                    .append(" dummy_").append(name).append(";\n\n");
+        }
+    }
+
+    private static Element abstractConstantId(Element machineEl, String name) {
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Abstract_Constants");
+        if (block == null) return null;
+        for (Node n = block.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n instanceof Element e && "Id".equals(e.getLocalName()) && name.equals(e.getAttribute("value").trim())) {
+                return e;
+            }
+        }
+        return null;
     }
 
     private static void appendDummyConcreteConstantDeclarations(

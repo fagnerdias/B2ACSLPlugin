@@ -280,6 +280,7 @@ public final class BxmlExpressionToAcsl {
                         || isRangeSubtractionOp(op)
                         || isIntervalBinaryExp(exp)
                         || isDirectProductOp(op)
+                        || isParallelProductOp(op)
                         || "prj1".equals(op) || "prj2".equals(op)
                         || "<+".equals(op)
                         || ";".equals(op == null ? "" : op.trim())
@@ -473,7 +474,8 @@ public final class BxmlExpressionToAcsl {
                 // function_to_list(...) antes de restrict_front (esse só aceita \list<A>), e o
                 // -acsl-import rejeitava com "incompatible types Relation<integer,integer> and
                 // \list<A>".
-                yield isDomainRestrictionOp(bOp) || ";".equals(bOp == null ? "" : bOp.trim());
+                yield isDomainRestrictionOp(bOp) || ";".equals(bOp == null ? "" : bOp.trim())
+                        || isParallelProductOp(bOp);
             }
             default -> false;
         };
@@ -826,6 +828,14 @@ public final class BxmlExpressionToAcsl {
         if (op == null) return false;
         String o = op.trim();
         return "><".equals(o) || "&gt;&lt;".equals(o);
+    }
+
+    /**
+     * B produto paralelo de relações {@code R1 || R2} (numa expressão; não a substituição paralela)
+     * → {@code parallel_product(R1, R2)} (ACSL_Lib/relation_functions/parallel_product.acsl).
+     */
+    private static boolean isParallelProductOp(String op) {
+        return op != null && "||".equals(op.trim());
     }
 
     /** {@code e - 1}, com parênteses quando {@code e} não é um identificador ou literal simples. */
@@ -1374,6 +1384,10 @@ public final class BxmlExpressionToAcsl {
         // B: R1 >< R2 — produto direto (ACSL_Lib/relation_functions/direct_product.acsl).
         if (isDirectProductOp(opTrimmed)) {
             return "direct_product(" + left + ", " + right + ")";
+        }
+        // B: R1 || R2 — produto paralelo (ACSL_Lib/relation_functions/parallel_product.acsl).
+        if (isParallelProductOp(opTrimmed)) {
+            return "parallel_product(" + left + ", " + right + ")";
         }
         // B: iterate(r,n) — r composta consigo própria n vezes (ACSL_Lib/relation_functions/
         // iterate.acsl). Binary_Exp com dois filhos diretos (r, n), mesma forma AST de prj1/prj2

@@ -144,7 +144,8 @@ public final class SpecificationAxiomaticInstantiator {
             List<String> listElemTypes,
             List<List<String>> pairTypes,
             List<List<String>> aliasPairTypes,
-            List<List<String>> tripleTypes) {
+            List<List<String>> tripleTypes,
+            List<List<String>> quadTypes) {
 
         /**
          * Orquestrador: classifica cada entrada crua ({@link #classifyType}) e depois aplica os
@@ -200,6 +201,23 @@ public final class SpecificationAxiomaticInstantiator {
                 boolean needsPairSymmetrization,
                 boolean needsRelFncPrjAliases,
                 boolean needsDirectProductTriples) {
+            return from(specTypes, needsPowSetClosure, needsPairSymmetrization, needsRelFncPrjAliases,
+                    needsDirectProductTriples, false);
+        }
+
+        /**
+         * @param needsParallelProductQuads {@code true} quando {@code parallel_product} (B:
+         *        {@code R1 || R2}) é usado: deriva os quádruplos (A,B,C,D) de {@code
+         *        parallel_product<A,B,C,D>} ({@link #deriveParallelProductQuads}) e os pares que o
+         *        seu axioma precisa ({@link #addParallelProductAliasPairs}).
+         */
+        static MonoContext from(
+                List<String> specTypes,
+                boolean needsPowSetClosure,
+                boolean needsPairSymmetrization,
+                boolean needsRelFncPrjAliases,
+                boolean needsDirectProductTriples,
+                boolean needsParallelProductQuads) {
             Set<String> setElem = new LinkedHashSet<>();
             Set<String> listElem = new LinkedHashSet<>();
             Set<List<String>> pairs = new LinkedHashSet<>();
@@ -214,6 +232,10 @@ public final class SpecificationAxiomaticInstantiator {
                     needsDirectProductTriples
                             ? deriveDirectProductTriples(naturalPairsForDerivation)
                             : Set.of();
+            Set<List<String>> quads =
+                    needsParallelProductQuads
+                            ? deriveParallelProductQuads(setElem, naturalPairsForDerivation)
+                            : Set.of();
             if (needsPairSymmetrization) {
                 pairs = symmetrizePairs(pairs);
             }
@@ -224,6 +246,9 @@ public final class SpecificationAxiomaticInstantiator {
             }
             if (needsDirectProductTriples) {
                 addDirectProductResultAliasPairs(triples, aliasPairs);
+            }
+            if (needsParallelProductQuads) {
+                addParallelProductAliasPairs(quads, aliasPairs);
             }
             aliasPairs = renormalizePairWhitespace(aliasPairs);
             // aliasPairs (não pairs): prj1/prj2 quantificam o seu próprio axioma sobre
@@ -244,7 +269,57 @@ public final class SpecificationAxiomaticInstantiator {
                     List.copyOf(listElem),
                     List.copyOf(pairs),
                     List.copyOf(aliasPairs),
-                    List.copyOf(triples));
+                    List.copyOf(triples),
+                    List.copyOf(quads));
+        }
+
+        /**
+         * Quádruplos (A,B,C,D) de {@code parallel_product<A,B,C,D>} (B: {@code R1 || R2}, com
+         * {@code R1 : Relation<A,B>}, {@code R2 : Relation<C,D>}, resultado {@code
+         * Relation<Tuple<A,C>, Tuple<B,D>>}). Primeiro os NATURAIS: elementos {@code
+         * Tuple<Tuple<A,C>, Tuple<B,D>>} já presentes na especificação (o tipo do resultado foi
+         * declarado, ex. {@code mov_peca} em damas). Sem nenhum, cruza os pares de relação naturais
+         * entre si (poucos numa especificação) — a chamada {@code (r1 || r2)(x)} sozinha não escreve
+         * o tipo do resultado.
+         */
+        private static Set<List<String>> deriveParallelProductQuads(
+                Set<String> setElem, Set<List<String>> naturalPairs) {
+            Set<List<String>> quads = new LinkedHashSet<>();
+            for (String t : setElem) {
+                Matcher m = PARALLEL_PRODUCT_ELEMENT.matcher(t);
+                if (m.find()) {
+                    quads.add(List.of(m.group(1), m.group(3), m.group(2), m.group(4)));
+                }
+            }
+            if (quads.isEmpty()) {
+                for (List<String> p1 : naturalPairs) {
+                    for (List<String> p2 : naturalPairs) {
+                        quads.add(List.of(p1.get(0), p1.get(1), p2.get(0), p2.get(1)));
+                    }
+                }
+            }
+            return quads;
+        }
+
+        /**
+         * Pares alias-only que o axioma {@code parallel_product_def<A,B,C,D>} precisa: {@code
+         * (A,C)} e {@code (B,D)} (os {@code couple(x, y)}, {@code couple(z, a)}) e {@code
+         * (Tuple<A,C>, Tuple<B,D>)} (o elemento {@code couple(couple(x, y), couple(z, a))} e o tipo
+         * de retorno {@code Relation<Tuple<A,C>, Tuple<B,D>>}).
+         */
+        private static void addParallelProductAliasPairs(
+                Set<List<String>> quads, Set<List<String>> aliasPairs) {
+            for (List<String> q : quads) {
+                String a = normalizeTypeWhitespace(q.get(0));
+                String b = normalizeTypeWhitespace(q.get(1));
+                String c = normalizeTypeWhitespace(q.get(2));
+                String d = normalizeTypeWhitespace(q.get(3));
+                aliasPairs.add(List.of(a, c));
+                aliasPairs.add(List.of(b, d));
+                aliasPairs.add(List.of(
+                        normalizeTypeWhitespace("Tuple<" + a + "," + c + ">"),
+                        normalizeTypeWhitespace("Tuple<" + b + "," + d + ">")));
+            }
         }
 
         /**
@@ -729,7 +804,8 @@ public final class SpecificationAxiomaticInstantiator {
                 content.contains("pow_set("),
                 content.contains("relation_inverse("),
                 REL_FNC_PRJ_SELF_REFERENCE.matcher(content).find(),
-                content.contains("direct_product"));
+                content.contains("direct_product"),
+                content.contains("parallel_product"));
         if (ctx.singleTypes().isEmpty() && ctx.pairTypes().isEmpty()) return;
 
         // Passe 1: aridade 2/3 (rel/fnc/prj1/prj2/direct_product/couple/dom/ran/…) — usa ctx,
@@ -990,6 +1066,7 @@ public final class SpecificationAxiomaticInstantiator {
             case 1 -> List.of("A");
             case 2 -> List.of("A", "B");
             case 3 -> List.of("A", "B", "C");
+            case 4 -> List.of("A", "B", "C", "D");
             default -> List.of();
         };
     }
@@ -1075,6 +1152,15 @@ public final class SpecificationAxiomaticInstantiator {
      * {@code cartesian_product_*_nested<A,B,C>}, cuja conclusão é sempre sobre esse formato de
      * tipo. Ver {@link #NESTED_TUPLE_TRIPLE}.
      */
+    /**
+     * Elemento de um produto paralelo {@code R1 || R2}: {@code Tuple<Tuple<a, c>, Tuple<b, d>>}
+     * (com {@code R1 : Relation<a,b>} e {@code R2 : Relation<c,d>}), componentes simples.
+     */
+    private static final Pattern PARALLEL_PRODUCT_ELEMENT =
+            Pattern.compile(
+                    "Tuple\\s*<\\s*Tuple\\s*<\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*,\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*>"
+                            + "\\s*,\\s*Tuple\\s*<\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*,\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*>\\s*>");
+
     private static List<List<String>> nestedCartesianProductTripleTypes(
             List<String> naturalSetElemTypes) {
         LinkedHashSet<List<String>> triples = new LinkedHashSet<>();
@@ -1246,6 +1332,14 @@ public final class SpecificationAxiomaticInstantiator {
             }
             // Nenhum candidato: mantém o bloco genérico fora do output (ver o "continue" no
             // chamador) em vez de o deixar como texto <A,B,C> inválido em ACSL puro.
+            return List.of();
+        }
+        if (arity == 4) {
+            // parallel_product<A,B,C,D> (B: R1 || R2): candidatos dos elementos
+            // Tuple<Tuple<A,C>, Tuple<B,D>> naturais no texto
+            if (content.contains("parallel_product")) {
+                return ctx.quadTypes().stream().map(List::copyOf).toList();
+            }
             return List.of();
         }
         return List.of();

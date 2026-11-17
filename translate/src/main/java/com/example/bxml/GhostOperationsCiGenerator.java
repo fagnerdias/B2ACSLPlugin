@@ -169,6 +169,9 @@ public final class GhostOperationsCiGenerator {
         // "unbound logic variable" no front-end isolado (ex. INITIALISATION referenciando o próprio
         // ISLAND da máquina, não só de uma máquina SEEN).
         concreteConstants.addAll(BxmlSetsTranslator.buildDeferredSetRenames(abstractMachineEl).values());
+        // ABSTRACT_CONSTANTS que não são lambda: também dummy_<C> no texto ghost (declaradas no
+        // dummy_ghost, ver DummyGhostAxiomaticBuilder), não pelo nome sem prefixo
+        concreteConstants.addAll(nonLambdaAbstractConstantNames(abstractMachineEl));
 
         List<BxmlSetsTranslator.EnumeratedSetInfo> enumeratedSetsForGhost =
                 BxmlSetsTranslator.listEnumeratedSetsWithSees(
@@ -600,6 +603,23 @@ public final class GhostOperationsCiGenerator {
     }
 
     /** Nomes em {@code Concrete_Constants} (ordem de declaração no BXML). */
+    /** ABSTRACT_CONSTANTS da máquina que não são definidas por lambda ({@code ID = %(..)}). */
+    static Set<String> nonLambdaAbstractConstantNames(Element machineEl) {
+        Set<String> out = new LinkedHashSet<>();
+        if (machineEl == null) return out;
+        Element block = BxmlDomUtils.firstChildElement(machineEl, "Abstract_Constants");
+        if (block == null) return out;
+        Map<String, List<String>> lambdas = BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl);
+        for (Node n = block.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n instanceof Element e && "Id".equals(e.getLocalName())) {
+                String v = e.getAttribute("value").trim();
+                List<String> ps = lambdas.get(v);
+                if (!v.isBlank() && (ps == null || ps.isEmpty())) out.add(v);
+            }
+        }
+        return out;
+    }
+
     private static Set<String> concreteConstantNames(Element machineEl) {
         Set<String> out = new LinkedHashSet<>();
         Element block = BxmlDomUtils.firstChildElement(machineEl, "Concrete_Constants");

@@ -2,7 +2,7 @@
   "_meta": {
     "generator": "scripts/generate_acsl_symbol_dependency_map.py",
     "root": "translate/src/main/resources/lib/B2ACSLLib",
-    "symbol_count": 82
+    "symbol_count": 83
   },
   "symbols": [
     "apply",
@@ -60,6 +60,7 @@
     "not_strict_inclusion",
     "overwrite",
     "pair",
+    "parallel_product",
     "pow_set",
     "pred",
     "prj1",
@@ -170,7 +171,8 @@
     "singleton": "set_functions/singleton.acsl",
     "strict_inclusion": "set_functions/equals.acsl",
     "succ": "set_axioms/NAT_succ_axioms.acsl",
-    "tail": "sequence_functions/tail.acsl"
+    "tail": "sequence_functions/tail.acsl",
+    "parallel_product": "relation_functions/parallel_product.acsl"
   },
   "symbol_to_all_files": {
     "apply": [
@@ -421,6 +423,9 @@
     ],
     "tail": [
       "sequence_functions/tail.acsl"
+    ],
+    "parallel_product": [
+      "relation_functions/parallel_product.acsl"
     ]
   },
   "dependencies": {
@@ -972,6 +977,10 @@
       "inclusion",
       "not_belongs",
       "pred"
+    ],
+    "parallel_product": [
+      "belongs",
+      "couple"
     ]
   },
   "includes_from": {
@@ -1747,6 +1756,14 @@
       "set_functions/union.acsl",
       "tuple_functions/accessors.acsl",
       "tuple_functions/tuple_couple.acsl"
+    ],
+    "relation_axioms/relation_parallel_product.acsl": [
+      "relation_functions/parallel_product.acsl",
+      "set_functions/belongs.acsl",
+      "tuple_functions/tuple_couple.acsl"
+    ],
+    "relation_functions/parallel_product.acsl": [
+      "relation_axioms/relation_parallel_product.acsl"
     ]
   }
 }
