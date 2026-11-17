@@ -40,17 +40,19 @@ public final class BxmlExpressionToAcsl {
         if (overwriteWithLambda != null) {
             return overwriteWithLambda;
         }
+        // sequência (\\list) de um lado e relação/função do outro: equals(R, list_to_function(L)),
+        // como o B2ACSLRules
         if (isListValued(leftExp, ctx) && isRelationOrFunctionValued(rightExp, ctx)) {
-            return translate(rightExp, ctx)
-                    + " == list_to_function("
+            return "equals(" + translate(rightExp, ctx)
+                    + ", list_to_function("
                     + translate(leftExp, ctx)
-                    + ")";
+                    + "))";
         }
         if (isListValued(rightExp, ctx) && isRelationOrFunctionValued(leftExp, ctx)) {
-            return translate(leftExp, ctx)
-                    + " == list_to_function("
+            return "equals(" + translate(leftExp, ctx)
+                    + ", list_to_function("
                     + translate(rightExp, ctx)
-                    + ")";
+                    + "))";
         }
         String l = translate(leftExp, ctx);
         String r = translate(rightExp, ctx);
@@ -484,6 +486,24 @@ public final class BxmlExpressionToAcsl {
         return t.startsWith("Relation_") || t.startsWith("Function_");
     }
 
+    /**
+     * Como {@link #isRelationLikeVariableType}, aceitando também os tipos genéricos de hoje
+     * ({@code Relation<A,B>}, {@code Function<A,B>}, {@code Set<Tuple<A,B> >}). Só para o tipo
+     * DECLARADO da variável: sem isto, "sq : (1..3) --> 0..255" não era vista como relação e
+     * "sq := [1, 2, 3]" saía "sq == [| 1, 2, 3 |]" (tipos incompatíveis). O tipo inferido pelo
+     * typref não pode usá-lo: uma sequência B tem typref POW(INTEGER*INTEGER), que dá Relation<…>
+     * (ex. o \\let aseq de RobustFifo, uma \\list).
+     */
+    private static boolean isRelationLikeDeclaredType(String t) {
+        if (t == null || t.isBlank()) {
+            return false;
+        }
+        String s = t.trim();
+        return isRelationLikeVariableType(s)
+                || s.startsWith("Relation<") || s.startsWith("Function<")
+                || s.replace(" ", "").startsWith("Set<Tuple<");
+    }
+
     private static boolean isRelationOrFunctionValuedId(Element idEl, BxmlTranslateContext ctx) {
         String name = idEl.getAttribute("value");
         String t = ctx.variableLogicTypes().get(name);
@@ -498,7 +518,7 @@ public final class BxmlExpressionToAcsl {
         // errado em "queue == queue <- ee" e gerando "incompatible types DRelation<...> and
         // \list<integer>" no Frama-C.
         if (t != null) {
-            return isRelationLikeVariableType(t);
+            return isRelationLikeDeclaredType(t);
         }
         String trAttr = idEl.getAttribute("typref");
         if (trAttr == null || trAttr.isBlank()) {
@@ -1290,10 +1310,10 @@ public final class BxmlExpressionToAcsl {
             return "interval_set(" + left + ", " + right + ")";
         }
         if (isSequenceAppendOp(op)) {
-            return "(" + "\\concat(" + left + ", [|" + right + "|])" + ")";
+            return "(" + "\\concat(" + left + ", [| " + right + " |])" + ")";
         }
         if (isSequencePrependOp(op)) {
-            return "\\concat([|" + left + "|], " + right + ")";
+            return "\\concat([| " + left + " |], " + right + ")";
         }
         if (isSequenceConcatOp(op)) {
             return "\\concat(" + left + ", " + right + ")";

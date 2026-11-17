@@ -442,8 +442,8 @@ public final class BxmlPredicateToAcsl {
                 if (setAtom == null) return "";
                 String base = "belongs(" + left + ", seq(" + setAtom + "))";
                 return switch (uop) {
-                    case "seq1" -> base + " && (" + left + " != [| |])";
-                    case "iseq1" -> base + " && (" + left + " != [| |]) && iSeq(" + left + ")";
+                    case "seq1" -> base + " && (" + left + " != \\Nil)";
+                    case "iseq1" -> base + " && (" + left + " != \\Nil) && iSeq(" + left + ")";
                     default -> base + " && iSeq(" + left + ") && equals(sequence_ran(" + left + "), " + setAtom + ")";
                 };
             }
@@ -640,11 +640,11 @@ public final class BxmlPredicateToAcsl {
         }
         if (BxmlExpressionToAcsl.isListValued(leftEl, ctx)
                 && BxmlExpressionToAcsl.isRelationOrFunctionValued(rightEl, ctx)) {
-            return "(" + right + " == list_to_function(" + left + "))";
+            return "equals(" + right + ", list_to_function(" + left + "))";
         }
         if (BxmlExpressionToAcsl.isListValued(rightEl, ctx)
                 && BxmlExpressionToAcsl.isRelationOrFunctionValued(leftEl, ctx)) {
-            return "(" + left + " == list_to_function(" + right + "))";
+            return "equals(" + left + ", list_to_function(" + right + "))";
         }
         // V = %x.(x:D | {y|Q}) — lambda "mapa" valorado-em-conjunto (ver
         // BxmlExpressionToAcsl#setValuedMapLambdaPointwiseEquality): V é a relação inteira, o
