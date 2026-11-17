@@ -487,6 +487,12 @@ public final class GhostOperationsCiGenerator {
                     existsForm = rewriteBoolOutputPredicateTernary(existsForm);
                     existsForm = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(existsForm, params);
                     String opSlug = GhostParamTypeResolver.sanitizeGhostFunctionName(opName);
+                    if (Unsupported.in(existsForm)) {
+                        // corpo sem tradução (ex. produto paralelo de relações no WHERE): como no
+                        // caminho comum abaixo, a função ghost fica só com o assigns
+                        ops.add(new GhostOp(opSlug, params, assigned, List.of()));
+                        continue;
+                    }
                     ops.add(new GhostOp(opSlug, params, assigned, List.of(existsForm)));
                     if (needsMarker) {
                         ops.add(
@@ -1213,8 +1219,17 @@ public final class GhostOperationsCiGenerator {
 
     /** Nomes em {@code Abstract_Variables} (ordem do BXML). */
     public static List<String> listAbstractVariableNames(Element machineEl) {
+        return listVariableNames(machineEl, "Abstract_Variables");
+    }
+
+    /** Nomes de {@code CONCRETE_VARIABLES} da máquina (sem camada ghost). */
+    public static List<String> listConcreteVariableNames(Element machineEl) {
+        return listVariableNames(machineEl, "Concrete_Variables");
+    }
+
+    private static List<String> listVariableNames(Element machineEl, String section) {
         List<String> out = new ArrayList<>();
-        Element block = BxmlDomUtils.firstChildElement(machineEl, "Abstract_Variables");
+        Element block = BxmlDomUtils.firstChildElement(machineEl, section);
         if (block == null) return out;
         NodeList ch = block.getChildNodes();
         for (int i = 0; i < ch.getLength(); i++) {

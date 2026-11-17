@@ -375,6 +375,10 @@ public final class BxmlOperationsTranslator {
 
             connectionConcreteAssigns =
                     mergeCalledOperationAssigns(connectionConcreteAssigns, importedOpAssigns, implOp);
+            connectionConcreteAssigns =
+                    addOwnConcreteVariableAssigns(
+                            connectionConcreteAssigns, child, implOp, rootAbstractMachineName, machineEl,
+                            mergedRefinementChain, opCtx, varRhsOverrides, bxmlDirectory);
 
             // Becomes_In (v :: S) compila para rand() → Frama-C exige __fc_random_counter no assigns.
             // Apenas o corpo da implementação é compilado para C; a abstrata pode ter Becomes_In
@@ -867,6 +871,38 @@ public final class BxmlOperationsTranslator {
             }
         }
         return connectionConcreteAssigns;
+    }
+
+    /**
+     * Variáveis concretas que a operação escreve e que nenhum outro caminho do assigns cobre:
+     * as CONCRETE_VARIABLES da abstração atribuídas pela operação abstrata, e as da implementação
+     * atribuídas pela operação da implementação (JogoDados.lancar: semente). Ambas são globais C
+     * {@code Raiz__v}; sem elas, o assigns saía {@code \\nothing} ou incompleto.
+     */
+    private static List<String> addOwnConcreteVariableAssigns(
+            List<String> current, Element absOp, Element implOp, String rootAbstractMachineName,
+            Element machineEl, List<Element> mergedRefinementChain, BxmlTranslateContext ctx,
+            Map<String, String> varRhsOverrides, Path bxmlDirectory) {
+        if (rootAbstractMachineName == null || rootAbstractMachineName.isBlank() || machineEl == null) {
+            return current;
+        }
+        List<String> extra = new ArrayList<>();
+        Set<String> own = new LinkedHashSet<>(GhostOperationsCiGenerator.listConcreteVariableNames(machineEl));
+        if (varRhsOverrides != null) own.removeAll(varRhsOverrides.keySet());
+        extra.addAll(ConcreteAssignTargetResolver.ownConcreteAssignTargets(
+                rootAbstractMachineName, machineEl,
+                GhostContractPredicates.assignedAbstractVariablesInOperation(absOp, own), ctx, bxmlDirectory));
+        if (implOp != null && mergedRefinementChain != null) {
+            for (Element mel : mergedRefinementChain) {
+                if (!BxmlMachineVariables.isImplementationMachine(mel)) continue;
+                Set<String> implVars = new LinkedHashSet<>(GhostOperationsCiGenerator.listConcreteVariableNames(mel));
+                extra.addAll(ConcreteAssignTargetResolver.ownConcreteAssignTargets(
+                        rootAbstractMachineName, mel,
+                        GhostContractPredicates.assignedAbstractVariablesInOperation(implOp, implVars),
+                        ctx, bxmlDirectory));
+            }
+        }
+        return ConcreteAssignTargetResolver.mergeAssignTargets(current, extra);
     }
 
     private static List<String> addRandomCounterAssignIfNeeded(

@@ -357,12 +357,55 @@ public final class ConcreteAssignTargetResolver {
         List<String> fromImpl =
                 listImplementationAssignTargets(
                         abstractMachineName, mergedMachineElements, ctx, bxmlDirectory);
-        if (!fromImpl.isEmpty()) {
-            return fromImpl;
+        List<String> base =
+                !fromImpl.isEmpty()
+                        ? fromImpl
+                        : listLinkedConcreteAssignTargetsForInitialisation(
+                                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx,
+                                varRhsOverrides == null ? Map.of() : varRhsOverrides);
+        // CONCRETE_VARIABLES da própria abstração atribuídas na inicialização: são sempre globais
+        // C (Raiz__v), mesmo quando a implementação declara variáveis próprias (JogoDados: semente)
+        // ou há camada ghost (cv_subst: sq) — antes ficavam fora do assigns.
+        Set<String> own = new LinkedHashSet<>(GhostOperationsCiGenerator.listConcreteVariableNames(abstractMachineEl));
+        if (varRhsOverrides != null) own.removeAll(varRhsOverrides.keySet());
+        Set<String> assignedOwn = GhostContractPredicates.variablesAssignedInInitialisation(abstractMachineEl, own);
+        return mergeAssignTargets(
+                base,
+                ownConcreteAssignTargets(abstractMachineName, abstractMachineEl, assignedOwn, ctx, bxmlDirectory));
+    }
+
+    /**
+     * Alvos {@code Raiz__v} (com fatia {@code [lo .. hi]} se array) das variáveis {@code names},
+     * CONCRETE_VARIABLES de {@code ownerMachineEl}: são sempre variáveis globais C.
+     */
+    public static List<String> ownConcreteAssignTargets(
+            String rootAbstractMachineName, Element ownerMachineEl, Set<String> names,
+            BxmlTranslateContext ctx, Path bxmlDirectory) {
+        List<String> out = new ArrayList<>();
+        if (rootAbstractMachineName == null || rootAbstractMachineName.isBlank() || names == null) {
+            return out;
         }
-        return listLinkedConcreteAssignTargetsForInitialisation(
-                abstractMachineName, abstractMachineEl, mergedMachineElements, ctx,
-                varRhsOverrides == null ? Map.of() : varRhsOverrides);
+        for (String v : names) {
+            if (v == null || v.isBlank()) continue;
+            String base = rootAbstractMachineName.trim() + "__" + v.trim();
+            String ranged = implementationAssignTargetWithRange(base, v.trim(), ownerMachineEl, ctx, bxmlDirectory);
+            out.add(ranged == null ? base : ranged);
+        }
+        return out;
+    }
+
+    /** {@code existing} seguido dos alvos de {@code extra} cuja variável ({@code X__v}, sem a fatia) ainda não está lá. */
+    public static List<String> mergeAssignTargets(List<String> existing, List<String> extra) {
+        if (extra == null || extra.isEmpty()) return existing;
+        Map<String, String> byBase = new java.util.LinkedHashMap<>();
+        for (String e : existing) byBase.putIfAbsent(assignTargetBase(e), e);
+        for (String x : extra) byBase.putIfAbsent(assignTargetBase(x), x);
+        return new ArrayList<>(byBase.values());
+    }
+
+    private static String assignTargetBase(String target) {
+        int i = target.indexOf('[');
+        return (i < 0 ? target : target.substring(0, i)).trim();
     }
 
     public static List<String> listImplementationAssignTargets(

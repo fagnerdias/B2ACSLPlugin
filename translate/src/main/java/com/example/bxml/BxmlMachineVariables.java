@@ -608,14 +608,17 @@ public final class BxmlMachineVariables {
     private static String sequenceDomainRelationTypeIfAny(Element rhs, BxmlTypeRegistry types) {
         Element arrowDomain = BxmlExpressionToAcsl.arrowTypeDomainIfAny(rhs);
         Element arrowCodomain = BxmlExpressionToAcsl.arrowTypeCodomainIfAny(rhs);
+        // contradomínio: um conjunto nomeado (uint16_t, BOOL...) ou um intervalo (0..65535, integer)
+        boolean codomainInterval =
+                arrowCodomain != null && BxmlExpressionToAcsl.isIntervalBinaryExp(arrowCodomain);
         if (arrowDomain == null
                 || arrowCodomain == null
                 || !isSequenceTypingOp(arrowDomain)
-                || !"Id".equals(arrowCodomain.getLocalName())) {
+                || !("Id".equals(arrowCodomain.getLocalName()) || codomainInterval)) {
             return null;
         }
         String domainType = acslListTypeForSequenceUnary(arrowDomain, types);
-        String codomainRhs = arrowCodomain.getAttribute("value");
+        String codomainRhs = codomainInterval ? "" : arrowCodomain.getAttribute("value");
         String codomainType =
                 isNamedBaseType(codomainRhs) ? types.acslElementTypeName(codomainRhs) : "integer";
         return types.registerCartesianRelationType(domainType, codomainType);

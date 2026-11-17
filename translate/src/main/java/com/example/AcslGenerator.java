@@ -546,6 +546,10 @@ public final class AcslGenerator {
         // sem nenhuma promessa sobre o valor de v.
         Set<String> initEnsuresKeepNames = new LinkedHashSet<>(collapsedVariableNames);
         initEnsuresKeepNames.addAll(dummyGhostVarsForInit);
+        // CONCRETE_VARIABLES da própria abstração também não têm camada ghost: sem elas, uma
+        // máquina com variáveis abstratas E concretas (cv_subst: sq e acc, ult, xx...) perdia o
+        // ensures da inicialização das concretas.
+        initEnsuresKeepNames.addAll(GhostOperationsCiGenerator.listConcreteVariableNames(machineEl));
         List<String> initEnsuresForContract =
                 initGhostAssert
                         ? BxmlInitialisationTranslator.ensuresForNonGhostVariables(
