@@ -825,7 +825,9 @@ public final class AcslGenerator {
                         ? ""
                         : MachineAxiomaticBlockFormatter.formatAxiomaticBlockWithGhostDummyReads(
                                 machineEl, ctx, concreteLinkRoot, abstractVariableNamesForGhost,
-                                varRhsOverrides, bxmlDirectory, collapsedVariableNames);
+                                varRhsOverrides, bxmlDirectory, collapsedVariableNames,
+                                ownConcreteVariableLinks(machineEl, mergedMachineElements, baseName,
+                                        concreteLinkRoot, collapsedVariableNames));
         appendBlockWithSpacing(sb, varsAbstract);
         // Variáveis das máquinas fundidas (r, i) — em ordem de cadeia, antes das compreensões.
         //
@@ -1098,8 +1100,14 @@ public final class AcslGenerator {
         }
         if (lambdaBlock != null && hasGenericTypedBinder(lambdaBlock)) {
             // idem às compreensões: binder genérico só num ficheiro incluído
+            // arquivo próprio: axiomatic <M>_lambda_functions, como o B2ACSLRules — com o nome fixo
+            // "lambda_functions", duas máquinas do mesmo projeto davam "Duplicated axiomatics"
+            // (safetyflasher: csp_stdLib_arith e csp_stdLib_addr)
             appendSigmaIncludeBlock(
-                    sb, outputDir, baseName + "_lambda_functions.acsl", lambdaBlock, libScanRemovedBodies);
+                    sb, outputDir, baseName + "_lambda_functions.acsl",
+                    lambdaBlock.replaceFirst(
+                            "axiomatic lambda_functions \\{", "axiomatic " + baseName + "_lambda_functions {"),
+                    libScanRemovedBodies);
         } else if (lambdaBlock != null) {
             sb.append("\n");
             sb.append(lambdaBlock);
@@ -1355,6 +1363,29 @@ public final class AcslGenerator {
                 LIBRARY_RESOLVER.formatIncludeBlock(
                         bodyForLibScan, combinedExtraScan, dependencyLibIncludePaths);
         return new LibIncludeResolution(combinedExtraScan, libIncludes, dependencyLibIncludePaths);
+    }
+
+    /**
+     * CONCRETE_VARIABLES da abstração ligadas a {@code Raiz__v} uma a uma, quando a ligação geral
+     * ({@code concreteLinkRoot}) não se aplica mas há implementação (código C): elas são sempre
+     * globais C, também quando a implementação declara variáveis próprias (JogoDados: semente) ou há
+     * camada ghost (cv_subst: sq). Antes ficavam "logic integer v;" sem ligação, e o WP não provava
+     * nem "*pp == posicao".
+     */
+    private static Map<String, String> ownConcreteVariableLinks(
+            Element machineEl, List<Element> mergedMachineElements, String baseName,
+            String concreteLinkRoot, Set<String> collapsedVariableNames) {
+        if (concreteLinkRoot != null || mergedMachineElements == null
+                || mergedMachineElements.stream().noneMatch(m -> "implementation".equals(m.getAttribute("type")))) {
+            return Map.of();
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        for (String v : GhostOperationsCiGenerator.listConcreteVariableNames(machineEl)) {
+            if (collapsedVariableNames == null || !collapsedVariableNames.contains(v)) {
+                out.put(v, baseName);
+            }
+        }
+        return out;
     }
 
     private static String resolveMachineDependencyIncludes(

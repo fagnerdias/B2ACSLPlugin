@@ -178,6 +178,14 @@ public final class GhostOperationsCiGenerator {
                 BxmlConstantsAndProperties.collectLambdaDefsFromProperties(abstractMachineEl);
         Map<String, String> abstractConstDecls =
                 GhostParamTypeResolver.buildAbstractConstantDecls(abstractMachineEl, ctx, abstractConstParams);
+        // Só as constantes definidas por lambda (ID = %(..), logic boolean ID(..)) ficam no bloco
+        // que sobrevive ao merged_code.c: o ghost as usa sem prefixo, e o .acsl real as omite (ver
+        // AcslGenerator, ciDeclaredAbstractConsts). As outras o ghost usa como dummy_X; declará-las
+        // aqui sem prefixo duplicava a declaração do .acsl ("crc16 is already declared", cv_subst).
+        abstractConstDecls.keySet().removeIf(name -> {
+            List<String> ps = abstractConstParams.get(name);
+            return ps == null || ps.isEmpty();
+        });
         List<GhostOp> ghostOps =
                 buildGhostOperations(
                         abstractMachineEl,
@@ -488,9 +496,12 @@ public final class GhostOperationsCiGenerator {
                     existsForm = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(existsForm, params);
                     String opSlug = GhostParamTypeResolver.sanitizeGhostFunctionName(opName);
                     if (Unsupported.in(existsForm)) {
-                        // corpo sem tradução (ex. produto paralelo de relações no WHERE): como no
-                        // caminho comum abaixo, a função ghost fica só com o assigns
-                        ops.add(new GhostOp(opSlug, params, assigned, List.of()));
+                        // corpo sem tradução (ex. produto paralelo de relações no WHERE): a função
+                        // ghost fica só com o assigns; sem variável abstrata atribuída, não há função
+                        // ghost (o contrato real também não a chama, ver BxmlOperationsTranslator)
+                        if (!assigned.isEmpty()) {
+                            ops.add(new GhostOp(opSlug, params, assigned, List.of()));
+                        }
                         continue;
                     }
                     ops.add(new GhostOp(opSlug, params, assigned, List.of(existsForm)));

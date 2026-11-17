@@ -645,6 +645,21 @@ public final class BxmlExpressionToAcsl {
         return ">->>".equals(o) || "&gt;-&gt;&gt;".equals(o);
     }
 
+    /** {@code Id} cujo tipo B (typref) é produto ou conjunto, ou cujo tipo lógico declarado não é escalar. */
+    static boolean isNonScalarTypedId(Element id, BxmlTranslateContext ctx) {
+        if (id == null || ctx == null) return false;
+        String declared = ctx.variableLogicTypes().get(id.getAttribute("value"));
+        if (declared != null && declared.contains("<")) return true;
+        String tr = id.getAttribute("typref");
+        if (tr == null || tr.isBlank()) return false;
+        try {
+            String raw = ctx.types().getRawType(Integer.parseInt(tr.trim()));
+            return raw != null && (raw.contains("*") || raw.startsWith("POW("));
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     /** B maplet {@code cc |-> bb} → {@code couple(cc, bb)} (ACSL_Lib/tuple_functions/tuple_couple.acsl). */
     private static boolean isMapletOp(String op) {
         if (op == null) return false;
@@ -669,8 +684,14 @@ public final class BxmlExpressionToAcsl {
      * nem a algo já explicitamente convertido (evita {@code (integer)(integer)x} redundante, e
      * NUNCA entra dentro de um {@code \old(...)} já aplicado pelo caso {@code "Id"}).
      */
-    private static String castBareIntegerIdForTuple(Element component, String translated) {
+    private static String castBareIntegerIdForTuple(
+            Element component, String translated, BxmlTranslateContext ctx) {
         if (component == null || translated == null || !"Id".equals(component.getLocalName())) {
+            return translated;
+        }
+        // Id de tipo não escalar (par, conjunto, relação: pos : (1..TAM) * (1..TAM)) não leva
+        // (integer) — "invalid cast from Tuple<integer, integer>"
+        if (isNonScalarTypedId(component, ctx)) {
             return translated;
         }
         if (translated.startsWith("(integer)")
@@ -1233,8 +1254,8 @@ public final class BxmlExpressionToAcsl {
             return "range_subtraction(" + rel + ", " + setRef + ")";
         }
         if (isMapletOp(op)) {
-            String left = castBareIntegerIdForTuple(pair[0], translate(pair[0], ctx));
-            String right = castBareIntegerIdForTuple(pair[1], translate(pair[1], ctx));
+            String left = castBareIntegerIdForTuple(pair[0], translate(pair[0], ctx), ctx);
+            String right = castBareIntegerIdForTuple(pair[1], translate(pair[1], ctx), ctx);
             return "couple(" + left + ", " + right + ")";
         }
         if (isFunctionApplicationOp(op)) {

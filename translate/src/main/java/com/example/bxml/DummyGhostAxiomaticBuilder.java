@@ -565,6 +565,10 @@ final class DummyGhostAxiomaticBuilder {
             String elem = t.substring(4, t.length() - 1).trim();
             return "DSet<" + elem + ">";
         }
+        // par/n-upla (pos : A * B): DTuple em todos os níveis
+        if (t.startsWith("Tuple<")) {
+            return dummyComprehensionParamType(t);
+        }
         // Instanciação genérica Relation<A,B>/Function<A,B> (ver
         // BxmlTypeRegistry#powCartesianProductToAcslRelationType, par escalar-escalar) — o universo
         // ghost isolado não vê "type Relation<A,B> = Set<Tuple<A,B> >;" de types.acsl (front-end

@@ -1358,6 +1358,23 @@ public final class BxmlInitialisationTranslator {
                 restAssigned, ensures, ctx, oldNames);
     }
 
+    /** {@code Id} que é parâmetro de saída da operação que o contém. */
+    private static boolean isOperationOutputParam(Element id) {
+        if (id == null || !"Id".equals(id.getLocalName())) return false;
+        String name = id.getAttribute("value").trim();
+        for (Node n = id.getParentNode(); n instanceof Element e; n = n.getParentNode()) {
+            if ("Operation".equals(e.getLocalName())) {
+                Element outs = BxmlDomUtils.firstChildElement(e, "Output_Parameters");
+                if (outs == null) return false;
+                for (Element o : BxmlDomUtils.directExpChildren(outs)) {
+                    if (name.equals(o.getAttribute("value").trim())) return true;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
+
     private static Element caseChoiceThen(Element choice) {
         Element thenEl = BxmlDomUtils.firstChildElement(choice, "Then");
         return thenEl == null ? null : BxmlDomUtils.firstSubChild(thenEl);
@@ -1575,9 +1592,13 @@ public final class BxmlInitialisationTranslator {
         Set<String> preStateNames = new LinkedHashSet<>(oldNames == null ? Set.of() : oldNames);
         collectAssignedLhsNames(becomesIn, preStateNames);
         List<String> varTexts = new ArrayList<>();
+        List<Boolean> varIsOutput = new ArrayList<>();
         for (Element varExp : BxmlDomUtils.directExpChildren(vars)) {
             String v = BxmlExpressionToAcsl.translate(varExp, ctx);
-            if (v != null && !v.isBlank()) varTexts.add(v);
+            if (v != null && !v.isBlank()) {
+                varTexts.add(v);
+                varIsOutput.add(isOperationOutputParam(varExp));
+            }
         }
         if (varTexts.isEmpty()) {
             return;
@@ -1595,9 +1616,16 @@ public final class BxmlInitialisationTranslator {
             ensures.add(Unsupported.marker(":: de varias variaveis com seta ou tipagem"));
             return;
         }
-        String element = varTexts.get(0);
-        for (int k = 1; k < varTexts.size(); k++) {
-            element = "couple(" + element + ", " + varTexts.get(k) + ")";
+        // parâmetro de saída (*p, tipo C): (integer) dentro do couple, senão o Frama-C recusa
+        // "invalid cast from Tuple<int32_t, int32_t> to Tuple<integer, integer>"
+        List<String> terms = new ArrayList<>();
+        for (int k = 0; k < varTexts.size(); k++) {
+            String v = varTexts.get(k);
+            terms.add(varIsOutput.get(k) || v.startsWith("*") ? "(integer)" + v : v);
+        }
+        String element = terms.get(0);
+        for (int k = 1; k < terms.size(); k++) {
+            element = "couple(" + element + ", " + terms.get(k) + ")";
         }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) {

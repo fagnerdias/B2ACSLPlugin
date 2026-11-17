@@ -336,6 +336,13 @@ public final class BxmlOperationsTranslator {
             GhostSlugInfo ghostInfo =
                     computeGhostSlugInfo(child, opName, useGhostAbstraction, abstractVariableNames);
             String ghostSlug = ghostInfo.ghostSlug();
+            // ANY sem tradução que não altera variável abstrata: sem contrato ghost (nem a função no
+            // ghost_operations.ci, ver GhostOperationsCiGenerator), como o B2ACSLRules. Antes ficava
+            // "assert ghost__op" virando chamada a uma função ghost que não chegava ao merged_code.c
+            // (damas: visao_adversario).
+            if (ensuresResult.bodyUnsupported() && !ghostInfo.assignsAbstract()) {
+                ghostSlug = "";
+            }
             boolean assignsAbstract = ghostInfo.assignsAbstract();
             List<String> ghostBehaviorArgs = ghostInfo.ghostBehaviorArgs();
 
@@ -543,7 +550,8 @@ public final class BxmlOperationsTranslator {
 
     private record OperationRequiresResult(List<String> requires, Set<String> funcTypedOutputs) {}
 
-    private record OperationEnsuresResult(List<String> ensures, List<String> bodyEnsuresOnly) {}
+    private record OperationEnsuresResult(
+            List<String> ensures, List<String> bodyEnsuresOnly, boolean bodyUnsupported) {}
 
     private record GhostSlugInfo(
             String ghostSlug, boolean assignsAbstract, List<String> ghostBehaviorArgs) {}
@@ -620,12 +628,14 @@ public final class BxmlOperationsTranslator {
      * Corpo com construção sem tradução ({@link Unsupported}): como o B2ACSLRules, nenhum ensures do
      * corpo (o assigns e o invariante ficam), com AVISO.
      */
-    static void dropBodyEnsuresIfUnsupported(List<String> ensures, Element op) {
+    static boolean dropBodyEnsuresIfUnsupported(List<String> ensures, Element op) {
         if (ensures.stream().anyMatch(Unsupported::in)) {
             ensures.clear();
             TranslationWarnings.add(TranslationWarnings.component(op) + "." + op.getAttribute("name")
                     + ": corpo nao traduzido para ensures (linha " + TranslationWarnings.line(op) + ")");
+            return true;
         }
+        return false;
     }
 
     private static OperationEnsuresResult buildEnsuresForOperation(
@@ -636,9 +646,10 @@ public final class BxmlOperationsTranslator {
             Set<String> funcTypedOutputs,
             List<String> invariantPredicateNames) {
         List<String> ensures = new ArrayList<>();
+        boolean bodyUnsupported = false;
         if (body != null) {
             BxmlInitialisationTranslator.appendEnsuresFromBody(body, ensures, opCtx);
-            dropBodyEnsuresIfUnsupported(ensures, child);
+            bodyUnsupported = dropBodyEnsuresIfUnsupported(ensures, child);
         }
         applyStarPrefixToEnsures(ensures, outputParams);
         // Antes de rewriteEnsuresBoolOutputEquality (que só troca o LHS "*p" por "(integer)(*p !=
@@ -682,7 +693,7 @@ public final class BxmlOperationsTranslator {
         for (String inv : invariantPredicateNames) {
             ensures.add(inv);
         }
-        return new OperationEnsuresResult(ensures, bodyEnsuresOnly);
+        return new OperationEnsuresResult(ensures, bodyEnsuresOnly, bodyUnsupported);
     }
 
     /**

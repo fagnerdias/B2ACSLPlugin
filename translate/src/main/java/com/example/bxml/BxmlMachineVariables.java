@@ -621,7 +621,11 @@ public final class BxmlMachineVariables {
         String codomainRhs = codomainInterval ? "" : arrowCodomain.getAttribute("value");
         String codomainType =
                 isNamedBaseType(codomainRhs) ? types.acslElementTypeName(codomainRhs) : "integer";
-        return types.registerCartesianRelationType(domainType, codomainType);
+        // Tipo genérico (types.acsl: type Relation<A,B> = Set<Tuple<A,B> >), não um alias achatado
+        // Relation_list_integer_integer: o alias ia para o <M>_tuple_types.acsl de CADA máquina que o
+        // usa, e a segunda declaração do mesmo nome era erro de sintaxe no -acsl-import
+        // (safetyflasher: csp_stdLib_crc e csp_stdLib_addr).
+        return "Relation<" + domainType + ", " + codomainType + (codomainType.endsWith(">") ? " " : "") + ">";
     }
 
     static boolean isSequenceTypingOp(Element exp) {
