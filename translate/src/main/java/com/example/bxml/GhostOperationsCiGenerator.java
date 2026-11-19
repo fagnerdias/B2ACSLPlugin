@@ -1143,7 +1143,8 @@ public final class GhostOperationsCiGenerator {
         }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) return null;
-        return "becomes_element_of(dummy_" + v + ", " + setExprText + ")";
+        // x :: S com S conjunto: belongs, como o contrato real (BxmlInitialisationTranslator) e o rules
+        return "belongs(dummy_" + v + ", " + setExprText + ")";
     }
 
     private static String ghostEnsureFromAssignment(

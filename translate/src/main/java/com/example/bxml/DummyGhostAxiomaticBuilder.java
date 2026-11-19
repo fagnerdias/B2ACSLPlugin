@@ -131,9 +131,6 @@ final class DummyGhostAxiomaticBuilder {
         boolean needsNat1 = Pattern.compile("\\bdummy_NAT1\\b").matcher(ghostText).find();
         boolean needsInt = ghostText.contains("dummy_INT");
         boolean needsBool = ghostText.contains("dummy_BOOL");
-        if (!enumeratedSets.isEmpty()) {
-            ghostNameToLibSymbol.putIfAbsent("belongs", "belongs");
-        }
 
         StringBuilder sb = new StringBuilder();
         sb.append("/*@\n");
@@ -275,25 +272,11 @@ final class DummyGhostAxiomaticBuilder {
         for (BxmlSetsTranslator.EnumeratedSetInfo set : enumeratedSets) {
             String dummySet = set.dummySetLogicName();
             sb.append("        logic DSet<integer> ").append(dummySet).append(";\n\n");
-            List<String> dummyVals = new ArrayList<>();
+            // Só as declarações (como o rules): o axioma dos valores já está no .acsl real, e o
+            // ghost é removido no merged_code.c.
             for (String v : set.valueNames()) {
-                String dv = set.dummyValueLogicName(v);
-                dummyVals.add(dv);
-                sb.append("        logic integer ").append(dv).append(";\n\n");
+                sb.append("        logic integer ").append(set.dummyValueLogicName(v)).append(";\n\n");
             }
-            sb.append("        axiom ").append(dummySet).append("_values:\n");
-            for (String dv : dummyVals) {
-                sb.append("            dummy_belongs(").append(dv).append(", ").append(dummySet).append(")\n");
-                sb.append("            &&\n");
-            }
-            sb.append("            \\forall integer x;\n");
-            sb.append("                dummy_belongs(x, ").append(dummySet).append(") ==>\n");
-            sb.append("                (");
-            for (int k = 0; k < dummyVals.size(); k++) {
-                if (k > 0) sb.append(" || ");
-                sb.append("x == ").append(dummyVals.get(k));
-            }
-            sb.append(");\n\n");
         }
     }
 
