@@ -605,14 +605,8 @@ public final class BxmlComprehensionRegistry {
         }
         if (idNodes.isEmpty()) return;
 
+        // Um alias de ANY (ih) no corpo é parâmetro da compreensão (ver freeVarsForComprehension).
         String pred = BxmlPredicateToAcsl.translateBodyPredicate(body, ctx);
-        Map<String, String> anyAliases = elementAnyAliases.getOrDefault(qs, Map.of());
-        if (!anyAliases.isEmpty()) {
-            // ih(ii) -> function_apply(island_happiness, ii): free vars já excluiu o alias da lista
-            // de parâmetros (ver freeVarsForComprehension), mas o CORPO traduzido acima ainda
-            // referencia o nome cru — sem isto ficaria sem declaração nenhuma no axioma.
-            pred = BxmlInitialisationTranslator.renameEliminatedAuxVars(pred, anyAliases.keySet(), anyAliases);
-        }
 
         String ref = comprehensionSetName(machineName, index) + callSuffix(free[0]);
         String axiomName = comprehensionAxiomName(machineName, index);
@@ -700,6 +694,15 @@ public final class BxmlComprehensionRegistry {
             // inteira nunca conseguia ser registada (ver o TODO logo abaixo do chamador).
             String realName = anyAliases.get(name);
             if (realName != null && ctx.variableLogicTypes().containsKey(realName)) {
+                // Alias de um ANY eliminado (ih em "ANY ih WHERE ih = island_happiness <+ ... THEN
+                // island_happiness := ih || ... {ii | ... & ih(ii) <= 0}"): continua PARÂMETRO, com o
+                // tipo da variável real. Trocá-lo pelo nome da variável dentro do axioma fazia o
+                // axioma ler o estado global (sem parâmetro de estado); na chamada, o ensures
+                // renomeia ih para o pós-estado (renameEliminatedAuxVars), como no rules.
+                names.add(name);
+                String declared = ctx.variableLogicTypes().get(realName);
+                String t = types != null ? types.expandTupleCodomainAlias(declared) : declared;
+                resolvedTypes.add(normalizeTypeSpacing(t));
                 continue;
             }
             names.add(name);
