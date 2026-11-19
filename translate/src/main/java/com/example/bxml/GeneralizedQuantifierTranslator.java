@@ -629,6 +629,10 @@ final class GeneralizedQuantifierTranslator {
         allIds.removeAll(boundVarNames);
         allIds.removeAll(ctx.helperGlobalLogicNames());
         allIds.removeAll(ctx.declaredSetNames());
+        // Constantes/conjuntos de máquinas vistas e valores enumerados são globais lógicos lidos
+        // pelo nome, como nas lambdas (railmap: e_OPPOSITION virava parâmetro de sigma_func01).
+        allIds.removeAll(ctx.seenGlobalLogicNames());
+        allIds.removeAll(ctx.enumValueRenames().keySet());
         allIds.removeAll(B_NON_PARAM_IDS);
         java.util.List<String> freeVarNames = new java.util.ArrayList<>(allIds);
         java.util.List<String> freeVarTypes = new java.util.ArrayList<>();
@@ -1276,7 +1280,10 @@ final class GeneralizedQuantifierTranslator {
             java.util.Map<String, Integer> typrefsOut) {
         String localName = e.getLocalName();
         java.util.Set<String> childScope = locallyBound;
-        if ("Quantified_Exp".equals(localName) || "Quantified_Pred".equals(localName)) {
+        // Quantified_Set ({cpt | P}) também liga variáveis: sem isto, o cpt de max({cpt | ...})
+        // dentro de uma lambda vazava como parâmetro livre (railmap lambda_func02).
+        if ("Quantified_Exp".equals(localName) || "Quantified_Pred".equals(localName)
+                || "Quantified_Set".equals(localName)) {
             java.util.Set<String> ownBoundVars = boundVariableNamesOf(e);
             if (!ownBoundVars.isEmpty()) {
                 childScope = new java.util.LinkedHashSet<>(locallyBound);
