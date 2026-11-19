@@ -49,6 +49,25 @@ public final class ConcreteAssignTargetResolver {
             Map<String, String> gluing,
             BxmlTranslateContext ctx,
             Path bxmlDirectory) {
+        return listConcreteAssignTargetsForAbstractMutation(
+                rootAbstractMachineName, rootMachine, mergedOrdered, assignedAbstractNames, gluing,
+                ctx, bxmlDirectory, null);
+    }
+
+    /**
+     * Como acima; com {@code opName}, as variáveis concretas da implementação são as que o corpo da
+     * operação {@code opName} na implementação escreve (e as operações locais que ela chama), como o
+     * frame do rules — sem ele (ou sem a operação na implementação), as citadas no invariante.
+     */
+    public static List<String> listConcreteAssignTargetsForAbstractMutation(
+            String rootAbstractMachineName,
+            Element rootMachine,
+            List<Element> mergedOrdered,
+            Set<String> assignedAbstractNames,
+            Map<String, String> gluing,
+            BxmlTranslateContext ctx,
+            Path bxmlDirectory,
+            String opName) {
         if (rootAbstractMachineName == null
                 || rootAbstractMachineName.isBlank()
                 || rootMachine == null
@@ -73,10 +92,17 @@ public final class ConcreteAssignTargetResolver {
                 }
                 prev = mel;
             } else if (BxmlMachineVariables.isImplementationMachine(mel)) {
-                Set<String> invIds = BxmlConnectionAcsl.invariantReferencedIdentifiers(mel);
-                if (!Collections.disjoint(invIds, linked)) {
-                    for (String c : BxmlConnectionAcsl.introducedStateVariableIds(mel)) {
-                        if (invIds.contains(c)) {
+                List<String> introduced = BxmlConnectionAcsl.introducedStateVariableIds(mel);
+                // As que a operação da implementação escreve (Biblioteca.addCopy não ganha mais
+                // books_i, lunh acs_empile_num sum_now/sum_next); sem a operação, as do invariante.
+                Set<String> related = implementationWrittenVariables(mel, opName, introduced);
+                if (related == null) {
+                    Set<String> invIds = BxmlConnectionAcsl.invariantReferencedIdentifiers(mel);
+                    related = Collections.disjoint(invIds, linked) ? Set.of() : invIds;
+                }
+                if (!related.isEmpty()) {
+                    for (String c : introduced) {
+                        if (related.contains(c)) {
                             String base = rootAbstractMachineName.trim() + "__" + c;
                             String ranged =
                                     implementationAssignTargetWithRange(
@@ -762,5 +788,86 @@ public final class ConcreteAssignTargetResolver {
                                     new ArrayList<>(relatedMachineNames), bxmlDirectory)));
         }
         return List.copyOf(out);
+    }
+    /**
+     * Variáveis de {@code candidates} escritas pelo corpo da operação {@code opName} da
+     * implementação {@code implEl} (atribuição, {@code ::}, {@code :(..)}, também dentro de laços e
+     * de operações locais chamadas), ou {@code null} se a implementação não define a operação.
+     */
+    public static Set<String> implementationWrittenVariables(
+            Element implEl, String opName, java.util.Collection<String> candidates) {
+        if (implEl == null || opName == null || opName.isBlank()) return null;
+        Element op = operationNamed(implEl, "Operations", opName.trim());
+        if (op == null) return null;
+        Set<String> out = new LinkedHashSet<>();
+        collectWritten(implEl, op, new LinkedHashSet<>(candidates), out, new java.util.HashSet<>());
+        return out;
+    }
+
+    private static Element operationNamed(Element machineEl, String section, String opName) {
+        Element ops = BxmlDomUtils.firstChildElement(machineEl, section);
+        if (ops == null) return null;
+        for (org.w3c.dom.Node n = ops.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n instanceof Element e && "Operation".equals(e.getLocalName())
+                    && opName.equals(e.getAttribute("name").trim())) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    private static void collectWritten(
+            Element implEl, Element el, Set<String> candidates, Set<String> out, Set<String> visitedLocalOps) {
+        String ln = el.getLocalName();
+        if ("Assignement_Sub".equals(ln) || "Becomes_In".equals(ln) || "Becomes_Such_That".equals(ln)) {
+            Element vars = BxmlDomUtils.firstChildElement(el, "Variables");
+            if (vars != null) {
+                for (org.w3c.dom.Node n = vars.getFirstChild(); n != null; n = n.getNextSibling()) {
+                    if (n instanceof Element v) {
+                        String name = leftmostIdValue(v);
+                        if (name != null && candidates.contains(name)) out.add(name);
+                    }
+                }
+            }
+        } else if ("Operation_Call".equals(ln)) {
+            // v <-- op(..): as saídas da chamada também escrevem estado (airlock actualize_pressure)
+            Element outs = BxmlDomUtils.firstChildElement(el, "Output_Parameters");
+            if (outs != null) {
+                for (org.w3c.dom.Node n = outs.getFirstChild(); n != null; n = n.getNextSibling()) {
+                    if (n instanceof Element v && !"Attr".equals(v.getLocalName())) {
+                        String name = leftmostIdValue(v);
+                        if (name != null && candidates.contains(name)) out.add(name);
+                    }
+                }
+            }
+            Element nameEl = BxmlDomUtils.firstChildElement(el, "Name");
+            Element idEl = nameEl == null ? null : BxmlDomUtils.firstChildElement(nameEl, "Id");
+            String callee = idEl == null ? null : idEl.getAttribute("value").trim();
+            if (callee != null && visitedLocalOps.add(callee)) {
+                Element local = operationNamed(implEl, "Local_Operations", callee);
+                if (local == null) local = localOperationImplementation(implEl, callee);
+                if (local != null) collectWritten(implEl, local, candidates, out, visitedLocalOps);
+            }
+        }
+        for (org.w3c.dom.Node n = el.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n instanceof Element ch && !"Attr".equals(ch.getLocalName())) {
+                collectWritten(implEl, ch, candidates, out, visitedLocalOps);
+            }
+        }
+    }
+
+    /** Corpo de uma operação local na seção Operations da implementação (B0: definida lá). */
+    private static Element localOperationImplementation(Element implEl, String name) {
+        Element locals = BxmlDomUtils.firstChildElement(implEl, "Local_Operations");
+        if (locals == null) return null;
+        return operationNamed(implEl, "Operations", name);
+    }
+
+    private static String leftmostIdValue(Element e) {
+        if ("Id".equals(e.getLocalName())) return e.getAttribute("value").trim();
+        for (org.w3c.dom.Node n = e.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n instanceof Element ch && !"Attr".equals(ch.getLocalName())) return leftmostIdValue(ch);
+        }
+        return null;
     }
 }

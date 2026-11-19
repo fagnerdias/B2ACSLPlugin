@@ -356,9 +356,12 @@ public final class BxmlOperationsTranslator {
             // não a lista COMPLETA de variáveis abstratas: uma variável colapsada não tem
             // dummy_ghost_<v> declarado (não há camada ghost paralela para ela), então referenciá-la
             // aqui geraria "unbound logic variable" no Frama-C.
+            // Só as variáveis que a operação escreve (como o rules): marcar todas as do modelo
+            // dizia que a operação também mexia nas que ela não toca (Biblioteca.addCopy: books).
             List<String> dummyGhostEnsureVars =
                     useGhostAbstraction && assignsAbstract && abstractVariableNames != null
-                            ? new ArrayList<>(abstractVariableNames)
+                            ? new ArrayList<>(GhostContractPredicates.assignedAbstractVariablesInOperation(
+                                    child, new LinkedHashSet<>(abstractVariableNames)))
                             : List.of();
 
             List<String> connectionConcreteAssigns =
@@ -828,7 +831,8 @@ public final class BxmlOperationsTranslator {
                         assignedAbs,
                         gluing,
                         opCtx,
-                        bxmlDirectory);
+                        bxmlDirectory,
+                        child.getAttribute("name"));
         if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
             connectionConcreteAssigns =
                     ConcreteAssignTargetResolver.listImplementationAssignTargetsForAbstractVariables(
