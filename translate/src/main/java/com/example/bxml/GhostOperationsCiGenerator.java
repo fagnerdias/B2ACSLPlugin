@@ -388,6 +388,77 @@ public final class GhostOperationsCiGenerator {
      * abstração): só essas ganham função ghost, e então as constantes definidas por lambda ficam
      * declaradas no ghost_operations.ci (ver AcslGenerator, ciDeclaredAbstractConsts).
      */
+    private static final String DUMMY_GHOST_START = "/*@\n    axiomatic dummy_ghost {\n\n";
+    private static final String DUMMY_GHOST_END = "    }\n*/\n";
+
+    /**
+     * Tira dos blocos {@code axiomatic dummy_ghost} as declarações que nada usa (como o rules): uma
+     * declaração fica se o nome aparece fora dos blocos (variáveis e funções ghost, blocos de
+     * helpers) ou numa declaração que fica (tipos D*, assinaturas). Axiomas ficam sempre.
+     */
+    public static void pruneUnusedDummyDeclarations(Path ghostCi) throws IOException {
+        if (ghostCi == null || !Files.isRegularFile(ghostCi)) return;
+        String text = Files.readString(ghostCi, StandardCharsets.UTF_8);
+        List<int[]> spans = new ArrayList<>();
+        StringBuilder outside = new StringBuilder();
+        int cursor = 0;
+        for (int a = text.indexOf(DUMMY_GHOST_START); a >= 0; a = text.indexOf(DUMMY_GHOST_START, cursor)) {
+            int f = text.indexOf(DUMMY_GHOST_END, a);
+            if (f < 0) break;
+            outside.append(text, cursor, a).append('\n');
+            spans.add(new int[] {a + DUMMY_GHOST_START.length(), f});
+            cursor = f + DUMMY_GHOST_END.length();
+        }
+        if (spans.isEmpty()) return;
+        outside.append(text.substring(cursor));
+        List<String> decls = new ArrayList<>();
+        List<Integer> owner = new ArrayList<>();
+        for (int i = 0; i < spans.size(); i++) {
+            for (String d : text.substring(spans.get(i)[0], spans.get(i)[1]).split("\n\n")) {
+                if (!d.isBlank()) {
+                    decls.add(d);
+                    owner.add(i);
+                }
+            }
+        }
+        boolean[] keep = new boolean[decls.size()];
+        StringBuilder used = new StringBuilder(outside);
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (int i = 0; i < decls.size(); i++) {
+                if (keep[i]) continue;
+                String n = declaredDummyName(decls.get(i));
+                if (n == null || Pattern.compile("(?<!\\w)" + Pattern.quote(n) + "(?!\\w)").matcher(used).find()) {
+                    keep[i] = true;
+                    used.append('\n').append(n == null ? decls.get(i) : decls.get(i).replaceFirst(Pattern.quote(n), ""));
+                    changed = true;
+                }
+            }
+        }
+        StringBuilder out = new StringBuilder();
+        int prev = 0;
+        for (int s = 0; s < spans.size(); s++) {
+            out.append(text, prev, spans.get(s)[0]);
+            for (int i = 0; i < decls.size(); i++) {
+                if (owner.get(i) == s && keep[i]) out.append(decls.get(i)).append("\n\n");
+            }
+            prev = spans.get(s)[1];
+        }
+        out.append(text.substring(prev));
+        if (!out.toString().equals(text)) Files.writeString(ghostCi, out.toString(), StandardCharsets.UTF_8);
+    }
+
+    /** Nome declarado ({@code type X} / {@code logic T x(..)} / {@code predicate x(..)}); null no resto. */
+    private static String declaredDummyName(String declaration) {
+        String d = declaration.strip();
+        Matcher t = Pattern.compile("^type\\s+(\\w+)").matcher(d);
+        if (t.find()) return t.group(1);
+        Matcher m = Pattern.compile("^(?:logic\\s+.+?|predicate)\\s+(\\w+)\\s*(?:<[^()]*?>)?\\s*[(;=]", Pattern.DOTALL)
+                .matcher(d);
+        return m.find() ? m.group(1) : null;
+    }
+
     public static boolean machineHasStateChangingAnySubOperations(Element machineEl) {
         Element opsEl = BxmlDomUtils.firstChildElement(machineEl, "Operations");
         if (opsEl == null) return false;

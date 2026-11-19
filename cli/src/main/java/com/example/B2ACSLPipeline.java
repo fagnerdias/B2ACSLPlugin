@@ -442,6 +442,8 @@ public final class B2ACSLPipeline {
         } else {
             GhostOperationsCiGenerator.mergeDuplicateDummyGhostBlocks(
                     GhostOperationsCiGenerator.targetPath(cDir));
+            GhostOperationsCiGenerator.pruneUnusedDummyDeclarations(
+                    GhostOperationsCiGenerator.targetPath(cDir));
         }
         Path ghostCiPath = GhostOperationsCiGenerator.targetPath(cDir);
         String ghostCiStripped =
