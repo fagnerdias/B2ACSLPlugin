@@ -1706,11 +1706,9 @@ public final class BxmlOperationsTranslator {
 
         /** Mesmo esquema que {@link com.example.bxml.InitialisationAcsl#toContractText()}. */
         public String toContractSketch() {
-            if (skipBody) {
-                return "function " + functionName + ":\ncontract:    \n"
-                        + "    requires \\true;\n"
-                        + "    ensures \\true;\n";
-            }
+            // PRE ... THEN skip END também tem contrato completo (tipagem da PRE, invariantes,
+            // assigns \nothing), como no rules; antes saía só "requires \true; ensures \true;" e
+            // sem assigns o chamador perdia o frame (safetyflasher printDebugMessage, flash).
             StringBuilder sb = new StringBuilder();
             sb.append("function ").append(functionName).append(":\n");
             sb.append("contract:    \n");
@@ -1722,6 +1720,9 @@ public final class BxmlOperationsTranslator {
             }
             for (String v : dummyGhostEnsureVarNames) {
                 sb.append("    ensures  dummy_ghost_").append(v).append(";\n");
+            }
+            if (ensures.isEmpty() && dummyGhostEnsureVarNames.isEmpty()) {
+                sb.append("    ensures \\true;\n");
             }
             boolean hasAssigns = false;
             for (String p : outputParameters) {
