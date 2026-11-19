@@ -740,7 +740,10 @@ public final class BxmlOperationsTranslator {
                         && GhostContractPredicates.operationAssignsAbstract(
                                 child, abstractVariableNames);
         boolean bodyHasAnySub = GhostContractPredicates.operationBodyHasAnySub(child);
-        if (useGhostAbstraction && (assignsAbstract || bodyHasAnySub)) {
+        // Só quando a operação escreve variável abstrata (como o rules): um ANY que só lê (damas
+        // posicao, Register elements) ganhava função ghost e "assert ghost__op", que o merged_code.c
+        // virava um ensures repetido.
+        if (useGhostAbstraction && assignsAbstract) {
             ghostSlug = GhostContractPredicates.ghostOperationSlug(opName);
         }
         List<String> ghostBehaviorArgs = new ArrayList<>(inputParamNames);

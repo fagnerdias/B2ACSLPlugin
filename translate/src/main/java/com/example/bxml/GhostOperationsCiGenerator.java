@@ -383,6 +383,26 @@ public final class GhostOperationsCiGenerator {
         Files.writeString(ghostCiPath, result.toString(), StandardCharsets.UTF_8);
     }
 
+    /**
+     * {@code true} se alguma operação com ANY escreve variável da máquina (abstrata ou concreta da
+     * abstração): só essas ganham função ghost, e então as constantes definidas por lambda ficam
+     * declaradas no ghost_operations.ci (ver AcslGenerator, ciDeclaredAbstractConsts).
+     */
+    public static boolean machineHasStateChangingAnySubOperations(Element machineEl) {
+        Element opsEl = BxmlDomUtils.firstChildElement(machineEl, "Operations");
+        if (opsEl == null) return false;
+        Set<String> vars = BxmlMachineVariables.declaredVariableNames(machineEl);
+        for (Node n = opsEl.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (!(n instanceof Element op) || !"Operation".equals(op.getLocalName())) continue;
+            if (!GhostContractPredicates.operationBodyHasAnySub(op)) continue;
+            Element body = BxmlDomUtils.firstChildElement(op, "Body");
+            Set<String> written = new LinkedHashSet<>();
+            if (body != null) collectAssignedAbstractVarsInBody(body, vars, written);
+            if (!written.isEmpty()) return true;
+        }
+        return false;
+    }
+
     public static boolean machineHasAnySubOperations(Element machineEl) {
         Element opsEl = BxmlDomUtils.firstChildElement(machineEl, "Operations");
         if (opsEl == null) return false;
@@ -507,7 +527,11 @@ public final class GhostOperationsCiGenerator {
                         }
                         continue;
                     }
-                    ops.add(new GhostOp(opSlug, params, assigned, List.of(existsForm)));
+                    // Sem variável abstrata atribuída, só a gêmea do marcador (se houver): a função
+                    // ghost "op" não teria quem a chamasse (ver computeGhostSlugInfo).
+                    if (!assigned.isEmpty()) {
+                        ops.add(new GhostOp(opSlug, params, assigned, List.of(existsForm)));
+                    }
                     if (needsMarker) {
                         ops.add(
                                 new GhostOp(
