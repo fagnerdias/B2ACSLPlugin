@@ -30,7 +30,7 @@ final class GhostNamespacePrefixer {
      *
      * <p>Apenas reescreve o token quando não está já prefixado por {@code dummy_}.
      */
-    private static String prefixFunctionTypesForGhost(String text) {
+    static String prefixFunctionTypesForGhost(String text) {
         if (text == null || text.isEmpty()) {
             return text;
         }

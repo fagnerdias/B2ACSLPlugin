@@ -534,6 +534,8 @@ public final class GhostOperationsCiGenerator {
                 ge = stripBTypingCommentsForGhost(ge);
                 ge = normalizeBooleanLiteralsForGhost(ge);
                 ge = GhostNamespacePrefixer.prefixAbstractVarsForGhost(ge, logicOnlyVars);
+                // binders de \forall/\exists com tipo genérico: DRelation/DSet no front-end isolado
+                ge = GhostNamespacePrefixer.prefixFunctionTypesForGhost(ge);
                 prefixedInitEnsures.add(ge);
             }
             String initSlug = abstractMachineEl.getAttribute("name").toLowerCase() + "__initialisation";
@@ -647,6 +649,9 @@ public final class GhostOperationsCiGenerator {
                     ge = rewriteBoolOutputPredicateTernary(ge);
                     ge = rewriteIntegerTernaryPredicateConditionForGhost(ge);
                     ge = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(ge, params);
+                    // binders com Function<..>/Relation<..> (railmap: \forall integer c0,
+                    // Function<integer,integer> ts) não existem no front-end ghost isolado
+                    ge = GhostNamespacePrefixer.prefixFunctionTypesForGhost(ge);
                     ghostEnsures.add(ge);
                 }
 
