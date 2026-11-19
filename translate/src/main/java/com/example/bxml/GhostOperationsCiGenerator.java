@@ -679,8 +679,16 @@ public final class GhostOperationsCiGenerator {
         if (ensure == null || ensure.isBlank()) {
             return false;
         }
-        if (ensure.startsWith("belongs(")) {
-            return false;
+        String t = ensure.trim();
+        if (t.startsWith("belongs(")) {
+            // Só um belongs(v, S) isolado (Becomes_In) segue o caminho de toGhostEnsure. Uma
+            // conjunção que começa por belongs (Becomes_Such_That: "belongs(v, T) && \old(v) < v")
+            // já vem com \old só no pré-estado; envolver todas as ocorrências em \old daria
+            // "\old(v) < \old(v)".
+            int close = findMatchingClose(t, t.indexOf('('));
+            if (close == t.length() - 1 || topLevelImplicationIndex(t) >= 0) {
+                return false;
+            }
         }
         return ensure.contains("==>") || ensure.contains("&&");
     }
