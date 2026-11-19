@@ -409,6 +409,19 @@ public final class BxmlComprehensionRegistry {
     }
 
     /**
+     * Tipo (universo REAL) do conjunto da compreensão no índice {@code index}, o mesmo de {@link
+     * #formatAxiomaticBlock} (ex. {@code Set<Tuple<integer, integer> >} para {@code {aa, bb | ...}}),
+     * ou {@code null} se o índice não existe. A conversão Set→DSet do ghost é do chamador.
+     */
+    public String setTypeForIndex(int index) {
+        Element qs = firstWithIndex(index);
+        if (qs == null) return null;
+        BxmlTypeRegistry types = elementTypes.get(qs);
+        if (types == null) return null;
+        return acslSetTypeForElement(qs, types);
+    }
+
+    /**
      * {@code true} se todos os tipos podem ser binder de {@code \\forall} no axioma e tipo de
      * parâmetro da função lógica (ver {@link #isBinderSafeType}).
      */

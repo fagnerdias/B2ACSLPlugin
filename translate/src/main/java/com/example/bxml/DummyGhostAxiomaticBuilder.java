@@ -178,7 +178,15 @@ final class DummyGhostAxiomaticBuilder {
                 machineName = machineName.trim();
             }
             for (int k = 1; k <= maxSetComprehensionIndex; k++) {
-                sb.append("        logic DSet<integer> dummy_")
+                // Tipo do conjunto igual ao da declaração REAL (ex. DSet<DTuple<integer, integer> >
+                // para {aa, bb | ...} — damas lado/frente); DSet<integer> fixo errava o de pares.
+                String realSetType =
+                        ctx != null && ctx.comprehensions() != null
+                                ? ctx.comprehensions().setTypeForIndex(k)
+                                : null;
+                String ghostSetType =
+                        realSetType == null ? "DSet<integer>" : dummyComprehensionParamType(realSetType);
+                sb.append("        logic ").append(ghostSetType).append(" dummy_")
                         .append(BxmlComprehensionRegistry.comprehensionSetName(machineName, k));
                 // Aridade tem de bater com a declaração REAL (referenceName/formatAxiomaticBlock):
                 // uma compreensão parametrizada (ex. set_comprehension_2(pp), RulerOfTheSeas's
