@@ -623,7 +623,8 @@ public final class AcslGenerator {
                 if ("implementation".equalsIgnoreCase(mel.getAttribute("type"))) {
                     operations.addAll(
                             BxmlOperationsTranslator.translateLocalOperations(
-                                    mel, baseName, ctx, allInvariantPredicateNames));
+                                    mel, baseName, ctx, allInvariantPredicateNames,
+                                    importedInvariantPredicateNames));
                 }
             }
         }

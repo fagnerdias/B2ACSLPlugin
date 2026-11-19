@@ -461,6 +461,21 @@ public final class BxmlOperationsTranslator {
             String rootAbstractMachineName,
             BxmlTranslateContext ctx,
             List<String> invariantPredicateNames) {
+        return translateLocalOperations(
+                implementationMachineEl, rootAbstractMachineName, ctx, invariantPredicateNames, List.of());
+    }
+
+    /**
+     * Como acima; {@code importedInvariantPredicateNames} (invariantes das máquinas importadas e
+     * vistas) entram nos requires, como nas operações da máquina e no rules (cv_struct lclear:
+     * requires cv_base_invariant).
+     */
+    public static List<OperationAcsl> translateLocalOperations(
+            Element implementationMachineEl,
+            String rootAbstractMachineName,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            List<String> importedInvariantPredicateNames) {
         List<OperationAcsl> out = new ArrayList<>();
         if (implementationMachineEl == null) return out;
         Element localOpsEl = BxmlDomUtils.firstChildElement(implementationMachineEl, "Local_Operations");
@@ -500,6 +515,11 @@ public final class BxmlOperationsTranslator {
             }
 
             List<String> requires = new ArrayList<>(invariantPredicateNames);
+            if (importedInvariantPredicateNames != null) {
+                for (String inv : importedInvariantPredicateNames) {
+                    if (!requires.contains(inv)) requires.add(inv);
+                }
+            }
             Element pre = BxmlDomUtils.firstChildElement(declOp, "Precondition");
             if (pre != null) {
                 requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
