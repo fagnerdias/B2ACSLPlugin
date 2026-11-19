@@ -1180,8 +1180,24 @@ public final class GhostOperationsCiGenerator {
                     collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, ctx, out);
                 }
             }
-            // IF, SELECT, Becomes_Such_That, …: este walker (só INITIALISATION ghost) não os traduz;
-            // deixá-los de fora só enfraquece o ghost (o lado real traduz e avisa).
+            case "Becomes_Such_That" -> {
+                // x : (P) na INITIALISATION ghost (safetyflasher csp_cs0Lib: clock : (clock : uint64_t
+                // & clock <= MAX_UINT64 - ...)), como o rules; só se todas as variáveis são abstratas
+                // (o ghost não declara as outras).
+                Element vars = BxmlDomUtils.firstChildElement(sub, "Variables");
+                Element predEl = BxmlDomUtils.firstChildElement(sub, "Pred");
+                if (vars == null || predEl == null) return;
+                for (Element varExp : BxmlDomUtils.directExpChildren(vars)) {
+                    if (!"Id".equals(varExp.getLocalName()) || !abstractSet.contains(varExp.getAttribute("value"))) {
+                        return;
+                    }
+                }
+                String p = BxmlPredicateToAcsl.translateInvariantContent(predEl, ctx);
+                if (p == null || p.isBlank() || Unsupported.in(p)) return;
+                out.add(GhostNamespacePrefixer.prefixAbstractVarsForGhost(p, abstractSet));
+            }
+            // IF, SELECT, …: este walker (só INITIALISATION ghost) não os traduz; deixá-los de fora
+            // só enfraquece o ghost (o lado real traduz e avisa).
             default -> { }
         }
     }
