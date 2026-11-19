@@ -429,7 +429,12 @@ public final class GhostOperationsCiGenerator {
             for (int i = 0; i < decls.size(); i++) {
                 if (keep[i]) continue;
                 String n = declaredDummyName(decls.get(i));
-                if (n == null || Pattern.compile("(?<!\\w)" + Pattern.quote(n) + "(?!\\w)").matcher(used).find()) {
+                int arity = declaredArity(decls.get(i), n);
+                boolean usedName = n != null
+                        && Pattern.compile("(?<!\\w)" + Pattern.quote(n) + "(?!\\w)").matcher(used).find();
+                // sobrecarga (dummy_becomes_element_of(x, S) × (f, dom, rng)): só a da aridade usada
+                if (usedName && arity >= 0 && !callArities(used, n).contains(arity)) usedName = false;
+                if (n == null || usedName) {
                     keep[i] = true;
                     used.append('\n').append(n == null ? decls.get(i) : decls.get(i).replaceFirst(Pattern.quote(n), ""));
                     changed = true;
@@ -449,13 +454,52 @@ public final class GhostOperationsCiGenerator {
         if (!out.toString().equals(text)) Files.writeString(ghostCi, out.toString(), StandardCharsets.UTF_8);
     }
 
+    /** Número de parâmetros da declaração de {@code name} ({@code -1} se não tem parênteses). */
+    private static int declaredArity(String declaration, String name) {
+        if (name == null) return -1;
+        Matcher m = Pattern.compile("(?<!\\w)" + Pattern.quote(name) + "\\s*(?:<[^()]*?>)?\\s*\\(").matcher(declaration);
+        if (!m.find()) return -1;
+        return countTopLevelArgs(declaration, m.end(), true);
+    }
+
+    /** Aridades das chamadas {@code name(...)} em {@code text}. */
+    private static Set<Integer> callArities(CharSequence text, String name) {
+        Set<Integer> out = new java.util.HashSet<>();
+        Matcher m = Pattern.compile("(?<!\\w)" + Pattern.quote(name) + "\\s*\\(").matcher(text);
+        String t = text.toString();
+        while (m.find()) out.add(countTopLevelArgs(t, m.end(), false));
+        return out;
+    }
+
+    /** Argumentos entre o {@code (} já consumido e o {@code )} correspondente. */
+    private static int countTopLevelArgs(String s, int from, boolean angleBrackets) {
+        int depth = 0;
+        int angle = 0;
+        int commas = 0;
+        boolean any = false;
+        for (int i = from; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '(' || c == '[' || c == '{') depth++;
+            else if (c == ')' || c == ']' || c == '}') {
+                if (depth == 0) return any ? commas + 1 : 0;
+                depth--;
+            } else if (angleBrackets && c == '<') angle++;
+            else if (angleBrackets && c == '>' && angle > 0) angle--;
+            else if (c == ',' && depth == 0 && angle == 0) commas++;
+            if (!Character.isWhitespace(c)) any = true;
+        }
+        return -1;
+    }
+
     /** Nome declarado ({@code type X} / {@code logic T x(..)} / {@code predicate x(..)}); null no resto. */
     private static String declaredDummyName(String declaration) {
         String d = declaration.strip();
         Matcher t = Pattern.compile("^type\\s+(\\w+)").matcher(d);
         if (t.find()) return t.group(1);
-        Matcher m = Pattern.compile("^(?:logic\\s+.+?|predicate)\\s+(\\w+)\\s*(?:<[^()]*?>)?\\s*[(;=]", Pattern.DOTALL)
-                .matcher(d);
+        // logic/predicate: o primeiro dummy_<x> (o tipo pode ter genéricos com espaços,
+        // "DSet< DTuple<A,B> >", que um regex de "último identificador antes do (" confunde)
+        if (!d.startsWith("logic") && !d.startsWith("predicate")) return null;
+        Matcher m = Pattern.compile("\\b(dummy_\\w+)\\s*(?:<[^();=]*>)?\\s*(?:[(;=]|reads\\b)").matcher(d);
         return m.find() ? m.group(1) : null;
     }
 
