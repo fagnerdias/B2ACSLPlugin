@@ -636,7 +636,7 @@ final class GhostNamespacePrefixer {
                 // (incl. array_to_function_int/_bool) genericamente — adicioná-lo aqui também
                 // seria redundante.
                 String fnName = GhostDomainRestrictionRewriter.arrayToFunctionNameForDomain(domain);
-                String wrapped = fnName + "(" + out + ", " + len + ")";
+                String wrapped = GhostDomainRestrictionRewriter.arrayToFunctionCall(fnName, out, len);
                 String escOut = Pattern.quote(out);
                 String escQ = Pattern.quote(qName);
                 result =

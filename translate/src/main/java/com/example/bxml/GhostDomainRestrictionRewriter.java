@@ -216,11 +216,8 @@ final class GhostDomainRestrictionRewriter {
         String fnName =
                 arrayToFunctionNameForDomain(
                         partialFunctionDomainFromPrecondition(operation, relationParam));
-        return "domain_restriction(dummy_" + fnName + "("
-                + relationParam
+        return "domain_restriction(" + arrayToFunctionCall("dummy_" + fnName, relationParam, len)
                 + ", "
-                + len
-                + "), "
                 + "dummy_"
                 + domainRestrictionSecondArg
                 + ") == dummy_list_to_function(\\old(dummy_"
@@ -271,8 +268,7 @@ final class GhostDomainRestrictionRewriter {
         String fnName =
                 arrayToFunctionNameForDomain(partialFunctionDomainFromPrecondition(operation, firstArg));
         String domainArg = t.substring(comma1 + 1, close).trim();
-        return "domain_restriction(dummy_" + fnName + "("
-                + firstArg + ", " + len + "), "
+        return "domain_restriction(" + arrayToFunctionCall("dummy_" + fnName, firstArg, len) + ", "
                 + domainArg
                 + ") == dummy_list_to_function(\\old(dummy_" + seqVar + "))";
     }
@@ -300,6 +296,16 @@ final class GhostDomainRestrictionRewriter {
      * array_to_function_int}/{@code array_to_function_bool}), e o front-end isolado do {@code .ci}
      * rejeitava com "unbound logic function".
      */
+    /**
+     * {@code array_to_function_int((int*)(p), len)} / {@code array_to_function_bool((_Bool*)(p), len)}:
+     * a mesma forma (com cast) do contrato real e do rules (Register: dummy_array_to_function_int(ee, n)
+     * sem cast contava como significado diferente).
+     */
+    static String arrayToFunctionCall(String fnName, String pointer, String len) {
+        String cast = fnName != null && fnName.endsWith("array_to_function_bool") ? "_Bool" : "int";
+        return fnName + "((" + cast + "*)(" + pointer + "), " + len + ")";
+    }
+
     static String arrayToFunctionNameForDomain(Element domain) {
         Node parent = domain == null ? null : domain.getParentNode();
         if (parent instanceof Element arrow) {
