@@ -321,6 +321,9 @@ public final class MeaningContext {
         Map<String, TypeCanon.Alias> out = new LinkedHashMap<>();
         alias(out, "Relation", List.of("A", "B"), "Set<Tuple<A,B>>");
         alias(out, "Function", List.of("A", "B"), "Relation<A,B>");
+        // ghost_operations.ci: os dois lados declaram type DRelation<A, B> = DSet<DTuple<A, B> >;
+        // fica também aqui para não depender da declaração (o binder pode estar num .ci sem ela)
+        alias(out, "DRelation", List.of("A", "B"), "DSet<DTuple<A,B>>");
         alias(out, "Relation_int_int", List.of(), "Set<Tuple<integer,integer>>");
         alias(out, "Relation_int_bool", List.of(), "Set<Tuple<integer,boolean>>");
         alias(out, "Relation_bool_int", List.of(), "Set<Tuple<boolean,integer>>");
