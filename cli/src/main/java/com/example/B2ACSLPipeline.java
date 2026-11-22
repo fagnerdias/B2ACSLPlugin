@@ -554,6 +554,9 @@ public final class B2ACSLPipeline {
                 }
                 acsl.ifPresent(p -> acslByMachineName.put(machineName, p));
             }
+            // helpers SIGMA/lambda/UNION do ghost na forma do rules: chamada dummy_<nome real> e só a
+            // assinatura no dummy_ghost (precisa dos .acsl já gerados para achar o nome real)
+            com.example.bxml.GhostHelperAlignment.align(GhostOperationsCiGenerator.targetPath(cDir), acslDir);
             for (String machineName : abstractMachineNames) {
                 Path p = acslByMachineName.get(machineName);
                 if (p != null) {
