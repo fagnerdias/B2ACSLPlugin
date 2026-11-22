@@ -423,6 +423,18 @@ public final class GhostOperationsCiGenerator {
         }
         boolean[] keep = new boolean[decls.size()];
         StringBuilder used = new StringBuilder(outside);
+        // tipos das constantes dummy_x (logic T dummy_x;) e sobrecargas por nome+aridade, para
+        // escolher a sobrecarga pelo tipo do 1º argumento (RobustFifo: dummy_first sobre \list ×
+        // sobre DTuple, mesma aridade; as chamadas são dummy_first(\old(dummy_contents)) com
+        // logic \list<integer> dummy_contents)
+        Map<String, String> constTypes = new java.util.HashMap<>();
+        Map<String, Integer> overloads = new java.util.HashMap<>();
+        for (String d : decls) {
+            Matcher c = Pattern.compile("^logic\\s+(.+?)\\s+(dummy_\\w+)\\s*;\\s*$", Pattern.DOTALL).matcher(d.strip());
+            if (c.matches()) constTypes.put(c.group(2), c.group(1).trim());
+            String n = declaredDummyName(d);
+            if (n != null) overloads.merge(n + "/" + declaredArity(d, n), 1, Integer::sum);
+        }
         boolean changed = true;
         while (changed) {
             changed = false;
@@ -434,6 +446,10 @@ public final class GhostOperationsCiGenerator {
                         && Pattern.compile("(?<!\\w)" + Pattern.quote(n) + "(?!\\w)").matcher(used).find();
                 // sobrecarga (dummy_becomes_element_of(x, S) × (f, dom, rng)): só a da aridade usada
                 if (usedName && arity >= 0 && !callArities(used, n).contains(arity)) usedName = false;
+                if (usedName && arity > 0 && overloads.getOrDefault(n + "/" + arity, 0) > 1
+                        && !firstArgumentTypeFits(decls.get(i), n, used, constTypes)) {
+                    usedName = false;
+                }
                 if (n == null || usedName) {
                     keep[i] = true;
                     used.append('\n').append(n == null ? decls.get(i) : decls.get(i).replaceFirst(Pattern.quote(n), ""));
@@ -452,6 +468,80 @@ public final class GhostOperationsCiGenerator {
         }
         out.append(text.substring(prev));
         if (!out.toString().equals(text)) Files.writeString(ghostCi, out.toString(), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * {@code false} só quando o 1º parâmetro da sobrecarga tem tipo concreto ({@code \\list}, {@code
+     * DTuple}, {@code DSet}/{@code DRelation}) e TODA chamada de {@code name} tem 1º argumento
+     * {@code dummy_x} (sem {@code \\old}/{@code \\at}) de tipo conhecido e de outra família; parâmetro
+     * genérico ou argumento não resolvido conta como compatível.
+     */
+    private static boolean firstArgumentTypeFits(
+            String declaration, String name, CharSequence used, Map<String, String> constTypes) {
+        String paramHead = typeHead(firstParameterType(declaration, name));
+        if (paramHead == null) return true;
+        String text = used.toString();
+        Matcher m = Pattern.compile("(?<!\\w)" + Pattern.quote(name) + "\\s*\\(").matcher(text);
+        boolean anyCall = false;
+        while (m.find()) {
+            anyCall = true;
+            String arg = firstArgument(text, m.end());
+            String argHead = arg == null ? null : typeHead(constTypes.get(arg));
+            if (argHead == null || sameTypeFamily(argHead, paramHead)) return true;
+        }
+        return !anyCall;
+    }
+
+    private static String firstParameterType(String declaration, String name) {
+        Matcher m = Pattern.compile("(?<!\\w)" + Pattern.quote(name) + "\\s*(?:<[^()]*?>)?\\s*\\(").matcher(declaration);
+        if (!m.find()) return null;
+        int angle = 0;
+        StringBuilder b = new StringBuilder();
+        for (int i = m.end(); i < declaration.length(); i++) {
+            char c = declaration.charAt(i);
+            if (c == '<') angle++;
+            else if (c == '>') angle--;
+            else if ((c == ',' || c == ')') && angle == 0) break;
+            b.append(c);
+        }
+        String p = b.toString().trim();
+        int sp = p.lastIndexOf(' ');
+        return sp < 0 ? null : p.substring(0, sp).trim();
+    }
+
+    /** {@code \\list} / {@code DTuple} / {@code DSet} / {@code DRelation}; null para genérico ou escalar. */
+    private static String typeHead(String type) {
+        if (type == null) return null;
+        String t = type.trim();
+        for (String h : List.of("\\list", "DTuple", "DSet", "DRelation")) {
+            if (t.startsWith(h + "<") || t.startsWith(h + " <")) return h;
+        }
+        return null;
+    }
+
+    private static boolean sameTypeFamily(String a, String b) {
+        boolean setA = a.equals("DSet") || a.equals("DRelation");
+        boolean setB = b.equals("DSet") || b.equals("DRelation");
+        return a.equals(b) || (setA && setB);
+    }
+
+    /** 1º argumento de uma chamada sem {@code \\old(..)}/{@code \\at(.., L)}, se for um nome {@code dummy_x}. */
+    private static String firstArgument(String s, int from) {
+        int depth = 0;
+        StringBuilder b = new StringBuilder();
+        for (int i = from; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '(' || c == '[' || c == '{') depth++;
+            else if (c == ')' || c == ']' || c == '}') {
+                if (depth == 0) break;
+                depth--;
+            } else if (c == ',' && depth == 0) break;
+            b.append(c);
+        }
+        String a = b.toString().trim();
+        Matcher w = Pattern.compile("^\\\\(?:old|at)\\(\\s*(dummy_\\w+)\\s*(?:,[^()]*)?\\)$").matcher(a);
+        if (w.matches()) return w.group(1);
+        return a.matches("dummy_\\w+") ? a : null;
     }
 
     /** Número de parâmetros da declaração de {@code name} ({@code -1} se não tem parênteses). */
