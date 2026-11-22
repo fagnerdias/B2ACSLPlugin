@@ -1013,7 +1013,8 @@ public final class BxmlOperationsTranslator {
             }
         }
         if (!funcTypedOutputs.isEmpty() && !loops.isEmpty()) {
-            loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
+            loops = rewriteLoopsForFunctionTypedOutputs(
+                    loops, funcTypedOutputs, functionTypedOutputBounds, boolArrayOutputNames(operation, ctx));
         }
         return new FunctionTypedOutputHandling(functionTypedOutputBounds, loops);
     }
@@ -1253,11 +1254,14 @@ public final class BxmlOperationsTranslator {
     }
 
     private static List<BxmlLoopTranslator.LoopContract> rewriteLoopsForFunctionTypedOutputs(
-            List<BxmlLoopTranslator.LoopContract> loops, Set<String> funcTypedOutputs) {
+            List<BxmlLoopTranslator.LoopContract> loops,
+            Set<String> funcTypedOutputs,
+            Map<String, String> bounds,
+            Set<String> boolArrayOutputs) {
         List<BxmlLoopTranslator.LoopContract> result = new ArrayList<>();
         for (BxmlLoopTranslator.LoopContract lc : loops) {
             List<String> inv = lc.invariant().stream()
-                    .map(s -> rewriteArrayOutputFunctionApply(s, funcTypedOutputs))
+                    .map(s -> wrapArrayOutputFunctionApply(s, funcTypedOutputs, bounds, boolArrayOutputs))
                     .toList();
             String upperBound = extractLoopUpperBound(lc.variant(), lc.assigns(), funcTypedOutputs);
             List<String> newAssigns = new ArrayList<>();
@@ -1323,6 +1327,52 @@ public final class BxmlOperationsTranslator {
         Matcher m = p.matcher(variant);
         if (m.find()) return m.group(1);
         return null;
+    }
+
+    /**
+     * {@code function_apply(p, X)} de uma saída array no invariante de laço: com o limite conhecido,
+     * {@code function_apply(array_to_function_bool((_Bool*)(p), (N - (0) + 1)), X)}, a forma das
+     * entradas array e do rules (Biblioteca copiesQuery: antes {@code cc[jj] != 0}); sem limite, a
+     * indexação direta de {@link #rewriteArrayOutputFunctionApply}.
+     */
+    private static String wrapArrayOutputFunctionApply(
+            String s, Set<String> params, Map<String, String> bounds, Set<String> boolArrayOutputs) {
+        if (s == null || s.isBlank() || params == null || params.isEmpty()) return s;
+        for (String p : params) {
+            String bound = bounds == null ? null : bounds.get(p);
+            if (bound == null || bound.isBlank()) {
+                s = rewriteArrayOutputFunctionApply(s, Set.of(p));
+                continue;
+            }
+            boolean bool = boolArrayOutputs != null && boolArrayOutputs.contains(p);
+            String fn = bool ? "array_to_function_bool" : "array_to_function_int";
+            String wrapped = fn + "((" + (bool ? "_Bool" : "int") + "*)(" + p + "), (" + bound + " - (0) + 1))";
+            s = s.replaceAll(
+                    "function_apply\\(" + Pattern.quote(p) + "\\s*,",
+                    Matcher.quoteReplacement("function_apply(" + wrapped + ","));
+        }
+        return s;
+    }
+
+    /** Saídas array de booleanos ({@code POW(..*BOOL)}): array_to_function_bool. */
+    private static Set<String> boolArrayOutputNames(Element operation, BxmlTranslateContext ctx) {
+        Set<String> out = new HashSet<>();
+        Element outEl = BxmlDomUtils.firstChildElement(operation, "Output_Parameters");
+        if (outEl == null || ctx == null) return out;
+        for (Node n = outEl.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (!(n instanceof Element e) || !"Id".equals(e.getLocalName())) continue;
+            String tr = e.getAttribute("typref");
+            if (tr == null || tr.isBlank()) continue;
+            try {
+                String raw = ctx.types().getRawType(Integer.parseInt(tr.trim()));
+                if (raw != null && raw.startsWith("POW(") && raw.replace(" ", "").endsWith("*BOOL)")) {
+                    out.add(e.getAttribute("value").trim());
+                }
+            } catch (NumberFormatException ignored) {
+                // typref não numérico: não é array de booleanos conhecido
+            }
+        }
+        return out;
     }
 
     private static String rewriteArrayOutputFunctionApply(String s, Set<String> params) {
