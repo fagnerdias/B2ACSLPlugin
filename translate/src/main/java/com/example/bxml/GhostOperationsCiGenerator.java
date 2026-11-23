@@ -1379,7 +1379,9 @@ public final class GhostOperationsCiGenerator {
         String v = lhsExp.getAttribute("value");
         if (!abstractSet.contains(v)) return null;
         if ("EmptySet".equals(rhsExp.getLocalName())) {
-            return "equals(dummy_" + v + ", empty(\\old(dummy_" + v + ")))";
+            // testemunha pelo tipo B do próprio {} (INT, BOOL, conjunto adiado, cartesian_product...),
+            // como o contrato real e as operações ghost; o chamador prefixa (dummy_empty(dummy_INT))
+            return "equals(dummy_" + v + ", " + BxmlExpressionToAcsl.translate(rhsExp, ctx) + ")";
         }
         if ("EmptySeq".equals(rhsExp.getLocalName()) && isListLikeVariable(v, ctx)) {
             return "dummy_" + v + " == \\Nil";

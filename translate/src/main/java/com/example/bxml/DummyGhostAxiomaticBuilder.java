@@ -129,8 +129,8 @@ final class DummyGhostAxiomaticBuilder {
         Set<String> functionTypeAliases = collectFunctionTypeAliases(ghostText);
         boolean needsNat = Pattern.compile("\\bdummy_NAT\\b").matcher(ghostText).find();
         boolean needsNat1 = Pattern.compile("\\bdummy_NAT1\\b").matcher(ghostText).find();
-        boolean needsInt = ghostText.contains("dummy_INT");
-        boolean needsBool = ghostText.contains("dummy_BOOL");
+        boolean needsInt = Pattern.compile("\\bdummy_INT\\b").matcher(ghostText).find();
+        boolean needsBool = Pattern.compile("\\bdummy_BOOL\\b").matcher(ghostText).find();
 
         StringBuilder sb = new StringBuilder();
         sb.append("/*@\n");
