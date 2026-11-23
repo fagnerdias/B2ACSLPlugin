@@ -377,8 +377,16 @@ public final class BxmlComprehensionRegistry {
             // símbolo nenhum para referenciar.
             return null;
         }
-        // argumentos na forma do escopo de QUEM usa a compreensão (contrato, laço ou outro helper)
-        return base + callSuffix(free[0], ctx);
+        // argumentos na forma do escopo de QUEM usa a compreensão (contrato, laço ou outro helper);
+        // com (integer) quando a 1ª ocorrência da variável livre está num construtor, como o rules
+        if (free[0].isEmpty()) return base;
+        List<String> args = new ArrayList<>();
+        for (String n : free[0]) {
+            String arg = ctx.annotationScope().helperArg(n);
+            args.add(BxmlExpressionToAcsl.castCVariableIfConstructorChild(
+                    firstIdNamed(comprehensionElement, n), arg, ctx));
+        }
+        return base + "(" + String.join(", ", args) + ")";
     }
 
     /**
@@ -740,6 +748,17 @@ public final class BxmlComprehensionRegistry {
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Integer found = findTyprefForIdName((Element) n, name);
             if (found != null) return found;
+        }
+        return null;
+    }
+
+    /** Primeiro {@code Id} chamado {@code name} dentro de {@code root}, na ordem do documento. */
+    private static Element firstIdNamed(Element root, String name) {
+        if (root == null) return null;
+        org.w3c.dom.NodeList ids = root.getElementsByTagNameNS("*", "Id");
+        for (int i = 0; i < ids.getLength(); i++) {
+            Element e = (Element) ids.item(i);
+            if (name.equals(e.getAttribute("value"))) return e;
         }
         return null;
     }

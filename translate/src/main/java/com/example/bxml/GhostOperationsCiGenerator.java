@@ -723,7 +723,6 @@ public final class GhostOperationsCiGenerator {
                                     existsForm, ghostLogicVars, concreteConstants, op, anySub, ctx,
                                     abstractConstParams);
                     existsForm = rewriteBoolOutputPredicateTernary(existsForm);
-                    existsForm = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(existsForm, params);
                     String opSlug = GhostParamTypeResolver.sanitizeGhostFunctionName(opName);
                     if (Unsupported.in(existsForm)) {
                         // corpo sem tradução (ex. produto paralelo de relações no WHERE): a função
@@ -782,7 +781,6 @@ public final class GhostOperationsCiGenerator {
                     ge = GhostNamespacePrefixer.dereferenceScalarOutputParams(ge, op);
                     ge = rewriteBoolOutputPredicateTernary(ge);
                     ge = rewriteIntegerTernaryPredicateConditionForGhost(ge);
-                    ge = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(ge, params);
                     // binders com Function<..>/Relation<..> (railmap: \forall integer c0,
                     // Function<integer,integer> ts) não existem no front-end ghost isolado
                     ge = GhostNamespacePrefixer.prefixFunctionTypesForGhost(ge);

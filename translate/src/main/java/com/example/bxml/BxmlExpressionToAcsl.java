@@ -130,8 +130,8 @@ public final class BxmlExpressionToAcsl {
             return null;
         }
         String f = translate(pair[0], ctx);
-        String x = translate(pair[1], ctx);
-        String y = translate(rightExp, ctx);
+        String x = castCVariableInConstructor(pair[1], translate(pair[1], ctx), ctx);
+        String y = castCVariableInConstructor(rightExp, translate(rightExp, ctx), ctx);
         return "equals(" + f + ", overwrite(" + f + ", singleton(couple(" + x + ", " + y + "))))";
     }
 
@@ -670,39 +670,79 @@ public final class BxmlExpressionToAcsl {
     }
 
     /**
-     * Um componente {@code couple(...)} que é um identificador B NU (não já explicitamente
-     * convertido por outro caminho) precisa de {@code (integer)} explícito para unificar com o
-     * parâmetro genérico de {@code Tuple<A,B>} — o tipo C real de uma variável B (ex. {@code
-     * int32_t} para uma variável local simples, ou um tipo {@code enum} para uma tipada por
-     * conjunto diferido — ver {@link BxmlTranslateContext#deferredSetTypedParameterNames}) nunca é
-     * automaticamente ACSL {@code integer} em posição de INSTANCIAÇÃO GENÉRICA, ao contrário de uma
-     * comparação escalar simples (onde o Frama-C promove implicitamente) — confirmado com
-     * {@code "invalid cast from Tuple<integer, int32_t> to Tuple<integer, integer>"} para {@code
-     * ii_index} (variável local de loop, sem NENHUM outro sinal de "precisa de cast" disponível —
-     * ao contrário de {@code pp}, não é parâmetro de operação nem tipada por conjunto diferido). B
-     * não tem OUTRO tipo numérico além de {@code integer}, logo este cast é sempre seguro/correto
-     * para qualquer {@code Id} nu — só não se aplica a expressões mais complexas (maplet aninhado,
-     * {@code function_apply}, …), que podem legitimamente ser {@code Set}/{@code Tuple}-valoradas,
-     * nem a algo já explicitamente convertido (evita {@code (integer)(integer)x} redundante, e
-     * NUNCA entra dentro de um {@code \old(...)} já aplicado pelo caso {@code "Id"}).
+     * {@code (integer)} num elemento de construtor genérico ({@code couple}, {@code singleton},
+     * {@code [| |]}) que é parâmetro de entrada ou local C da operação, a mesma política do rules
+     * (idKind 'cast'): o tipo C (ex. {@code int32_t}, ou o {@code enum} de um parâmetro tipado por
+     * conjunto diferido) nunca é ACSL {@code integer} na INSTANCIAÇÃO GENÉRICA, ao contrário de uma
+     * comparação ou de um {@code belongs} (onde o Frama-C promove) — "invalid cast from
+     * Tuple<integer, int32_t> to Tuple<integer, integer>", "invalid cast from Set<Biblioteca__BOOK>
+     * to Set<integer>". Variável de estado, saída ({@code *p}), {@code \old(...)} e Id não escalar
+     * ficam sem cast.
      */
-    private static String castBareIntegerIdForTuple(
+    private static String castCVariableInConstructor(
             Element component, String translated, BxmlTranslateContext ctx) {
         if (component == null || translated == null || !"Id".equals(component.getLocalName())) {
             return translated;
         }
-        // Id de tipo não escalar (par, conjunto, relação: pos : (1..TAM) * (1..TAM)) não leva
-        // (integer) — "invalid cast from Tuple<integer, integer>"
-        if (isNonScalarTypedId(component, ctx)) {
+        // corpo de helper (compreensão, SIGMA, lambda): o parâmetro já é integer lógico
+        if (ctx.annotationScope().kind() == BxmlAnnotationScope.Kind.HELPER_BODY) {
+            return translated;
+        }
+        if (isNonScalarTypedId(component, ctx) || !isCParameterOrLocal(component)) {
             return translated;
         }
         if (translated.startsWith("(integer)")
                 || translated.startsWith("(boolean)")
+                || translated.startsWith("*")
                 || translated.startsWith("\\old(")
                 || translated.startsWith("\\at(")) {
             return translated;
         }
         return "(integer)" + translated;
+    }
+
+    /**
+     * Como {@link #castCVariableInConstructor}, para um {@code Id} lido fora do construtor (argumento
+     * da chamada de uma compreensão): cast se o pai do {@code Id} no B é um construtor
+     * ({@code |->}, {@code <-}, {@code ->}, {@code {..}}, {@code [..]}), como o rules, que traduz
+     * esse mesmo {@code Id}.
+     */
+    static String castCVariableIfConstructorChild(Element id, String translated, BxmlTranslateContext ctx) {
+        if (id == null || !(id.getParentNode() instanceof Element parent)) return translated;
+        String ln = parent.getLocalName();
+        String op = parent.getAttribute("op") == null ? "" : parent.getAttribute("op").trim();
+        boolean constructor =
+                ("Binary_Exp".equals(ln) && (isMapletOp(op) || isSequenceAppendOp(op) || isSequencePrependOp(op)))
+                        || ("Nary_Exp".equals(ln) && ("{".equals(op) || "[".equals(op)));
+        return constructor ? castCVariableInConstructor(id, translated, ctx) : translated;
+    }
+
+    /**
+     * {@code id} é parâmetro de entrada da operação que o envolve, ou local de um {@code VAR ... IN}
+     * que o envolve (variável C da função); uma variável de estado, uma constante ou uma variável
+     * ligada por quantificador não é.
+     */
+    static boolean isCParameterOrLocal(Element id) {
+        String name = id.getAttribute("value");
+        for (Node p = id.getParentNode(); p != null && p.getNodeType() == Node.ELEMENT_NODE; p = p.getParentNode()) {
+            Element e = (Element) p;
+            String ln = e.getLocalName();
+            if ("VAR_IN".equals(ln) && declaresId(BxmlDomUtils.firstChildElement(e, "Variables"), name)) {
+                return true;
+            }
+            if ("Operation".equals(ln)) {
+                return declaresId(BxmlDomUtils.firstChildElement(e, "Input_Parameters"), name);
+            }
+        }
+        return false;
+    }
+
+    private static boolean declaresId(Element list, String name) {
+        if (list == null) return false;
+        for (Element d : BxmlDomUtils.directExpChildren(list)) {
+            if ("Id".equals(d.getLocalName()) && name.equals(d.getAttribute("value"))) return true;
+        }
+        return false;
     }
 
     /**
@@ -723,11 +763,12 @@ public final class BxmlExpressionToAcsl {
             Element[] pair = twoDirectExpChildren(exp);
             if (pair[0] != null && pair[1] != null) {
                 flattenMapletChainInto(pair[0], ctx, out);
-                out.add(translate(pair[1], ctx));
+                // elemento de maplet: (integer) no parâmetro/local C, como o rules (pai |->)
+                out.add(castCVariableIfConstructorChild(pair[1], translate(pair[1], ctx), ctx));
                 return;
             }
         }
-        out.add(translate(exp, ctx));
+        out.add(castCVariableIfConstructorChild(exp, translate(exp, ctx), ctx));
     }
 
     /** B diferença de conjuntos {@code s -s t} → {@code set_difference(s, t)} (ACSL_Lib/set_functions/difference.acsl). */
@@ -979,31 +1020,10 @@ public final class BxmlExpressionToAcsl {
                 // Conjuntos enumerados: usar o nome prefixado (ex. ctx__ALARM_STATUS)
                 String setRenamed = ctx.enumeratedSetRenames().get(idVal);
                 if (setRenamed != null) yield setRenamed;
-                // Parâmetros/variáveis de tipo enum C: cast (integer) para compatibilidade com Set<integer>
-                String base;
-                if (!ctx.enumeratedSetNames().isEmpty()) {
-                    String tr = exp.getAttribute("typref");
-                    if (!tr.isBlank()) {
-                        String bTypeName = ctx.types().getRawType(Integer.parseInt(tr.trim()));
-                        if (ctx.enumeratedSetNames().contains(bTypeName)) {
-                            base = "(integer)" + translateBNamedConstant(idVal);
-                            yield ctx.annotationScope().render(idVal, base, isPreState);
-                        }
-                    }
-                }
-                // Parâmetro de operação tipado por um conjunto diferido/enumerado NA ABSTRATA (ex.
-                // "pp" de "AddPlayer(pp) = PRE pp:PLAYER & ... END") cujo typref NESTE ponto (corpo/
-                // loop da implementação) já não aponta para o tipo enum — o próprio AtelierB pode
-                // ter refinado a inferência para INTEGER (ex. usado em indexação de array), mas a
-                // assinatura C real gerada continua a usar o tipo enum (ex. "RulerOfTheSeas__PLAYER
-                // pp"). Sem este sinal adicional (ver BxmlTranslateContext#deferredSetTypedParameterNames),
-                // o cast acima nunca dispara para este caso — "invalid cast from Tuple<EnumType,...>
-                // to Tuple<integer,...>" ao entrar num slot ACSL genérico (ex. couple<A,B>).
-                if (ctx.deferredSetTypedParameterNames().contains(idVal)) {
-                    base = "(integer)" + translateBNamedConstant(idVal);
-                    yield ctx.annotationScope().render(idVal, base, isPreState);
-                }
-                base = translateBNamedConstant(idVal);
+                // Variável/parâmetro C (int, enum) sai sem cast: o Frama-C promove o valor para
+                // integer na comparação e no belongs. O cast só entra onde a tipagem exige, nos
+                // construtores genéricos (castCVariableInConstructor), como no rules.
+                String base = translateBNamedConstant(idVal);
                 yield ctx.annotationScope().render(idVal, base, isPreState);
             }
             case "Integer_Literal" -> exp.getAttribute("value");
@@ -1264,8 +1284,8 @@ public final class BxmlExpressionToAcsl {
             return "range_subtraction(" + rel + ", " + setRef + ")";
         }
         if (isMapletOp(op)) {
-            String left = castBareIntegerIdForTuple(pair[0], translate(pair[0], ctx), ctx);
-            String right = castBareIntegerIdForTuple(pair[1], translate(pair[1], ctx), ctx);
+            String left = castCVariableInConstructor(pair[0], translate(pair[0], ctx), ctx);
+            String right = castCVariableInConstructor(pair[1], translate(pair[1], ctx), ctx);
             return "couple(" + left + ", " + right + ")";
         }
         if (isFunctionApplicationOp(op)) {
@@ -1341,10 +1361,10 @@ public final class BxmlExpressionToAcsl {
             return "interval_set(" + left + ", " + right + ")";
         }
         if (isSequenceAppendOp(op)) {
-            return "(" + "\\concat(" + left + ", [| " + right + " |])" + ")";
+            return "(" + "\\concat(" + left + ", [| " + castCVariableInConstructor(pair[1], right, ctx) + " |])" + ")";
         }
         if (isSequencePrependOp(op)) {
-            return "\\concat([| " + left + " |], " + right + ")";
+            return "\\concat([| " + castCVariableInConstructor(pair[0], left, ctx) + " |], " + right + ")";
         }
         if (isSequenceConcatOp(op)) {
             return "\\concat(" + left + ", " + right + ")";
@@ -1454,7 +1474,7 @@ public final class BxmlExpressionToAcsl {
                     String bv = e.getAttribute("value");
                     parts.add("TRUE".equalsIgnoreCase(bv == null ? "" : bv.trim()) ? "\\true" : "\\false");
                 } else {
-                    parts.add(translate(e, ctx));
+                    parts.add(castCVariableInConstructor(e, translate(e, ctx), ctx));
                 }
             }
             if (parts.size() == 1) return "singleton(" + parts.get(0) + ")";
@@ -1480,7 +1500,7 @@ public final class BxmlExpressionToAcsl {
                 if (node.getNodeType() != Node.ELEMENT_NODE) continue;
                 Element e = (Element) node;
                 if ("Attr".equals(e.getLocalName())) continue;
-                parts.add(translate(e, ctx));
+                parts.add(castCVariableInConstructor(e, translate(e, ctx), ctx));
             }
             return "[| " + String.join(", ", parts) + " |]";
         }

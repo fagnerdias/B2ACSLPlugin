@@ -605,7 +605,7 @@ public final class BxmlOperationsTranslator {
         if (pre != null) {
             requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, opCtx));
             rewriteAcslListForArrayBackedParams(requires, arrayParamLens);
-            rewriteRequiresForOutputParameters(requires, outputParams, boolOutputParameterNames(child, opCtx));
+            rewriteRequiresForOutputParameters(requires, outputParams);
         }
 
         Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, opCtx);
@@ -691,20 +691,6 @@ public final class BxmlOperationsTranslator {
             ensures.set(ei, e);
         }
         rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, opCtx);
-        // Parâmetros de entrada escalares (C "int") ficam sem cast no ensures cru — comparados
-        // com um Set<integer> (ex. "singleton(bb)" dentro de "equals(books, ...)") o Frama-C
-        // infere o tipo lógico do parâmetro a partir do seu uso e rejeita ("invalid cast from
-        // Set<Biblioteca__BOOK> to Set<integer>"). O lado ghost já resolve isto com o mesmo
-        // "(integer)bb"; reaproveitado aqui pelo mesmo motivo do bloco acima.
-        List<GhostOperationsCiGenerator.Param> scalarCastParams =
-                GhostParamTypeResolver.appendOutputParametersAsPointers(
-                        GhostParamTypeResolver.listInputParameters(child), child);
-        for (int ei = 0; ei < ensures.size(); ei++) {
-            ensures.set(
-                    ei,
-                    GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(
-                            ensures.get(ei), scalarCastParams));
-        }
         removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
         // Captura ANTES da substituição por marcador (abaixo): bodyEnsuresOnly alimenta a
         // varredura de símbolos da lib para o lado ghost (appendLibScanGhostOperationBodies) — o
@@ -1524,12 +1510,11 @@ public final class BxmlOperationsTranslator {
                     "belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^()]+?)\\s*\\)");
 
     private static void rewriteRequiresForOutputParameters(
-            List<String> requires, List<String> outputParams, Set<String> boolOutputParams) {
+            List<String> requires, List<String> outputParams) {
         if (requires == null || requires.isEmpty() || outputParams == null || outputParams.isEmpty()) {
             return;
         }
         Set<String> out = new HashSet<>(outputParams);
-        Set<String> boolOut = boolOutputParams == null ? Set.of() : boolOutputParams;
         for (int i = 0; i < requires.size(); i++) {
             String req = requires.get(i);
             if (req == null || req.isBlank()) {
@@ -1545,15 +1530,10 @@ public final class BxmlOperationsTranslator {
                     continue;
                 }
                 changed = true;
-                // Saídas bool (C _Bool*) correspondem diretamente ao tipo lógico ACSL "boolean" —
-                // sem cast. O cast (integer) só se aplica a saídas int/enum (ex.: cc : COPY em
-                // Biblioteca), cujo domínio (Set<integer>) exige elevar o valor C para o tipo
-                // lógico "integer". Aplicá-lo também a saídas bool comparadas contra um domínio
-                // Set<boolean> (ex.: BOOL) provoca "invalid implicit conversion from integer to
-                // boolean" no Frama-C.
-                String value = boolOut.contains(var) ? "*" + var : "(integer)*" + var;
+                // *p sem cast (int, enum ou _Bool): no belongs o Frama-C promove o valor C, como
+                // no rules
                 m.appendReplacement(
-                        rewritten, Matcher.quoteReplacement("belongs(" + value + ", " + set + ")"));
+                        rewritten, Matcher.quoteReplacement("belongs(*" + var + ", " + set + ")"));
             }
             if (!changed) {
                 continue;
