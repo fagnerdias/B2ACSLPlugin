@@ -1,10 +1,13 @@
 package com.example.comparator.spec.meaning;
 
+import com.example.acsl.Expr;
+import com.example.acsl.AcslParser;
+import com.example.acsl.AcslLexer;
 import com.example.comparator.spec.ClauseNormalizer;
-import com.example.comparator.spec.meaning.AcslLexer.ParseException;
-import com.example.comparator.spec.meaning.AcslLexer.Token;
-import com.example.comparator.spec.meaning.AcslLexer.Type;
-import com.example.comparator.spec.meaning.Expr.Decl;
+import com.example.acsl.AcslLexer.ParseException;
+import com.example.acsl.AcslLexer.Token;
+import com.example.acsl.AcslLexer.Type;
+import com.example.acsl.Expr.Decl;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;

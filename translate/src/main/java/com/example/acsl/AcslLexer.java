@@ -1,4 +1,4 @@
-package com.example.comparator.spec.meaning;
+package com.example.acsl;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -8,29 +8,29 @@ import java.util.List;
  * are not tokens of their own: {@code Set<Tuple<A,B>>} must close two type argument lists, so the
  * parser joins two adjacent {@code <}/{@code >} into a shift where an operator is expected.
  */
-final class AcslLexer {
+public final class AcslLexer {
 
-    enum Type {
+    public enum Type {
         IDENT,
         LITERAL,
         OP,
         EOF
     }
 
-    record Token(Type type, String text, int start, int end, boolean spaceBefore) {
+    public record Token(Type type, String text, int start, int end, boolean spaceBefore) {
 
-        boolean is(String op) {
+        public boolean is(String op) {
             return type == Type.OP && text.equals(op);
         }
 
-        boolean isWord() {
+        public boolean isWord() {
             return type == Type.IDENT || type == Type.LITERAL;
         }
     }
 
     /** Raised for any text this parser does not understand; callers fall back to a textual form. */
-    static final class ParseException extends RuntimeException {
-        ParseException(String message) {
+    public static final class ParseException extends RuntimeException {
+        public ParseException(String message) {
             super(message);
         }
     }
@@ -44,7 +44,7 @@ final class AcslLexer {
 
     private AcslLexer() {}
 
-    static List<Token> lex(String s) {
+    public static List<Token> lex(String s) {
         List<Token> out = new ArrayList<>();
         int i = 0;
         boolean space = false;
@@ -120,11 +120,11 @@ final class AcslLexer {
         return null;
     }
 
-    static boolean isIdentStart(char c) {
+    public static boolean isIdentStart(char c) {
         return Character.isLetter(c) || c == '_';
     }
 
-    static boolean isIdentPart(char c) {
+    public static boolean isIdentPart(char c) {
         return Character.isLetterOrDigit(c) || c == '_';
     }
 }

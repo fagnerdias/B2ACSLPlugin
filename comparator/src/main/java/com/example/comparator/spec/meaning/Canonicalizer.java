@@ -1,5 +1,6 @@
 package com.example.comparator.spec.meaning;
 
+import com.example.acsl.Expr;
 import static com.example.comparator.spec.meaning.MeaningRule.ARITHMETIC;
 import static com.example.comparator.spec.meaning.MeaningRule.CARD_VALUATION;
 import static com.example.comparator.spec.meaning.MeaningRule.CONJUNCTION;
@@ -18,8 +19,8 @@ import static com.example.comparator.spec.meaning.MeaningRule.STATE_PARAMETER;
 import static com.example.comparator.spec.meaning.MeaningRule.SYMMETRY;
 import static com.example.comparator.spec.meaning.MeaningRule.TYPE_ALIAS;
 
-import com.example.comparator.spec.meaning.Expr.Decl;
-import com.example.comparator.spec.meaning.Expr.Kind;
+import com.example.acsl.Expr.Decl;
+import com.example.acsl.Expr.Kind;
 import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;

@@ -557,6 +557,12 @@ public final class B2ACSLPipeline {
             // helpers SIGMA/lambda/UNION do ghost na forma do rules: chamada dummy_<nome real> e só a
             // assinatura no dummy_ghost (precisa dos .acsl já gerados para achar o nome real)
             com.example.bxml.GhostHelperAlignment.align(GhostOperationsCiGenerator.targetPath(cDir), acslDir);
+            // parênteses na convenção do rules (ACSL2Text.atl): reimprime cada corpo de cláusula,
+            // definição, axioma e lema dos .acsl gerados e do ghost
+            for (String w : com.example.acsl.AcslFileFormatter.formatGenerated(
+                    acslDir, GhostOperationsCiGenerator.targetPath(cDir))) {
+                System.err.println("[B2ACSL] AVISO formatação ACSL mantida como gerada: " + w);
+            }
             for (String machineName : abstractMachineNames) {
                 Path p = acslByMachineName.get(machineName);
                 if (p != null) {
