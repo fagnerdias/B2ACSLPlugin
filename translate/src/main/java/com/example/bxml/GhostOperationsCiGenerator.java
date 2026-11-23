@@ -1386,15 +1386,12 @@ public final class GhostOperationsCiGenerator {
         }
         String rhs = BxmlExpressionToAcsl.translate(rhsExp, ctx);
         String rhsGhost = rewriteAbstractIdsWithOld(rhs, abstractSet);
-        String logicType = ctx.variableLogicTypes().get(v);
-        if (logicType != null
-                && (logicType.equals("boolean")
-                        || logicType.equals("integer")
-                        || logicType.equals("int")
-                        || logicType.equals("real"))) {
-            return "dummy_" + v + " == " + rhsGhost;
+        // igualdade pelo tipo, como o contrato real (BxmlExpressionToAcsl.formatEquality) e o rules:
+        // conjunto/relação/função -> equals; escalar, par, \list, record -> ==
+        if (BxmlExpressionToAcsl.isSetValued(lhsExp, ctx)) {
+            return "equals(dummy_" + v + ", " + rhsGhost + ")";
         }
-        return "equals(dummy_" + v + ", " + rhsGhost + ")";
+        return "dummy_" + v + " == " + rhsGhost;
     }
 
     private static boolean isListLikeVariable(String v, BxmlTranslateContext ctx) {
