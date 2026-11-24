@@ -264,12 +264,14 @@ public final class SpecDiff {
             if (patch.getDeltas().isEmpty()) {
                 diffs.put(name, "");
             } else {
+                // Contexto do tamanho do arquivo: um unico hunk com o arquivo inteiro, sem trechos iguais omitidos.
+                int wholeFile = Math.max(a.size(), b.size());
                 diffs.put(
                         name,
                         String.join(
                                 "\n",
                                 UnifiedDiffUtils.generateUnifiedDiff(
-                                        "plugin/" + name, "rules/" + name, a, patch, 3)));
+                                        "plugin/" + name, "rules/" + name, a, patch, wholeFile)));
             }
         }
         return diffs;
