@@ -1155,7 +1155,11 @@ public final class BxmlMachineVariables {
                 Set<String> opsWithTransitiveRand = CrossMachineBxmlLoader.loadOperationNamesCallingRandOps(machineName, bxmlDirectory);
                 if (machineAssigns.isEmpty() && opsWithDirectRand.isEmpty() && opsWithTransitiveRand.isEmpty()) continue;
                 for (String opName : CrossMachineBxmlLoader.loadOperationNamesForMachine(machineName, bxmlDirectory)) {
-                    List<String> opAssigns = new ArrayList<>(machineAssigns);
+                    // Só o que ESTA operação escreve (ver loadConcreteAssignsForImportedOperation),
+                    // não todo o estado da máquina importada.
+                    List<String> opAssigns = new ArrayList<>(
+                            CrossMachineBxmlLoader.loadConcreteAssignsForImportedOperation(
+                                    machineName, opName, bxmlDirectory));
                     if (opsWithDirectRand.contains(opName) || opsWithTransitiveRand.contains(opName)) {
                         opAssigns.add("__fc_random_counter");
                     }

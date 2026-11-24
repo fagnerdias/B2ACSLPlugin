@@ -30,7 +30,7 @@ final class GhostNamespacePrefixer {
      *
      * <p>Apenas reescreve o token quando não está já prefixado por {@code dummy_}.
      */
-    private static String prefixFunctionTypesForGhost(String text) {
+    static String prefixFunctionTypesForGhost(String text) {
         if (text == null || text.isEmpty()) {
             return text;
         }
@@ -370,15 +370,17 @@ final class GhostNamespacePrefixer {
             String acslName = e.getValue();
             String dummyVal =
                     acslName != null && !acslName.isBlank() ? "dummy_" + acslName : "dummy_" + bName;
+            // no ghost o valor é a constante lógica dummy_<M>__<V> (integer): o (integer) que o
+            // contrato real põe na constante C de enumeração sai junto, como no rules
             if (acslName != null && !acslName.isBlank()) {
                 out =
                         out.replaceAll(
-                                "(?<!dummy_)\\b" + Pattern.quote(acslName) + "\\b",
+                                "(?:\\(integer\\))?(?<!dummy_)\\b" + Pattern.quote(acslName) + "\\b",
                                 Matcher.quoteReplacement(dummyVal));
             }
             out =
                     out.replaceAll(
-                            "(?<!dummy_)\\b" + Pattern.quote(bName) + "\\b",
+                            "(?:\\(integer\\))?(?<!dummy_)\\b" + Pattern.quote(bName) + "\\b",
                             Matcher.quoteReplacement(dummyVal));
         }
         return out;
@@ -636,7 +638,7 @@ final class GhostNamespacePrefixer {
                 // (incl. array_to_function_int/_bool) genericamente — adicioná-lo aqui também
                 // seria redundante.
                 String fnName = GhostDomainRestrictionRewriter.arrayToFunctionNameForDomain(domain);
-                String wrapped = fnName + "(" + out + ", " + len + ")";
+                String wrapped = GhostDomainRestrictionRewriter.arrayToFunctionCall(fnName, out, len);
                 String escOut = Pattern.quote(out);
                 String escQ = Pattern.quote(qName);
                 result =

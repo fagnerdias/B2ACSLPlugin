@@ -1,4 +1,4 @@
-package com.example.comparator.spec.meaning;
+package com.example.acsl;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -12,9 +12,9 @@ import java.util.Map;
  * Canonicalizer} builds new trees (spans unset) in canonical form, and {@link #print} turns them
  * into the strings that are compared.
  */
-final class Expr {
+public final class Expr {
 
-    enum Kind {
+    public enum Kind {
         /** identifier or keyword constant ({@code \true}, {@code \result}); {@code op} = name */
         ID,
         /** number, character or string literal; {@code op} = text */
@@ -53,19 +53,24 @@ final class Expr {
         EMPTY
     }
 
-    record Decl(String type, String name) {}
+    public record Decl(String type, String name) {}
 
-    static final Expr EMPTY = new Expr(Kind.EMPTY, "", List.of(), List.of());
+    public static final Expr EMPTY = new Expr(Kind.EMPTY, "", List.of(), List.of());
 
-    final Kind kind;
-    final String op;
-    final List<Expr> args;
-    final List<Decl> decls;
+    public final Kind kind;
+    public final String op;
+    public final List<Expr> args;
+    public final List<Decl> decls;
     /** Source span (character offsets in the parsed text); -1 for built nodes. */
-    int start = -1;
-    int end = -1;
+    public int start = -1;
+    public int end = -1;
     /** The source wrote this node inside parentheses (a relation chain never continues through them). */
-    boolean parenthesized;
+    public boolean parenthesized;
+    /**
+     * Source text, whitespace collapsed, where reprinting needs it as written: the binder list of a
+     * {@link Kind#BINDER} ({@code integer lo, hi}) and the {@code { ... }} of a {@link Kind#RAW}.
+     */
+    public String sourceText;
 
     private String printed;
 
@@ -76,84 +81,84 @@ final class Expr {
         this.decls = decls;
     }
 
-    static Expr id(String name) {
+    public static Expr id(String name) {
         return new Expr(Kind.ID, name, List.of(), List.of());
     }
 
-    static Expr num(String text) {
+    public static Expr num(String text) {
         return new Expr(Kind.NUM, text, List.of(), List.of());
     }
 
-    static Expr call(String name, List<Expr> args) {
+    public static Expr call(String name, List<Expr> args) {
         return new Expr(Kind.CALL, name, List.copyOf(args), List.of());
     }
 
-    static Expr bin(String op, Expr l, Expr r) {
+    public static Expr bin(String op, Expr l, Expr r) {
         return new Expr(Kind.BIN, op, List.of(l, r), List.of());
     }
 
-    static Expr chain(List<Expr> operands, List<String> ops) {
+    public static Expr chain(List<Expr> operands, List<String> ops) {
         return new Expr(Kind.CHAIN, String.join(",", ops), List.copyOf(operands), List.of());
     }
 
-    static Expr un(String op, Expr x) {
+    public static Expr un(String op, Expr x) {
         return new Expr(Kind.UN, op, List.of(x), List.of());
     }
 
-    static Expr ternary(Expr c, Expr a, Expr b) {
+    public static Expr ternary(Expr c, Expr a, Expr b) {
         return new Expr(Kind.TERNARY, "?", List.of(c, a, b), List.of());
     }
 
-    static Expr binder(String binder, List<Decl> decls, Expr body) {
+    public static Expr binder(String binder, List<Decl> decls, Expr body) {
         return new Expr(Kind.BINDER, binder, List.of(body), List.copyOf(decls));
     }
 
-    static Expr let(String name, Expr value, Expr body) {
+    public static Expr let(String name, Expr value, Expr body) {
         return new Expr(Kind.LET, name, List.of(value, body), List.of());
     }
 
-    static Expr index(Expr array, Expr index) {
+    public static Expr index(Expr array, Expr index) {
         return new Expr(Kind.INDEX, "[]", List.of(array, index), List.of());
     }
 
-    static Expr field(Expr object, String access) {
+    public static Expr field(Expr object, String access) {
         return new Expr(Kind.FIELD, access, List.of(object), List.of());
     }
 
-    static Expr cast(String type, Expr x) {
+    public static Expr cast(String type, Expr x) {
         return new Expr(Kind.CAST, type, List.of(x), List.of());
     }
 
-    static Expr range(Expr lo, Expr hi) {
+    public static Expr range(Expr lo, Expr hi) {
         return new Expr(Kind.RANGE, "..", List.of(lo, hi), List.of());
     }
 
-    static Expr list(List<Expr> items) {
+    public static Expr list(List<Expr> items) {
         return new Expr(Kind.LIST, "[||]", List.copyOf(items), List.of());
     }
 
-    static Expr raw(String text) {
+    public static Expr raw(String text) {
         return new Expr(Kind.RAW, text, List.of(), List.of());
     }
 
-    static Expr and(List<Expr> parts) {
+    public static Expr and(List<Expr> parts) {
         return new Expr(Kind.AND, "&&", List.copyOf(parts), List.of());
     }
 
-    static Expr or(List<Expr> parts) {
+    public static Expr or(List<Expr> parts) {
         return new Expr(Kind.OR, "||", List.copyOf(parts), List.of());
     }
 
-    boolean isId(String name) {
+    public boolean isId(String name) {
         return kind == Kind.ID && op.equals(name);
     }
 
-    boolean isBin(String operator) {
+    public boolean isBin(String operator) {
         return kind == Kind.BIN && op.equals(operator);
     }
 
     /** Canonical text; bound variables are renumbered {@code _v0}, {@code _v1}, ... in order of appearance. */
-    String print() {
+    public String print() {
         if (printed == null) {
             printed = new Printer().print(this);
         }
@@ -166,7 +171,7 @@ final class Expr {
     }
 
     /** Names of the identifiers that occur in this tree (bound or free). */
-    void collectIdentifiers(java.util.Set<String> out) {
+    public void collectIdentifiers(java.util.Set<String> out) {
         if (kind == Kind.ID) {
             out.add(op);
         }

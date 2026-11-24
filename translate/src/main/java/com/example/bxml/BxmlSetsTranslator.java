@@ -1120,6 +1120,11 @@ public final class BxmlSetsTranslator {
                 setName = name.trim();
                 String acslSetName = enumeratedSetAcslName(machineName, setName);
                 logics.add("    logic Set<integer> " + acslSetName + ";");
+                // Conjunto diferido (sem valores enumerados): o B o garante finito, como no rules.
+                if (BxmlDomUtils.firstChildElement(setEl, "Enumerated_Values") == null) {
+                    logics.add("    axiom " + machineName + "_sets_" + setName + ":\n        is_finite("
+                            + acslSetName + ");");
+                }
                 break;
             }
         }

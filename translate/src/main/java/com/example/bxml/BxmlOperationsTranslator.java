@@ -356,9 +356,12 @@ public final class BxmlOperationsTranslator {
             // não a lista COMPLETA de variáveis abstratas: uma variável colapsada não tem
             // dummy_ghost_<v> declarado (não há camada ghost paralela para ela), então referenciá-la
             // aqui geraria "unbound logic variable" no Frama-C.
+            // Só as variáveis que a operação escreve (como o rules): marcar todas as do modelo
+            // dizia que a operação também mexia nas que ela não toca (Biblioteca.addCopy: books).
             List<String> dummyGhostEnsureVars =
                     useGhostAbstraction && assignsAbstract && abstractVariableNames != null
-                            ? new ArrayList<>(abstractVariableNames)
+                            ? new ArrayList<>(GhostContractPredicates.assignedAbstractVariablesInOperation(
+                                    child, new LinkedHashSet<>(abstractVariableNames)))
                             : List.of();
 
             List<String> connectionConcreteAssigns =
@@ -458,6 +461,21 @@ public final class BxmlOperationsTranslator {
             String rootAbstractMachineName,
             BxmlTranslateContext ctx,
             List<String> invariantPredicateNames) {
+        return translateLocalOperations(
+                implementationMachineEl, rootAbstractMachineName, ctx, invariantPredicateNames, List.of());
+    }
+
+    /**
+     * Como acima; {@code importedInvariantPredicateNames} (invariantes das máquinas importadas e
+     * vistas) entram nos requires, como nas operações da máquina e no rules (cv_struct lclear:
+     * requires cv_base_invariant).
+     */
+    public static List<OperationAcsl> translateLocalOperations(
+            Element implementationMachineEl,
+            String rootAbstractMachineName,
+            BxmlTranslateContext ctx,
+            List<String> invariantPredicateNames,
+            List<String> importedInvariantPredicateNames) {
         List<OperationAcsl> out = new ArrayList<>();
         if (implementationMachineEl == null) return out;
         Element localOpsEl = BxmlDomUtils.firstChildElement(implementationMachineEl, "Local_Operations");
@@ -497,6 +515,11 @@ public final class BxmlOperationsTranslator {
             }
 
             List<String> requires = new ArrayList<>(invariantPredicateNames);
+            if (importedInvariantPredicateNames != null) {
+                for (String inv : importedInvariantPredicateNames) {
+                    if (!requires.contains(inv)) requires.add(inv);
+                }
+            }
             Element pre = BxmlDomUtils.firstChildElement(declOp, "Precondition");
             if (pre != null) {
                 requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, ctx));
@@ -582,7 +605,7 @@ public final class BxmlOperationsTranslator {
         if (pre != null) {
             requires.addAll(BxmlPredicateToAcsl.translatePredicateBlock(pre, opCtx));
             rewriteAcslListForArrayBackedParams(requires, arrayParamLens);
-            rewriteRequiresForOutputParameters(requires, outputParams, boolOutputParameterNames(child, opCtx));
+            rewriteRequiresForOutputParameters(requires, outputParams);
         }
 
         Set<String> funcTypedOutputs = functionTypedOutputParamNames(child, opCtx);
@@ -668,20 +691,6 @@ public final class BxmlOperationsTranslator {
             ensures.set(ei, e);
         }
         rewriteEnsuresBoolOutputEquality(ensures, outputParams, child, opCtx);
-        // Parâmetros de entrada escalares (C "int") ficam sem cast no ensures cru — comparados
-        // com um Set<integer> (ex. "singleton(bb)" dentro de "equals(books, ...)") o Frama-C
-        // infere o tipo lógico do parâmetro a partir do seu uso e rejeita ("invalid cast from
-        // Set<Biblioteca__BOOK> to Set<integer>"). O lado ghost já resolve isto com o mesmo
-        // "(integer)bb"; reaproveitado aqui pelo mesmo motivo do bloco acima.
-        List<GhostOperationsCiGenerator.Param> scalarCastParams =
-                GhostParamTypeResolver.appendOutputParametersAsPointers(
-                        GhostParamTypeResolver.listInputParameters(child), child);
-        for (int ei = 0; ei < ensures.size(); ei++) {
-            ensures.set(
-                    ei,
-                    GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(
-                            ensures.get(ei), scalarCastParams));
-        }
         removeEnsuresForFunctionTypedOutputs(ensures, funcTypedOutputs);
         // Captura ANTES da substituição por marcador (abaixo): bodyEnsuresOnly alimenta a
         // varredura de símbolos da lib para o lado ghost (appendLibScanGhostOperationBodies) — o
@@ -737,7 +746,10 @@ public final class BxmlOperationsTranslator {
                         && GhostContractPredicates.operationAssignsAbstract(
                                 child, abstractVariableNames);
         boolean bodyHasAnySub = GhostContractPredicates.operationBodyHasAnySub(child);
-        if (useGhostAbstraction && (assignsAbstract || bodyHasAnySub)) {
+        // Só quando a operação escreve variável abstrata (como o rules): um ANY que só lê (damas
+        // posicao, Register elements) ganhava função ghost e "assert ghost__op", que o merged_code.c
+        // virava um ensures repetido.
+        if (useGhostAbstraction && assignsAbstract) {
             ghostSlug = GhostContractPredicates.ghostOperationSlug(opName);
         }
         List<String> ghostBehaviorArgs = new ArrayList<>(inputParamNames);
@@ -828,7 +840,8 @@ public final class BxmlOperationsTranslator {
                         assignedAbs,
                         gluing,
                         opCtx,
-                        bxmlDirectory);
+                        bxmlDirectory,
+                        child.getAttribute("name"));
         if (connectionConcreteAssigns.isEmpty() && !useGhostAbstraction) {
             connectionConcreteAssigns =
                     ConcreteAssignTargetResolver.listImplementationAssignTargetsForAbstractVariables(
@@ -986,7 +999,8 @@ public final class BxmlOperationsTranslator {
             }
         }
         if (!funcTypedOutputs.isEmpty() && !loops.isEmpty()) {
-            loops = rewriteLoopsForFunctionTypedOutputs(loops, funcTypedOutputs);
+            loops = rewriteLoopsForFunctionTypedOutputs(
+                    loops, funcTypedOutputs, functionTypedOutputBounds, boolArrayOutputNames(operation, ctx));
         }
         return new FunctionTypedOutputHandling(functionTypedOutputBounds, loops);
     }
@@ -1226,11 +1240,14 @@ public final class BxmlOperationsTranslator {
     }
 
     private static List<BxmlLoopTranslator.LoopContract> rewriteLoopsForFunctionTypedOutputs(
-            List<BxmlLoopTranslator.LoopContract> loops, Set<String> funcTypedOutputs) {
+            List<BxmlLoopTranslator.LoopContract> loops,
+            Set<String> funcTypedOutputs,
+            Map<String, String> bounds,
+            Set<String> boolArrayOutputs) {
         List<BxmlLoopTranslator.LoopContract> result = new ArrayList<>();
         for (BxmlLoopTranslator.LoopContract lc : loops) {
             List<String> inv = lc.invariant().stream()
-                    .map(s -> rewriteArrayOutputFunctionApply(s, funcTypedOutputs))
+                    .map(s -> wrapArrayOutputFunctionApply(s, funcTypedOutputs, bounds, boolArrayOutputs))
                     .toList();
             String upperBound = extractLoopUpperBound(lc.variant(), lc.assigns(), funcTypedOutputs);
             List<String> newAssigns = new ArrayList<>();
@@ -1296,6 +1313,52 @@ public final class BxmlOperationsTranslator {
         Matcher m = p.matcher(variant);
         if (m.find()) return m.group(1);
         return null;
+    }
+
+    /**
+     * {@code function_apply(p, X)} de uma saída array no invariante de laço: com o limite conhecido,
+     * {@code function_apply(array_to_function_bool((_Bool*)(p), (N - (0) + 1)), X)}, a forma das
+     * entradas array e do rules (Biblioteca copiesQuery: antes {@code cc[jj] != 0}); sem limite, a
+     * indexação direta de {@link #rewriteArrayOutputFunctionApply}.
+     */
+    private static String wrapArrayOutputFunctionApply(
+            String s, Set<String> params, Map<String, String> bounds, Set<String> boolArrayOutputs) {
+        if (s == null || s.isBlank() || params == null || params.isEmpty()) return s;
+        for (String p : params) {
+            String bound = bounds == null ? null : bounds.get(p);
+            if (bound == null || bound.isBlank()) {
+                s = rewriteArrayOutputFunctionApply(s, Set.of(p));
+                continue;
+            }
+            boolean bool = boolArrayOutputs != null && boolArrayOutputs.contains(p);
+            String fn = bool ? "array_to_function_bool" : "array_to_function_int";
+            String wrapped = fn + "((" + (bool ? "_Bool" : "int") + "*)(" + p + "), (" + bound + " - (0) + 1))";
+            s = s.replaceAll(
+                    "function_apply\\(" + Pattern.quote(p) + "\\s*,",
+                    Matcher.quoteReplacement("function_apply(" + wrapped + ","));
+        }
+        return s;
+    }
+
+    /** Saídas array de booleanos ({@code POW(..*BOOL)}): array_to_function_bool. */
+    private static Set<String> boolArrayOutputNames(Element operation, BxmlTranslateContext ctx) {
+        Set<String> out = new HashSet<>();
+        Element outEl = BxmlDomUtils.firstChildElement(operation, "Output_Parameters");
+        if (outEl == null || ctx == null) return out;
+        for (Node n = outEl.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (!(n instanceof Element e) || !"Id".equals(e.getLocalName())) continue;
+            String tr = e.getAttribute("typref");
+            if (tr == null || tr.isBlank()) continue;
+            try {
+                String raw = ctx.types().getRawType(Integer.parseInt(tr.trim()));
+                if (raw != null && raw.startsWith("POW(") && raw.replace(" ", "").endsWith("*BOOL)")) {
+                    out.add(e.getAttribute("value").trim());
+                }
+            } catch (NumberFormatException ignored) {
+                // typref não numérico: não é array de booleanos conhecido
+            }
+        }
+        return out;
     }
 
     private static String rewriteArrayOutputFunctionApply(String s, Set<String> params) {
@@ -1447,12 +1510,11 @@ public final class BxmlOperationsTranslator {
                     "belongs\\s*\\(\\s*(?:\\(integer\\)\\s*)?([A-Za-z_]\\w*)\\s*,\\s*([^()]+?)\\s*\\)");
 
     private static void rewriteRequiresForOutputParameters(
-            List<String> requires, List<String> outputParams, Set<String> boolOutputParams) {
+            List<String> requires, List<String> outputParams) {
         if (requires == null || requires.isEmpty() || outputParams == null || outputParams.isEmpty()) {
             return;
         }
         Set<String> out = new HashSet<>(outputParams);
-        Set<String> boolOut = boolOutputParams == null ? Set.of() : boolOutputParams;
         for (int i = 0; i < requires.size(); i++) {
             String req = requires.get(i);
             if (req == null || req.isBlank()) {
@@ -1468,15 +1530,10 @@ public final class BxmlOperationsTranslator {
                     continue;
                 }
                 changed = true;
-                // Saídas bool (C _Bool*) correspondem diretamente ao tipo lógico ACSL "boolean" —
-                // sem cast. O cast (integer) só se aplica a saídas int/enum (ex.: cc : COPY em
-                // Biblioteca), cujo domínio (Set<integer>) exige elevar o valor C para o tipo
-                // lógico "integer". Aplicá-lo também a saídas bool comparadas contra um domínio
-                // Set<boolean> (ex.: BOOL) provoca "invalid implicit conversion from integer to
-                // boolean" no Frama-C.
-                String value = boolOut.contains(var) ? "*" + var : "(integer)*" + var;
+                // *p sem cast (int, enum ou _Bool): no belongs o Frama-C promove o valor C, como
+                // no rules
                 m.appendReplacement(
-                        rewritten, Matcher.quoteReplacement("belongs(" + value + ", " + set + ")"));
+                        rewritten, Matcher.quoteReplacement("belongs(*" + var + ", " + set + ")"));
             }
             if (!changed) {
                 continue;
@@ -1699,11 +1756,9 @@ public final class BxmlOperationsTranslator {
 
         /** Mesmo esquema que {@link com.example.bxml.InitialisationAcsl#toContractText()}. */
         public String toContractSketch() {
-            if (skipBody) {
-                return "function " + functionName + ":\ncontract:    \n"
-                        + "    requires \\true;\n"
-                        + "    ensures \\true;\n";
-            }
+            // PRE ... THEN skip END também tem contrato completo (tipagem da PRE, invariantes,
+            // assigns \nothing), como no rules; antes saía só "requires \true; ensures \true;" e
+            // sem assigns o chamador perdia o frame (safetyflasher printDebugMessage, flash).
             StringBuilder sb = new StringBuilder();
             sb.append("function ").append(functionName).append(":\n");
             sb.append("contract:    \n");
@@ -1715,6 +1770,9 @@ public final class BxmlOperationsTranslator {
             }
             for (String v : dummyGhostEnsureVarNames) {
                 sb.append("    ensures  dummy_ghost_").append(v).append(";\n");
+            }
+            if (ensures.isEmpty() && dummyGhostEnsureVarNames.isEmpty()) {
+                sb.append("    ensures \\true;\n");
             }
             boolean hasAssigns = false;
             for (String p : outputParameters) {

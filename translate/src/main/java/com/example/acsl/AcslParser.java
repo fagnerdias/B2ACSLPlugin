@@ -1,9 +1,9 @@
-package com.example.comparator.spec.meaning;
+package com.example.acsl;
 
-import com.example.comparator.spec.meaning.AcslLexer.ParseException;
-import com.example.comparator.spec.meaning.AcslLexer.Token;
-import com.example.comparator.spec.meaning.AcslLexer.Type;
-import com.example.comparator.spec.meaning.Expr.Decl;
+import com.example.acsl.AcslLexer.ParseException;
+import com.example.acsl.AcslLexer.Token;
+import com.example.acsl.AcslLexer.Type;
+import com.example.acsl.Expr.Decl;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -16,10 +16,10 @@ import java.util.Set;
  *
  * <p>Also reads the headers of {@code predicate}/{@code logic} declarations ({@link #header}).
  */
-final class AcslParser {
+public final class AcslParser {
 
     /** Words that make {@code (...)} a cast rather than a parenthesized expression. */
-    static final Set<String> TYPE_WORDS =
+    public static final Set<String> TYPE_WORDS =
             Set.of(
                     "integer", "real", "boolean", "int", "unsigned", "signed", "char", "short", "long", "float",
                     "double", "_Bool", "bool", "void", "size_t", "int8_t", "int16_t", "int32_t", "int64_t",
@@ -40,7 +40,7 @@ final class AcslParser {
     }
 
     /** Parses the whole text as one term or predicate. */
-    static Expr parse(String text) {
+    public static Expr parse(String text) {
         AcslParser parser = new AcslParser(text);
         Expr e = parser.expr(0);
         if (parser.peek().type() != Type.EOF) {
@@ -151,10 +151,14 @@ final class AcslParser {
             String name = t.text();
             switch (name) {
                 case "\\forall", "\\exists", "\\lambda" -> {
+                    int declStart = peek().start();
                     List<Decl> decls = decls();
+                    String declText = collapse(src.substring(declStart, peek().start()));
                     expect(";");
                     Expr body = expr(0);
-                    return span(Expr.binder(name, decls, body), from);
+                    Expr binder = span(Expr.binder(name, decls, body), from);
+                    binder.sourceText = declText;
+                    return binder;
                 }
                 case "\\let" -> {
                     String variable = expectIdent().text();
@@ -191,7 +195,9 @@ final class AcslParser {
                     return span(Expr.list(arguments("|]")), from);
                 }
                 case "{" -> {
-                    return span(Expr.raw(balanced(t)), from);
+                    Expr raw = span(Expr.raw(balanced(t)), from);
+                    raw.sourceText = collapse(src.substring(t.start(), tokens.get(p - 1).end()));
+                    return raw;
                 }
                 case ".." -> {
                     Expr hi = atRangeEnd() ? Expr.EMPTY : expr(RANGE_BP + 1);
@@ -334,7 +340,7 @@ final class AcslParser {
      * Header of {@code predicate N<G>(T x, ...) reads l, ... = body} or {@code logic T N<G>(...) ...
      * = body}; {@code bodyOffset} is -1 without {@code =}.
      */
-    record Header(
+    public record Header(
             String keyword,
             String type,
             String name,
@@ -343,7 +349,7 @@ final class AcslParser {
             List<String> reads,
             int bodyOffset) {}
 
-    static Header header(String text) {
+    public static Header header(String text) {
         AcslParser parser = new AcslParser(text);
         return parser.header();
     }
@@ -466,8 +472,13 @@ final class AcslParser {
 
     // ---- helpers ------------------------------------------------------------------------------
 
+    /** {@code text} trimmed, each whitespace run turned into one space. */
+    static String collapse(String text) {
+        return text.trim().replaceAll("\\s+", " ");
+    }
+
     /** Token texts joined with a space only between two words ({@code unsigned int}, {@code integer x}). */
-    static String compact(List<Token> tokens) {
+    public static String compact(List<Token> tokens) {
         StringBuilder b = new StringBuilder();
         Token previous = null;
         for (Token t : tokens) {
@@ -519,7 +530,7 @@ final class AcslParser {
         return t;
     }
 
-    String source() {
+    public String source() {
         return src;
     }
 }

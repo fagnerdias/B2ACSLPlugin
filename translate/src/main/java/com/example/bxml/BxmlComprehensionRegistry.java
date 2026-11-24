@@ -377,8 +377,16 @@ public final class BxmlComprehensionRegistry {
             // símbolo nenhum para referenciar.
             return null;
         }
-        // argumentos na forma do escopo de QUEM usa a compreensão (contrato, laço ou outro helper)
-        return base + callSuffix(free[0], ctx);
+        // argumentos na forma do escopo de QUEM usa a compreensão (contrato, laço ou outro helper);
+        // com (integer) quando a 1ª ocorrência da variável livre está num construtor, como o rules
+        if (free[0].isEmpty()) return base;
+        List<String> args = new ArrayList<>();
+        for (String n : free[0]) {
+            String arg = ctx.annotationScope().helperArg(n);
+            args.add(BxmlExpressionToAcsl.castCVariableIfConstructorChild(
+                    firstIdNamed(comprehensionElement, n), arg, ctx));
+        }
+        return base + "(" + String.join(", ", args) + ")";
     }
 
     /**
@@ -406,6 +414,19 @@ public final class BxmlComprehensionRegistry {
         BxmlTranslateContext freeCtx = comprehensionCtx(types, ctx);
         Map<String, String> anyAliases = elementAnyAliases.getOrDefault(qs, Map.of());
         return freeVarsForComprehension(qs, freeCtx, types, anyAliases);
+    }
+
+    /**
+     * Tipo (universo REAL) do conjunto da compreensão no índice {@code index}, o mesmo de {@link
+     * #formatAxiomaticBlock} (ex. {@code Set<Tuple<integer, integer> >} para {@code {aa, bb | ...}}),
+     * ou {@code null} se o índice não existe. A conversão Set→DSet do ghost é do chamador.
+     */
+    public String setTypeForIndex(int index) {
+        Element qs = firstWithIndex(index);
+        if (qs == null) return null;
+        BxmlTypeRegistry types = elementTypes.get(qs);
+        if (types == null) return null;
+        return acslSetTypeForElement(qs, types);
     }
 
     /**
@@ -592,14 +613,8 @@ public final class BxmlComprehensionRegistry {
         }
         if (idNodes.isEmpty()) return;
 
+        // Um alias de ANY (ih) no corpo é parâmetro da compreensão (ver freeVarsForComprehension).
         String pred = BxmlPredicateToAcsl.translateBodyPredicate(body, ctx);
-        Map<String, String> anyAliases = elementAnyAliases.getOrDefault(qs, Map.of());
-        if (!anyAliases.isEmpty()) {
-            // ih(ii) -> function_apply(island_happiness, ii): free vars já excluiu o alias da lista
-            // de parâmetros (ver freeVarsForComprehension), mas o CORPO traduzido acima ainda
-            // referencia o nome cru — sem isto ficaria sem declaração nenhuma no axioma.
-            pred = BxmlInitialisationTranslator.renameEliminatedAuxVars(pred, anyAliases.keySet(), anyAliases);
-        }
 
         String ref = comprehensionSetName(machineName, index) + callSuffix(free[0]);
         String axiomName = comprehensionAxiomName(machineName, index);
@@ -687,6 +702,15 @@ public final class BxmlComprehensionRegistry {
             // inteira nunca conseguia ser registada (ver o TODO logo abaixo do chamador).
             String realName = anyAliases.get(name);
             if (realName != null && ctx.variableLogicTypes().containsKey(realName)) {
+                // Alias de um ANY eliminado (ih em "ANY ih WHERE ih = island_happiness <+ ... THEN
+                // island_happiness := ih || ... {ii | ... & ih(ii) <= 0}"): continua PARÂMETRO, com o
+                // tipo da variável real. Trocá-lo pelo nome da variável dentro do axioma fazia o
+                // axioma ler o estado global (sem parâmetro de estado); na chamada, o ensures
+                // renomeia ih para o pós-estado (renameEliminatedAuxVars), como no rules.
+                names.add(name);
+                String declared = ctx.variableLogicTypes().get(realName);
+                String t = types != null ? types.expandTupleCodomainAlias(declared) : declared;
+                resolvedTypes.add(normalizeTypeSpacing(t));
                 continue;
             }
             names.add(name);
@@ -724,6 +748,17 @@ public final class BxmlComprehensionRegistry {
             if (n.getNodeType() != Node.ELEMENT_NODE) continue;
             Integer found = findTyprefForIdName((Element) n, name);
             if (found != null) return found;
+        }
+        return null;
+    }
+
+    /** Primeiro {@code Id} chamado {@code name} dentro de {@code root}, na ordem do documento. */
+    private static Element firstIdNamed(Element root, String name) {
+        if (root == null) return null;
+        org.w3c.dom.NodeList ids = root.getElementsByTagNameNS("*", "Id");
+        for (int i = 0; i < ids.getLength(); i++) {
+            Element e = (Element) ids.item(i);
+            if (name.equals(e.getAttribute("value"))) return e;
         }
         return null;
     }

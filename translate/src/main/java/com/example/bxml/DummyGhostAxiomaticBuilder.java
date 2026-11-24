@@ -129,11 +129,8 @@ final class DummyGhostAxiomaticBuilder {
         Set<String> functionTypeAliases = collectFunctionTypeAliases(ghostText);
         boolean needsNat = Pattern.compile("\\bdummy_NAT\\b").matcher(ghostText).find();
         boolean needsNat1 = Pattern.compile("\\bdummy_NAT1\\b").matcher(ghostText).find();
-        boolean needsInt = ghostText.contains("dummy_INT");
-        boolean needsBool = ghostText.contains("dummy_BOOL");
-        if (!enumeratedSets.isEmpty()) {
-            ghostNameToLibSymbol.putIfAbsent("belongs", "belongs");
-        }
+        boolean needsInt = Pattern.compile("\\bdummy_INT\\b").matcher(ghostText).find();
+        boolean needsBool = Pattern.compile("\\bdummy_BOOL\\b").matcher(ghostText).find();
 
         StringBuilder sb = new StringBuilder();
         sb.append("/*@\n");
@@ -178,7 +175,15 @@ final class DummyGhostAxiomaticBuilder {
                 machineName = machineName.trim();
             }
             for (int k = 1; k <= maxSetComprehensionIndex; k++) {
-                sb.append("        logic DSet<integer> dummy_")
+                // Tipo do conjunto igual ao da declaração REAL (ex. DSet<DTuple<integer, integer> >
+                // para {aa, bb | ...} — damas lado/frente); DSet<integer> fixo errava o de pares.
+                String realSetType =
+                        ctx != null && ctx.comprehensions() != null
+                                ? ctx.comprehensions().setTypeForIndex(k)
+                                : null;
+                String ghostSetType =
+                        realSetType == null ? "DSet<integer>" : dummyComprehensionParamType(realSetType);
+                sb.append("        logic ").append(ghostSetType).append(" dummy_")
                         .append(BxmlComprehensionRegistry.comprehensionSetName(machineName, k));
                 // Aridade tem de bater com a declaração REAL (referenceName/formatAxiomaticBlock):
                 // uma compreensão parametrizada (ex. set_comprehension_2(pp), RulerOfTheSeas's
@@ -267,25 +272,11 @@ final class DummyGhostAxiomaticBuilder {
         for (BxmlSetsTranslator.EnumeratedSetInfo set : enumeratedSets) {
             String dummySet = set.dummySetLogicName();
             sb.append("        logic DSet<integer> ").append(dummySet).append(";\n\n");
-            List<String> dummyVals = new ArrayList<>();
+            // Só as declarações (como o rules): o axioma dos valores já está no .acsl real, e o
+            // ghost é removido no merged_code.c.
             for (String v : set.valueNames()) {
-                String dv = set.dummyValueLogicName(v);
-                dummyVals.add(dv);
-                sb.append("        logic integer ").append(dv).append(";\n\n");
+                sb.append("        logic integer ").append(set.dummyValueLogicName(v)).append(";\n\n");
             }
-            sb.append("        axiom ").append(dummySet).append("_values:\n");
-            for (String dv : dummyVals) {
-                sb.append("            dummy_belongs(").append(dv).append(", ").append(dummySet).append(")\n");
-                sb.append("            &&\n");
-            }
-            sb.append("            \\forall integer x;\n");
-            sb.append("                dummy_belongs(x, ").append(dummySet).append(") ==>\n");
-            sb.append("                (");
-            for (int k = 0; k < dummyVals.size(); k++) {
-                if (k > 0) sb.append(" || ");
-                sb.append("x == ").append(dummyVals.get(k));
-            }
-            sb.append(");\n\n");
         }
     }
 

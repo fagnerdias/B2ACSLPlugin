@@ -623,7 +623,8 @@ public final class AcslGenerator {
                 if ("implementation".equalsIgnoreCase(mel.getAttribute("type"))) {
                     operations.addAll(
                             BxmlOperationsTranslator.translateLocalOperations(
-                                    mel, baseName, ctx, allInvariantPredicateNames));
+                                    mel, baseName, ctx, allInvariantPredicateNames,
+                                    importedInvariantPredicateNames));
                 }
             }
         }
@@ -688,7 +689,7 @@ public final class AcslGenerator {
         // Lambda-defined constants used in ANY_Sub ghost ops are declared in ghost_operations.ci's
         // separate axiomatic (not dummy_ghost); exclude them here to avoid "already declared" in Frama-C.
         Set<String> ciDeclaredAbstractConsts =
-                GhostOperationsCiGenerator.machineHasAnySubOperations(machineEl)
+                GhostOperationsCiGenerator.machineHasStateChangingAnySubOperations(machineEl)
                         ? BxmlConstantsAndProperties.collectLambdaDefsFromProperties(machineEl).keySet()
                         : Set.of();
         String abstractConstants = BxmlConstantsAndProperties.formatAbstractConstantsBlock(
@@ -941,7 +942,7 @@ public final class AcslGenerator {
         // concretizada, não uma segunda entidade, então não deve ser redeclarada (Frama-C rejeitaria
         // com "already declared with the same profile").
         Set<String> ciDeclaredAbstractConsts =
-                GhostOperationsCiGenerator.machineHasAnySubOperations(state.machineEl)
+                GhostOperationsCiGenerator.machineHasStateChangingAnySubOperations(state.machineEl)
                         ? BxmlConstantsAndProperties.collectLambdaDefsFromProperties(state.machineEl)
                                 .keySet()
                         : Set.of();

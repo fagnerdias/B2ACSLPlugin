@@ -113,7 +113,7 @@ Clauses are matched on a canonical form. The canonical form:
 
 Each unit is then `EQUAL`, `DIFFERENT`, `ONLY_PLUGIN` or `ONLY_RULES`. Reports show clauses in their original form, with whitespace collapsed.
 
-A whitespace-normalized unified diff of the files with the same name is kept in `spec.textDiff` for context.
+A whitespace-normalized unified diff of the files with the same name is kept in `spec.textDiff` for context. It is a single hunk covering the whole file, so the report shows every line, not only the changed regions.
 
 ### Form or meaning
 

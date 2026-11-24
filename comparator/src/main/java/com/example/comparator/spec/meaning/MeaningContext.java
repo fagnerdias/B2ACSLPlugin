@@ -1,9 +1,12 @@
 package com.example.comparator.spec.meaning;
 
+import com.example.acsl.Expr;
+import com.example.acsl.AcslParser;
+import com.example.acsl.AcslLexer;
 import com.example.comparator.spec.SpecUnit;
-import com.example.comparator.spec.meaning.AcslLexer.ParseException;
-import com.example.comparator.spec.meaning.AcslLexer.Token;
-import com.example.comparator.spec.meaning.AcslLexer.Type;
+import com.example.acsl.AcslLexer.ParseException;
+import com.example.acsl.AcslLexer.Token;
+import com.example.acsl.AcslLexer.Type;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -321,6 +324,9 @@ public final class MeaningContext {
         Map<String, TypeCanon.Alias> out = new LinkedHashMap<>();
         alias(out, "Relation", List.of("A", "B"), "Set<Tuple<A,B>>");
         alias(out, "Function", List.of("A", "B"), "Relation<A,B>");
+        // ghost_operations.ci: os dois lados declaram type DRelation<A, B> = DSet<DTuple<A, B> >;
+        // fica também aqui para não depender da declaração (o binder pode estar num .ci sem ela)
+        alias(out, "DRelation", List.of("A", "B"), "DSet<DTuple<A,B>>");
         alias(out, "Relation_int_int", List.of(), "Set<Tuple<integer,integer>>");
         alias(out, "Relation_int_bool", List.of(), "Set<Tuple<integer,boolean>>");
         alias(out, "Relation_bool_int", List.of(), "Set<Tuple<boolean,integer>>");

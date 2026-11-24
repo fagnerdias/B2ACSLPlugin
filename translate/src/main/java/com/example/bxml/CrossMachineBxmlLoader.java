@@ -233,6 +233,98 @@ final class CrossMachineBxmlLoader {
         return result;
     }
 
+    /**
+     * Alvos de {@code assigns} de UMA operação {@code opName} da máquina importada {@code
+     * machineName} (como o frame do rules): só os alvos da própria máquina cuja variável a operação
+     * abstrata escreve, ou que um conjunto de topo do invariante da implementação liga a uma escrita,
+     * mais, recursivamente, os das operações das máquinas importadas que a implementação da operação
+     * chama. Um getter (estimated_lvl <-- get_estimated_level) não escreve nada; antes recebia todo o
+     * estado da máquina (fuel_level, RobustFifo Fifo.input com PositionCounter__pos).
+     */
+    static List<String> loadConcreteAssignsForImportedOperation(
+            String machineName, String opName, Path bxmlDirectory) {
+        return new ArrayList<>(
+                loadConcreteAssignsForImportedOperation(machineName, opName, bxmlDirectory, new java.util.HashSet<>()));
+    }
+
+    private static java.util.Set<String> loadConcreteAssignsForImportedOperation(
+            String machineName, String opName, Path bxmlDirectory, java.util.Set<String> visited) {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        if (machineName == null || opName == null || !visited.add(machineName.trim() + "." + opName.trim())) {
+            return out;
+        }
+        Element abstractEl = null;
+        Path abstractPath = bxmlDirectory.resolve(machineName + ".bxml");
+        if (Files.exists(abstractPath)) {
+            try { abstractEl = BxmlDocumentLoader.parseMachineElement(abstractPath); } catch (Exception ignored) {}
+        }
+        Element implEl = BxmlSetsTranslator.findImplementationMachineElement(machineName, bxmlDirectory);
+        if (abstractEl == null || implEl == null) {
+            return out;
+        }
+        java.util.Set<String> written = new java.util.LinkedHashSet<>();
+        Element absOp = operationNamed(abstractEl, opName);
+        if (absOp != null) {
+            Element body = BxmlDomUtils.firstChildElement(absOp, "Body");
+            if (body != null) {
+                GhostOperationsCiGenerator.collectAssignedAbstractVarsInBody(
+                        body, BxmlMachineVariables.declaredVariableNames(abstractEl), written);
+            }
+        }
+        java.util.Set<String> related = new java.util.LinkedHashSet<>(written);
+        java.util.Set<String> implWritten = ConcreteAssignTargetResolver.implementationWrittenVariables(
+                implEl, opName, BxmlConnectionAcsl.introducedStateVariableIds(implEl));
+        if (implWritten != null) related.addAll(implWritten);
+        java.util.Set<String> imports = new java.util.LinkedHashSet<>(BxmlSetsTranslator.listImportedMachineNames(implEl));
+        for (String t : loadConcreteAssignsForImportedMachine(machineName, bxmlDirectory, new java.util.HashSet<>(imports))) {
+            if (related.contains(assignTargetVariable(t, machineName))) out.add(t);
+        }
+        Element implOp = operationNamed(implEl, opName);
+        if (implOp != null) {
+            java.util.Set<String> called = new java.util.LinkedHashSet<>();
+            collectCalledOperationNames(implOp, called);
+            for (String callee : called) {
+                for (String imported : imports) {
+                    if (loadOperationNamesForMachine(imported, bxmlDirectory).contains(callee)) {
+                        out.addAll(loadConcreteAssignsForImportedOperation(imported, callee, bxmlDirectory, visited));
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    /** Variável de um alvo de assigns: {@code M__v[0 .. n]} / {@code ghost_v} / {@code *p} → {@code v}. */
+    private static String assignTargetVariable(String target, String machineName) {
+        String t = target.trim();
+        int bracket = t.indexOf('[');
+        if (bracket >= 0) t = t.substring(0, bracket).trim();
+        if (t.startsWith("ghost_")) t = t.substring("ghost_".length());
+        String prefix = machineName + "__";
+        if (t.startsWith(prefix)) t = t.substring(prefix.length());
+        return t;
+    }
+
+    private static Element operationNamed(Element machineEl, String opName) {
+        NodeList ops = machineEl.getElementsByTagNameNS("*", "Operation");
+        for (int i = 0; i < ops.getLength(); i++) {
+            Element op = (Element) ops.item(i);
+            if (opName.equals(op.getAttribute("name").trim())) return op;
+        }
+        return null;
+    }
+
+    private static void collectCalledOperationNames(Element el, java.util.Set<String> out) {
+        if ("Operation_Call".equals(el.getLocalName())) {
+            Element nameEl = BxmlDomUtils.firstChildElement(el, "Name");
+            Element idEl = nameEl == null ? null : BxmlDomUtils.firstChildElement(nameEl, "Id");
+            if (idEl != null && !idEl.getAttribute("value").isBlank()) out.add(idEl.getAttribute("value").trim());
+        }
+        for (Node n = el.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n instanceof Element ch && !"Attr".equals(ch.getLocalName())) collectCalledOperationNames(ch, out);
+        }
+    }
+
     static List<String> loadOperationNamesForMachine(String machineName, Path bxmlDirectory) {
         Path path = bxmlDirectory.resolve(machineName + ".bxml");
         if (!Files.exists(path)) return List.of();

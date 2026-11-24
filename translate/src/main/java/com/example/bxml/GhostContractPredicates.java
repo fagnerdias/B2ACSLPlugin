@@ -65,13 +65,6 @@ public final class GhostContractPredicates {
         return BxmlInitialisationTranslator.findTopLevelAnySub(body) != null;
     }
 
-    /** Tem contrato ghost por mutar variável abstrata ou por usar {@code ANY_Sub}. */
-    public static boolean operationNeedsGhostContract(
-            Element operation, Set<String> abstractVariableNames) {
-        return operationAssignsAbstract(operation, abstractVariableNames)
-                || operationBodyHasAnySub(operation);
-    }
-
     /**
      * Nomes dos {@code Output_Parameters} (na ordem do BXML); usado pelos geradores ghost que
      * precisam construir a assinatura {@code void op(... outputs ...)} ou listar argumentos para
@@ -179,7 +172,7 @@ public final class GhostContractPredicates {
                 if (!"Operation".equals(op.getLocalName())) continue;
                 String opName = op.getAttribute("name");
                 if (opName == null || opName.isBlank()) continue;
-                if (!operationNeedsGhostContract(op, abstractSet)) continue;
+                if (!operationAssignsAbstract(op, abstractSet)) continue;
                 String slug = ghostOperationSlug(opName);
                 sb.append("    predicate ghost__").append(slug);
                 List<GhostOperationsCiGenerator.Param> params = GhostParamTypeResolver.listInputParameters(op);

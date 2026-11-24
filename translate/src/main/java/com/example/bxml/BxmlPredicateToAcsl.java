@@ -701,7 +701,10 @@ public final class BxmlPredicateToAcsl {
         // Uma parte sem tradução numa disjunção deixaria o "ou" mais forte que o B: a unidade toda
         // fica de fora (AVISO).
         if ("or".equals(op) && parts.size() < countPredChildren(np)) return Unsupported.marker("parte de um or");
-        if ("or".equals(op)) return String.join(" || ", parts);
+        // Parênteses externos no "ou": dentro de uma conjunção (A & (B or C)) o join sem eles virava
+        // "A && B || C", que o ACSL lê como (A && B) || C (damas: lado = {aa, bb | ... & (bb = aa+1
+        // or aa = bb+1)}). Mesmo padrão de "==>"/"<==>" em translateBinaryPred.
+        if ("or".equals(op)) return parts.size() == 1 ? parts.get(0) : "(" + String.join(" || ", parts) + ")";
         return String.join(" && ", parts);
     }
 

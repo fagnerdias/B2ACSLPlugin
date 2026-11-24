@@ -3,8 +3,6 @@ package com.example.bxml;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -318,37 +316,6 @@ final class GhostParamTypeResolver {
             n = n.getParentNode();
         }
         return null;
-    }
-
-    /**
-     * Em cláusulas {@code ensures} ghost, parâmetros C {@code int} usam-se como {@code (integer)x}
-     * ao serem passados a funções do universo {@code dummy_ghost} (tipos matemáticos ACSL).
-     */
-    static String castScalarIntGhostParamsInEnsure(String ensure, List<GhostOperationsCiGenerator.Param> params) {
-        if (ensure == null || ensure.isBlank() || params == null || params.isEmpty()) {
-            return ensure;
-        }
-        List<GhostOperationsCiGenerator.Param> scalarInts = new ArrayList<>();
-        for (GhostOperationsCiGenerator.Param p : params) {
-            if (p.type() != null && "int".equals(p.type().trim())) {
-                scalarInts.add(p);
-            }
-        }
-        if (scalarInts.isEmpty()) {
-            return ensure;
-        }
-        scalarInts.sort((a, b) -> Integer.compare(b.name().length(), a.name().length()));
-        String out = ensure;
-        for (GhostOperationsCiGenerator.Param p : scalarInts) {
-            String name = p.name();
-            out =
-                    out.replaceAll(
-                            "(?<!\\(integer\\)\\s*)(?<![A-Za-z0-9_])"
-                                    + Pattern.quote(name)
-                                    + "\\b",
-                            Matcher.quoteReplacement("(integer)" + name));
-        }
-        return out;
     }
 
     /**

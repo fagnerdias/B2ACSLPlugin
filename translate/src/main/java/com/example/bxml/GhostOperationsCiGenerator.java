@@ -383,6 +383,231 @@ public final class GhostOperationsCiGenerator {
         Files.writeString(ghostCiPath, result.toString(), StandardCharsets.UTF_8);
     }
 
+    /**
+     * {@code true} se alguma operação com ANY escreve variável da máquina (abstrata ou concreta da
+     * abstração): só essas ganham função ghost, e então as constantes definidas por lambda ficam
+     * declaradas no ghost_operations.ci (ver AcslGenerator, ciDeclaredAbstractConsts).
+     */
+    private static final String DUMMY_GHOST_START = "/*@\n    axiomatic dummy_ghost {\n\n";
+    private static final String DUMMY_GHOST_END = "    }\n*/\n";
+
+    /**
+     * Tira dos blocos {@code axiomatic dummy_ghost} as declarações que nada usa (como o rules): uma
+     * declaração fica se o nome aparece fora dos blocos (variáveis e funções ghost, blocos de
+     * helpers) ou numa declaração que fica (tipos D*, assinaturas). Axiomas ficam sempre.
+     */
+    public static void pruneUnusedDummyDeclarations(Path ghostCi) throws IOException {
+        if (ghostCi == null || !Files.isRegularFile(ghostCi)) return;
+        String text = Files.readString(ghostCi, StandardCharsets.UTF_8);
+        List<int[]> spans = new ArrayList<>();
+        StringBuilder outside = new StringBuilder();
+        int cursor = 0;
+        for (int a = text.indexOf(DUMMY_GHOST_START); a >= 0; a = text.indexOf(DUMMY_GHOST_START, cursor)) {
+            int f = text.indexOf(DUMMY_GHOST_END, a);
+            if (f < 0) break;
+            outside.append(text, cursor, a).append('\n');
+            spans.add(new int[] {a + DUMMY_GHOST_START.length(), f});
+            cursor = f + DUMMY_GHOST_END.length();
+        }
+        if (spans.isEmpty()) return;
+        outside.append(text.substring(cursor));
+        List<String> decls = new ArrayList<>();
+        List<Integer> owner = new ArrayList<>();
+        for (int i = 0; i < spans.size(); i++) {
+            for (String d : text.substring(spans.get(i)[0], spans.get(i)[1]).split("\n\n")) {
+                if (!d.isBlank()) {
+                    decls.add(d);
+                    owner.add(i);
+                }
+            }
+        }
+        boolean[] keep = new boolean[decls.size()];
+        StringBuilder used = new StringBuilder(outside);
+        // tipos das constantes dummy_x (logic T dummy_x;) e sobrecargas por nome+aridade, para
+        // escolher a sobrecarga pelo tipo do 1º argumento (RobustFifo: dummy_first sobre \list ×
+        // sobre DTuple, mesma aridade; as chamadas são dummy_first(\old(dummy_contents)) com
+        // logic \list<integer> dummy_contents)
+        Map<String, String> constTypes = new java.util.HashMap<>();
+        Map<String, Integer> overloads = new java.util.HashMap<>();
+        for (String d : decls) {
+            Matcher c = Pattern.compile("^logic\\s+(.+?)\\s+(dummy_\\w+)\\s*;\\s*$", Pattern.DOTALL).matcher(d.strip());
+            if (c.matches()) constTypes.put(c.group(2), c.group(1).trim());
+            String n = declaredDummyName(d);
+            if (n != null) overloads.merge(n + "/" + declaredArity(d, n), 1, Integer::sum);
+        }
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (int i = 0; i < decls.size(); i++) {
+                if (keep[i]) continue;
+                String n = declaredDummyName(decls.get(i));
+                int arity = declaredArity(decls.get(i), n);
+                boolean usedName = n != null
+                        && Pattern.compile("(?<!\\w)" + Pattern.quote(n) + "(?!\\w)").matcher(used).find();
+                // sobrecarga (dummy_becomes_element_of(x, S) × (f, dom, rng)): só a da aridade usada
+                if (usedName && arity >= 0 && !callArities(used, n).contains(arity)) usedName = false;
+                if (usedName && arity > 0 && overloads.getOrDefault(n + "/" + arity, 0) > 1
+                        && !firstArgumentTypeFits(decls.get(i), n, used, constTypes)) {
+                    usedName = false;
+                }
+                if (n == null || usedName) {
+                    keep[i] = true;
+                    used.append('\n').append(n == null ? decls.get(i) : decls.get(i).replaceFirst(Pattern.quote(n), ""));
+                    changed = true;
+                }
+            }
+        }
+        StringBuilder out = new StringBuilder();
+        int prev = 0;
+        for (int s = 0; s < spans.size(); s++) {
+            out.append(text, prev, spans.get(s)[0]);
+            for (int i = 0; i < decls.size(); i++) {
+                if (owner.get(i) == s && keep[i]) out.append(decls.get(i)).append("\n\n");
+            }
+            prev = spans.get(s)[1];
+        }
+        out.append(text.substring(prev));
+        if (!out.toString().equals(text)) Files.writeString(ghostCi, out.toString(), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * {@code false} só quando o 1º parâmetro da sobrecarga tem tipo concreto ({@code \\list}, {@code
+     * DTuple}, {@code DSet}/{@code DRelation}) e TODA chamada de {@code name} tem 1º argumento
+     * {@code dummy_x} (sem {@code \\old}/{@code \\at}) de tipo conhecido e de outra família; parâmetro
+     * genérico ou argumento não resolvido conta como compatível.
+     */
+    private static boolean firstArgumentTypeFits(
+            String declaration, String name, CharSequence used, Map<String, String> constTypes) {
+        String paramHead = typeHead(firstParameterType(declaration, name));
+        if (paramHead == null) return true;
+        String text = used.toString();
+        Matcher m = Pattern.compile("(?<!\\w)" + Pattern.quote(name) + "\\s*\\(").matcher(text);
+        boolean anyCall = false;
+        while (m.find()) {
+            anyCall = true;
+            String arg = firstArgument(text, m.end());
+            String argHead = arg == null ? null : typeHead(constTypes.get(arg));
+            if (argHead == null || sameTypeFamily(argHead, paramHead)) return true;
+        }
+        return !anyCall;
+    }
+
+    private static String firstParameterType(String declaration, String name) {
+        Matcher m = Pattern.compile("(?<!\\w)" + Pattern.quote(name) + "\\s*(?:<[^()]*?>)?\\s*\\(").matcher(declaration);
+        if (!m.find()) return null;
+        int angle = 0;
+        StringBuilder b = new StringBuilder();
+        for (int i = m.end(); i < declaration.length(); i++) {
+            char c = declaration.charAt(i);
+            if (c == '<') angle++;
+            else if (c == '>') angle--;
+            else if ((c == ',' || c == ')') && angle == 0) break;
+            b.append(c);
+        }
+        String p = b.toString().trim();
+        int sp = p.lastIndexOf(' ');
+        return sp < 0 ? null : p.substring(0, sp).trim();
+    }
+
+    /** {@code \\list} / {@code DTuple} / {@code DSet} / {@code DRelation}; null para genérico ou escalar. */
+    private static String typeHead(String type) {
+        if (type == null) return null;
+        String t = type.trim();
+        for (String h : List.of("\\list", "DTuple", "DSet", "DRelation")) {
+            if (t.startsWith(h + "<") || t.startsWith(h + " <")) return h;
+        }
+        return null;
+    }
+
+    private static boolean sameTypeFamily(String a, String b) {
+        boolean setA = a.equals("DSet") || a.equals("DRelation");
+        boolean setB = b.equals("DSet") || b.equals("DRelation");
+        return a.equals(b) || (setA && setB);
+    }
+
+    /** 1º argumento de uma chamada sem {@code \\old(..)}/{@code \\at(.., L)}, se for um nome {@code dummy_x}. */
+    private static String firstArgument(String s, int from) {
+        int depth = 0;
+        StringBuilder b = new StringBuilder();
+        for (int i = from; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '(' || c == '[' || c == '{') depth++;
+            else if (c == ')' || c == ']' || c == '}') {
+                if (depth == 0) break;
+                depth--;
+            } else if (c == ',' && depth == 0) break;
+            b.append(c);
+        }
+        String a = b.toString().trim();
+        Matcher w = Pattern.compile("^\\\\(?:old|at)\\(\\s*(dummy_\\w+)\\s*(?:,[^()]*)?\\)$").matcher(a);
+        if (w.matches()) return w.group(1);
+        return a.matches("dummy_\\w+") ? a : null;
+    }
+
+    /** Número de parâmetros da declaração de {@code name} ({@code -1} se não tem parênteses). */
+    private static int declaredArity(String declaration, String name) {
+        if (name == null) return -1;
+        Matcher m = Pattern.compile("(?<!\\w)" + Pattern.quote(name) + "\\s*(?:<[^()]*?>)?\\s*\\(").matcher(declaration);
+        if (!m.find()) return -1;
+        return countTopLevelArgs(declaration, m.end(), true);
+    }
+
+    /** Aridades das chamadas {@code name(...)} em {@code text}. */
+    private static Set<Integer> callArities(CharSequence text, String name) {
+        Set<Integer> out = new java.util.HashSet<>();
+        Matcher m = Pattern.compile("(?<!\\w)" + Pattern.quote(name) + "\\s*\\(").matcher(text);
+        String t = text.toString();
+        while (m.find()) out.add(countTopLevelArgs(t, m.end(), false));
+        return out;
+    }
+
+    /** Argumentos entre o {@code (} já consumido e o {@code )} correspondente. */
+    private static int countTopLevelArgs(String s, int from, boolean angleBrackets) {
+        int depth = 0;
+        int angle = 0;
+        int commas = 0;
+        boolean any = false;
+        for (int i = from; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '(' || c == '[' || c == '{') depth++;
+            else if (c == ')' || c == ']' || c == '}') {
+                if (depth == 0) return any ? commas + 1 : 0;
+                depth--;
+            } else if (angleBrackets && c == '<') angle++;
+            else if (angleBrackets && c == '>' && angle > 0) angle--;
+            else if (c == ',' && depth == 0 && angle == 0) commas++;
+            if (!Character.isWhitespace(c)) any = true;
+        }
+        return -1;
+    }
+
+    /** Nome declarado ({@code type X} / {@code logic T x(..)} / {@code predicate x(..)}); null no resto. */
+    private static String declaredDummyName(String declaration) {
+        String d = declaration.strip();
+        Matcher t = Pattern.compile("^type\\s+(\\w+)").matcher(d);
+        if (t.find()) return t.group(1);
+        // logic/predicate: o primeiro dummy_<x> (o tipo pode ter genéricos com espaços,
+        // "DSet< DTuple<A,B> >", que um regex de "último identificador antes do (" confunde)
+        if (!d.startsWith("logic") && !d.startsWith("predicate")) return null;
+        Matcher m = Pattern.compile("\\b(dummy_\\w+)\\s*(?:<[^();=]*>)?\\s*(?:[(;=]|reads\\b)").matcher(d);
+        return m.find() ? m.group(1) : null;
+    }
+
+    public static boolean machineHasStateChangingAnySubOperations(Element machineEl) {
+        Element opsEl = BxmlDomUtils.firstChildElement(machineEl, "Operations");
+        if (opsEl == null) return false;
+        Set<String> vars = BxmlMachineVariables.declaredVariableNames(machineEl);
+        for (Node n = opsEl.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (!(n instanceof Element op) || !"Operation".equals(op.getLocalName())) continue;
+            if (!GhostContractPredicates.operationBodyHasAnySub(op)) continue;
+            Element body = BxmlDomUtils.firstChildElement(op, "Body");
+            Set<String> written = new LinkedHashSet<>();
+            if (body != null) collectAssignedAbstractVarsInBody(body, vars, written);
+            if (!written.isEmpty()) return true;
+        }
+        return false;
+    }
+
     public static boolean machineHasAnySubOperations(Element machineEl) {
         Element opsEl = BxmlDomUtils.firstChildElement(machineEl, "Operations");
         if (opsEl == null) return false;
@@ -443,6 +668,8 @@ public final class GhostOperationsCiGenerator {
                 ge = stripBTypingCommentsForGhost(ge);
                 ge = normalizeBooleanLiteralsForGhost(ge);
                 ge = GhostNamespacePrefixer.prefixAbstractVarsForGhost(ge, logicOnlyVars);
+                // binders de \forall/\exists com tipo genérico: DRelation/DSet no front-end isolado
+                ge = GhostNamespacePrefixer.prefixFunctionTypesForGhost(ge);
                 prefixedInitEnsures.add(ge);
             }
             String initSlug = abstractMachineEl.getAttribute("name").toLowerCase() + "__initialisation";
@@ -496,7 +723,6 @@ public final class GhostOperationsCiGenerator {
                                     existsForm, ghostLogicVars, concreteConstants, op, anySub, ctx,
                                     abstractConstParams);
                     existsForm = rewriteBoolOutputPredicateTernary(existsForm);
-                    existsForm = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(existsForm, params);
                     String opSlug = GhostParamTypeResolver.sanitizeGhostFunctionName(opName);
                     if (Unsupported.in(existsForm)) {
                         // corpo sem tradução (ex. produto paralelo de relações no WHERE): a função
@@ -507,7 +733,11 @@ public final class GhostOperationsCiGenerator {
                         }
                         continue;
                     }
-                    ops.add(new GhostOp(opSlug, params, assigned, List.of(existsForm)));
+                    // Sem variável abstrata atribuída, só a gêmea do marcador (se houver): a função
+                    // ghost "op" não teria quem a chamasse (ver computeGhostSlugInfo).
+                    if (!assigned.isEmpty()) {
+                        ops.add(new GhostOp(opSlug, params, assigned, List.of(existsForm)));
+                    }
                     if (needsMarker) {
                         ops.add(
                                 new GhostOp(
@@ -551,7 +781,9 @@ public final class GhostOperationsCiGenerator {
                     ge = GhostNamespacePrefixer.dereferenceScalarOutputParams(ge, op);
                     ge = rewriteBoolOutputPredicateTernary(ge);
                     ge = rewriteIntegerTernaryPredicateConditionForGhost(ge);
-                    ge = GhostParamTypeResolver.castScalarIntGhostParamsInEnsure(ge, params);
+                    // binders com Function<..>/Relation<..> (railmap: \forall integer c0,
+                    // Function<integer,integer> ts) não existem no front-end ghost isolado
+                    ge = GhostNamespacePrefixer.prefixFunctionTypesForGhost(ge);
                     ghostEnsures.add(ge);
                 }
 
@@ -679,8 +911,16 @@ public final class GhostOperationsCiGenerator {
         if (ensure == null || ensure.isBlank()) {
             return false;
         }
-        if (ensure.startsWith("belongs(")) {
-            return false;
+        String t = ensure.trim();
+        if (t.startsWith("belongs(")) {
+            // Só um belongs(v, S) isolado (Becomes_In) segue o caminho de toGhostEnsure. Uma
+            // conjunção que começa por belongs (Becomes_Such_That: "belongs(v, T) && \old(v) < v")
+            // já vem com \old só no pré-estado; envolver todas as ocorrências em \old daria
+            // "\old(v) < \old(v)".
+            int close = findMatchingClose(t, t.indexOf('('));
+            if (close == t.length() - 1 || topLevelImplicationIndex(t) >= 0) {
+                return false;
+            }
         }
         return ensure.contains("==>") || ensure.contains("&&");
     }
@@ -1077,8 +1317,24 @@ public final class GhostOperationsCiGenerator {
                     collectGhostEnsuresFromSubstitution(BxmlDomUtils.firstSubChild(thenEl), abstractSet, ctx, out);
                 }
             }
-            // IF, SELECT, Becomes_Such_That, …: este walker (só INITIALISATION ghost) não os traduz;
-            // deixá-los de fora só enfraquece o ghost (o lado real traduz e avisa).
+            case "Becomes_Such_That" -> {
+                // x : (P) na INITIALISATION ghost (safetyflasher csp_cs0Lib: clock : (clock : uint64_t
+                // & clock <= MAX_UINT64 - ...)), como o rules; só se todas as variáveis são abstratas
+                // (o ghost não declara as outras).
+                Element vars = BxmlDomUtils.firstChildElement(sub, "Variables");
+                Element predEl = BxmlDomUtils.firstChildElement(sub, "Pred");
+                if (vars == null || predEl == null) return;
+                for (Element varExp : BxmlDomUtils.directExpChildren(vars)) {
+                    if (!"Id".equals(varExp.getLocalName()) || !abstractSet.contains(varExp.getAttribute("value"))) {
+                        return;
+                    }
+                }
+                String p = BxmlPredicateToAcsl.translateInvariantContent(predEl, ctx);
+                if (p == null || p.isBlank() || Unsupported.in(p)) return;
+                out.add(GhostNamespacePrefixer.prefixAbstractVarsForGhost(p, abstractSet));
+            }
+            // IF, SELECT, …: este walker (só INITIALISATION ghost) não os traduz; deixá-los de fora
+            // só enfraquece o ghost (o lado real traduz e avisa).
             default -> { }
         }
     }
@@ -1111,7 +1367,8 @@ public final class GhostOperationsCiGenerator {
         }
         String setExprText = BxmlExpressionToAcsl.translate(setExp, ctx);
         if (setExprText == null || setExprText.isBlank()) return null;
-        return "becomes_element_of(dummy_" + v + ", " + setExprText + ")";
+        // x :: S com S conjunto: belongs, como o contrato real (BxmlInitialisationTranslator) e o rules
+        return "belongs(dummy_" + v + ", " + setExprText + ")";
     }
 
     private static String ghostEnsureFromAssignment(
@@ -1120,22 +1377,21 @@ public final class GhostOperationsCiGenerator {
         String v = lhsExp.getAttribute("value");
         if (!abstractSet.contains(v)) return null;
         if ("EmptySet".equals(rhsExp.getLocalName())) {
-            return "equals(dummy_" + v + ", empty(\\old(dummy_" + v + ")))";
+            // testemunha pelo tipo B do próprio {} (INT, BOOL, conjunto adiado, cartesian_product...),
+            // como o contrato real e as operações ghost; o chamador prefixa (dummy_empty(dummy_INT))
+            return "equals(dummy_" + v + ", " + BxmlExpressionToAcsl.translate(rhsExp, ctx) + ")";
         }
         if ("EmptySeq".equals(rhsExp.getLocalName()) && isListLikeVariable(v, ctx)) {
             return "dummy_" + v + " == \\Nil";
         }
         String rhs = BxmlExpressionToAcsl.translate(rhsExp, ctx);
         String rhsGhost = rewriteAbstractIdsWithOld(rhs, abstractSet);
-        String logicType = ctx.variableLogicTypes().get(v);
-        if (logicType != null
-                && (logicType.equals("boolean")
-                        || logicType.equals("integer")
-                        || logicType.equals("int")
-                        || logicType.equals("real"))) {
-            return "dummy_" + v + " == " + rhsGhost;
+        // igualdade pelo tipo, como o contrato real (BxmlExpressionToAcsl.formatEquality) e o rules:
+        // conjunto/relação/função -> equals; escalar, par, \list, record -> ==
+        if (BxmlExpressionToAcsl.isSetValued(lhsExp, ctx)) {
+            return "equals(dummy_" + v + ", " + rhsGhost + ")";
         }
-        return "equals(dummy_" + v + ", " + rhsGhost + ")";
+        return "dummy_" + v + " == " + rhsGhost;
     }
 
     private static boolean isListLikeVariable(String v, BxmlTranslateContext ctx) {
