@@ -21,6 +21,8 @@ continuar do primeiro item não marcado.
   - [x] Harness headless (sem UI) sobre cópia do AddRunner em modo compare: 41/41 nos dois lados,
         13/15/13 por função = baseline do comparador; WP corre no merged_code.c publicado
   - [x] Caminhos de erro: rules jar inexistente → NOT_AVAILABLE; railmap → IMPORT_ERROR nos dois lados
-- [ ] 4. `ui/`: tema, componentes, passos do wizard, janela de progresso, relatórios, diálogo de erro
+- [x] 4. `ui/`: tema, componentes, passos do wizard, janela de progresso, relatórios, diálogo de erro
+  - [x] Telas renderizadas fora do ecrã (harness em scratchpad) e comparadas com os mockups 1, 2, 2E,
+        E, 3, 4, 5, 6, 5A
 - [ ] 5. Preferências, verificação de ferramentas no arranque, acabamento face aos mockups
 - [ ] 6. Verificação ponta a ponta (AddRunner nos 3 modos, caminhos de erro, cancelamento)
