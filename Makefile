@@ -97,12 +97,14 @@ compare:
 	@test -f "$(COMPARATOR_JAR)" || $(MVN) -q -DskipTests package
 	java -jar "$(COMPARATOR_JAR)" $(COMPARE_ARGS)
 
-# Wizard Swing (gui/): Plugin, ATL Rules ou ambos + Frama-C WP + relatorio/comparacao, ex.:
-#   make gui
-#   make gui GUI_ARGS="-Db2acsl.gui.rulesJar=/outro/b2acsl.jar"
+# Wizard Swing (gui/): Plugin, ATL Rules ou ambos + Frama-C WP + relatorio/comparacao. Como a
+# pipeline, recebe o projeto por argumento (a pasta do projeto ou a sua bdp/), ex.:
+#   make gui PROJECT=examples/AddRunner
+#   make gui PROJECT=examples/AddRunner/bdp GUI_ARGS="-Db2acsl.gui.rulesJar=/outro/b2acsl.jar"
 GUI_JAR := gui/target/b2acsl-gui-$(VERSION)-all.jar
 GUI_ARGS ?=
+PROJECT ?=
 
 gui:
 	@test -f "$(GUI_JAR)" || $(MVN) -q -DskipTests package
-	java $(GUI_ARGS) -jar "$(GUI_JAR)"
+	java $(GUI_ARGS) -jar "$(GUI_JAR)" $(PROJECT)

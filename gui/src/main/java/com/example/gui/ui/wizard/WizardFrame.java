@@ -34,13 +34,14 @@ public final class WizardFrame extends JFrame {
     private final WizardStep[] steps;
     private int current;
 
-    public WizardFrame(AppPreferences prefs) {
+    /** @param project the project folder (or its {@code bdp/}) given on the command line */
+    public WizardFrame(AppPreferences prefs, java.nio.file.Path project) {
         super("Frama-C WP Configuration");
         this.prefs = prefs;
         state.mode = prefs.mode();
         state.wpConfig = prefs.wpConfig();
         steps = new WizardStep[] {
-            new ProjectStep(this, state, prefs), new SpecificationStep(this, state), new WpConfigStep(this, state)
+            new ProjectStep(this, state, project), new SpecificationStep(this, state), new WpConfigStep(this, state)
         };
         for (int i = 0; i < steps.length; i++) {
             cards.add(steps[i], Integer.toString(i));

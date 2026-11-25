@@ -134,20 +134,21 @@ public final class ErrorReports {
                 true);
     }
 
-    /** A selected folder is not a usable project. */
+    /** The folder given on the command line is missing or is not a usable project. */
     public static ErrorReport invalidProject(java.nio.file.Path folder, String problem) {
         Map<String, String> details = new LinkedHashMap<>();
-        details.put("Stage", "Project selection");
-        details.put("Folder", String.valueOf(folder));
+        details.put("Stage", "Reading the project");
+        details.put("Folder", folder == null ? NONE : folder.toString());
         return new ErrorReport(
                 "Invalid Project",
-                "This folder is not a B project",
-                problem,
+                folder == null ? "No project to verify" : "This folder is not a B project",
+                problem + " Start the tool with the project folder (or its bdp/ folder) as argument.",
                 List.of(
-                        new PipelineStep("Reading the project folder", StepState.FAILED),
+                        new PipelineStep("Reading the project", StepState.FAILED),
                         new PipelineStep("Specification not generated", StepState.NOT_STARTED)),
                 details,
-                problem,
+                "java -jar gui/target/b2acsl-gui-0.1.0-all.jar <project folder>\n"
+                        + "make gui PROJECT=<project folder>",
                 null,
                 false);
     }

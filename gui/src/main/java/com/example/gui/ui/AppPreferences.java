@@ -6,18 +6,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.prefs.Preferences;
 
-/** The last configuration (folder, generation mode, provers, timeout, ...), kept between runs. */
+/** The last configuration (generation mode, provers, timeout, ...), kept between runs. */
 public final class AppPreferences {
 
     private final Preferences node = Preferences.userRoot().node("com/example/b2acsl-gui");
-
-    public String lastFolder() {
-        return node.get("folder", "");
-    }
-
-    public void setLastFolder(String folder) {
-        node.put("folder", folder == null ? "" : folder);
-    }
 
     public GenerationMode mode() {
         try {

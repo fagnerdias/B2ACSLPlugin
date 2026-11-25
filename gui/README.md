@@ -13,11 +13,15 @@ It works in three steps. First it generates the ACSL specification of the projec
 
 ## Build and run
 
+As in the pipeline (`com.example.Main`), the project comes from the command line: the project root or its `bdp/` folder, as Atelier B passes it.
+
 ```sh
-mvn -DskipTests package          # builds every module, including gui/target/b2acsl-gui-0.1.0-all.jar
-make gui                         # runs it (builds the jar first if it is missing)
-java -jar gui/target/b2acsl-gui-0.1.0-all.jar
+mvn -DskipTests package                          # builds every module, including gui/target/b2acsl-gui-0.1.0-all.jar
+make gui PROJECT=examples/AddRunner              # runs it (builds the jar first if it is missing)
+java -jar gui/target/b2acsl-gui-0.1.0-all.jar examples/AddRunner/bdp
 ```
+
+Without a project, or with a folder that is not a B project, the wizard opens with an error dialog that says how to start it.
 
 These system properties are optional (`make gui GUI_ARGS="-D..."`):
 
@@ -29,7 +33,7 @@ These system properties are optional (`make gui GUI_ARGS="-D..."`):
 
 ## How to use it
 
-1. **Project.** Choose the root folder of an Atelier B project, the one that contains `bdp/` (with the `.bxml` files) and `lang/c/` (with the generated C code). The tool lists the functions named `<Machine>__<Operation>` that are defined in `lang/c/*.c`.
+1. **Project.** Shows the project given on the command line: its folder (which contains `bdp/` with the `.bxml` files and `lang/c/` with the generated C code), its name (editable) and the functions named `<Machine>__<Operation>` defined in `lang/c/*.c`. As in the pipeline, all of them are verified.
 2. **Specification.** Pick Plugin, ATL Rules, or Plugin + ATL Rules (compare), then click **Generate**. The log streams the generator output. If a generator fails, the error dialog shows:
    - which step failed;
    - the details: stage, function, rule and exit code;
@@ -46,7 +50,7 @@ These system properties are optional (`make gui GUI_ARGS="-D..."`):
 
 Every window (the three wizard steps, the progress window, the reports, the error dialog and the log viewer) opens with the same size, 960 × 720 (smaller on a smaller screen), centred on the screen, so going from one window to the next keeps the same frame. Lists, logs and diff panes take the free height; the wizard's forms sit in a centred column.
 
-The last folder, generation mode, provers, timeout and options are saved between sessions with `java.util.prefs`.
+The last generation mode, provers, timeout and options are saved between sessions with `java.util.prefs`.
 
 ## Where files go
 
@@ -85,7 +89,7 @@ Each generation creates a run folder inside the project. The tool never writes t
 | `model` | Records and enums: generators, modes, project, WP settings, results, verdict, error report. |
 | `generation` | `SpecificationGenerator` (Plugin and ATL), the child JVM, `GenerationService`, `RunDirectory`, `BundledTools`. |
 | `verification` | `VerificationService`, `ProcessSupervisor` (streaming, wall-clock limit, cancellation of the process tree), `ToolDetector`, `WpCommandFactory`. |
-| `parsing` | `CFunctionScanner`/`ProjectScanner`, `WpOutputParser` (unproved goals, timeouts, smoke tests, counterexamples), `ContractExtractor`, `GenerationErrorParser`. |
+| `parsing` | `CFunctionScanner`/`ProjectScanner` (project folder or `bdp/`, functions), `WpOutputParser` (unproved goals, timeouts, smoke tests, counterexamples), `ContractExtractor`, `GenerationErrorParser`. |
 | `comparison` | `ResultComparator` (same/different, difference sentences, verdict), `SpecificationDiffer` (java-diff-utils, aligned rows), `ChangeDescriber`, `CsvExporter`. |
 | `ui` | `Theme`/`Palette`; components (`SummaryCard`, `StatusBadge`, `OperationRow`, `TitledGroup`, `Callout`, `WizardStepIndicator`, `DiffPane`, `LinkLabel`); the wizard steps; `ProgressWindow`; the reports; `ErrorDialog`. |
 

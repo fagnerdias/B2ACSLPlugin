@@ -53,4 +53,12 @@ continuar do primeiro item não marcado.
   - [x] Corrigido: `Ui.wrap` quebrava 30% mais largo (o HTML do Swing escala `px` por 1,3)
   - [x] Verificado em janelas reais: compare no AddRunner e falha do ATL, todas 960 × 720 na mesma
         posição
+- [x] 9. Passo 1 como na pipeline anterior (pedido de 2026-11-25)
+  - [x] Projeto recebido por argumento (pasta do projeto ou `bdp/`, como o Atelier B passa):
+        `java -jar … <pasta>` / `make gui PROJECT=<pasta>`; sem botão Browse e sem preferência de pasta
+  - [x] Passo 1 só informativo: pasta, nome (editável) e lista de funções sem checkbox — todas são
+        verificadas ("N functions will be verified")
+  - [x] Sem projeto ou projeto inválido: o wizard abre e o diálogo de erro diz como iniciar (aberto
+        depois de a janela aparecer)
+  - [x] Verificado: compare real no AddRunner passando `AddRunner/bdp`; 22 testes
 
