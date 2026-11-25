@@ -110,6 +110,6 @@ public final class VerificationService {
         issues.addAll(r.issues());
         return new FunctionResult(
                 r.function(), r.generator(), r.totalGoals(), r.proved(), r.failures(), r.timeouts(),
-                r.smokePassed(), r.smokeTotal(), r.processFailed(), issues, r.elapsedMs());
+                r.smokePassed(), r.smokeTotal(), r.exitCode(), r.timedOut(), issues, r.elapsedMs());
     }
 }

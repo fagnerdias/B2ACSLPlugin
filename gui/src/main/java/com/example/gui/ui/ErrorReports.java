@@ -89,11 +89,6 @@ public final class ErrorReports {
                 continueWith = other;
             }
         }
-        List<String> fix = new ArrayList<>(advice(e, outcome));
-        if (continueWith != null) {
-            fix.add("The " + continueWith.label() + " specification was generated correctly. You can continue the"
-                    + " verification with the " + continueWith.label() + " only, or fix the problem and try again.");
-        }
         return new ErrorReport(
                 "Specification Generation Error",
                 "Specification generation failed",
@@ -101,7 +96,6 @@ public final class ErrorReports {
                 steps,
                 details,
                 output.toString().strip(),
-                fix,
                 continueWith,
                 true);
     }
@@ -121,45 +115,6 @@ public final class ErrorReports {
         return e.function() == null ? cause : cause + " in " + e.function();
     }
 
-    static List<String> advice(SpecificationGenerationException e, GenerationOutcome outcome) {
-        String work = outcome.run().root().relativize(outcome.run().workDir(e.generator())).toString();
-        String side = e.generator() == Generator.PLUGIN ? "plugin" : "rules";
-        List<String> out = new ArrayList<>();
-        switch (e.status()) {
-            case "NOT_AVAILABLE" -> {
-                out.add("The ATL Rules jar was not found. Rebuild it with \"make build-rules\" (needs the Eclipse"
-                        + " ATL/EMF jars), or start the tool with -Db2acsl.gui.rulesJar=<path to b2acsl.jar>.");
-            }
-            case "TRANSLATION_ERROR", "IO_ERROR" -> {
-                if (e.rule() != null) {
-                    out.add("Check the rule " + e.rule() + " in rules/transformations/BXML2ACSL.atl"
-                            + (e.function() != null ? ": it failed on " + e.function() + "." : "."));
-                } else {
-                    out.add("Check the ATL transformation (rules/transformations/BXML2ACSL.atl) for the construct"
-                            + " named in the generator output.");
-                }
-            }
-            case "TIMEOUT" -> out.add("The ATL transformation did not finish within 300 s: look in the generator"
-                    + " output for the last rule that was applied.");
-            case "IMPORT_ERROR" -> {
-                out.add("Frama-C could not parse the generated annotations: open the file and line named in the first"
-                        + " error of the generator output and fix the translation of that construct.");
-                out.add("The generated files are kept in " + work + "/" + side + "/lang/c of the run folder ("
-                        + outcome.run().root() + ").");
-            }
-            case "IMPORT_TIMEOUT" -> out.add("Frama-C -acsl-import did not finish within 120 s. Try a smaller"
-                    + " project or check the generated .acsl files for very large axiomatics.");
-            case "NO_C_FILES" -> out.add("Generate the C code of the project with Atelier B (lang/c/*.c) and try again.");
-            case "NO_ACSL_FILES" -> out.add("The generator produced no .acsl file: check that bdp/ contains the BXML"
-                    + " of the implementations.");
-            case "GENERATION_ERROR" -> out.add("The plugin could not translate the B project: see the first error in"
-                    + " the generator output (BXML file and construct).");
-            case "INTERRUPTED" -> out.add("Click Try Again to run the generation again.");
-            default -> out.add("See the generator output for the exception and its stack trace.");
-        }
-        return out;
-    }
-
     /** Frama-C is not installed (start-up check or when starting WP). */
     public static ErrorReport framaCNotFound(String detail) {
         Map<String, String> details = new LinkedHashMap<>();
@@ -175,10 +130,6 @@ public final class ErrorReports {
                         new PipelineStep("Verification not started", StepState.NOT_STARTED)),
                 details,
                 (detail == null ? "" : detail + "\n\n") + "PATH=" + System.getenv("PATH"),
-                List.of(
-                        "Install Frama-C (for example \"opam install frama-c\") and make sure frama-c is on the PATH of"
-                                + " the environment that starts this tool.",
-                        "Click Try Again after installing it."),
                 null,
                 true);
     }
@@ -197,10 +148,6 @@ public final class ErrorReports {
                         new PipelineStep("Specification not generated", StepState.NOT_STARTED)),
                 details,
                 problem,
-                List.of(
-                        "Choose the root folder of an Atelier B project: it contains bdp/ (with the .bxml files) and"
-                                + " lang/c/ (with the generated C code).",
-                        "Functions must follow the <Machine>__<Operation> naming of the Atelier B C code generator."),
                 null,
                 false);
     }
@@ -220,10 +167,6 @@ public final class ErrorReports {
                         new PipelineStep("Report not produced", StepState.NOT_STARTED)),
                 details,
                 output,
-                interrupted
-                        ? List.of("Run the verification again from step 3.")
-                        : List.of("Check that Frama-C and the selected provers are installed and on the PATH, then"
-                                + " run the verification again."),
                 null,
                 true);
     }

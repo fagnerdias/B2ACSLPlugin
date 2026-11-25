@@ -43,9 +43,10 @@ public final class VerificationReportWindow extends JFrame {
 
         JPanel perFunction = Ui.stack(12);
         for (FunctionResult r : run.results()) {
-            boolean ok = r.status() == FunctionStatus.PROVED;
-            JLabel title = Ui.colored(r.function() + " (" + run.spec().displayPath() + ")", ok ? Palette.GREEN : Palette.RED, true);
-            title.setIcon(ok ? Icons.check(Palette.GREEN) : Icons.cross(Palette.RED));
+            FunctionStatus status = r.status();
+            JLabel title = Ui.colored(r.function() + " (" + run.spec().displayPath() + ")  ·  " + status.label(),
+                    status.color(), true);
+            title.setIcon(Icons.status(status));
             title.setIconTextGap(6);
             perFunction.add(Ui.stack(5, title, ReportSupport.cards(r)));
         }

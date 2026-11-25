@@ -34,22 +34,35 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import javax.swing.JButton;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
 import javax.swing.SwingWorker;
 import javax.swing.WindowConstants;
 
-/** Verification progress (mockup 4): one row per function and specification, live log, cancel. */
+/**
+ * Verification progress (mockup 4), with the behaviour of the pipeline's progress dialog: the six
+ * statuses, the goals WP scheduled for the running function, a scrollable list of functions that
+ * follows the running one, and the live Frama-C log shown during the verification (auto-scrolling).
+ */
 public final class ProgressWindow extends JFrame {
+
+    /** "[wp] 30 goals scheduled": how many proof obligations WP will check for the running function. */
+    private static final Pattern GOALS_SCHEDULED = Pattern.compile("^\\[wp\\]\\s+(\\d+)\\s+goals?\\s+scheduled\\s*$");
+    private static final int VISIBLE_ROWS = 8;
 
     private sealed interface Event permits Started, Line, Finished {}
 
     private record Started(Generator generator, String function) implements Event {}
 
-    private record Line(String text) implements Event {}
+    private record Line(Generator generator, String function, String text) implements Event {}
 
     private record Finished(FunctionResult result) implements Event {}
 
@@ -66,12 +79,14 @@ public final class ProgressWindow extends JFrame {
     private final Map<Generator, StatusBadge> groupBadges = new EnumMap<>(Generator.class);
     private final Map<Generator, Integer> doneBy = new EnumMap<>(Generator.class);
     private final Map<Generator, Boolean> allProvedBy = new EnumMap<>(Generator.class);
+    private final Map<Generator, JPanel> rowLists = new EnumMap<>(Generator.class);
     private final JLabel counter = Ui.bold(" ");
     private final JProgressBar bar = new JProgressBar(0, 100);
-    private final StringBuilder rawLog = new StringBuilder();
+    private final JTextArea log = Ui.monoArea(12, 84);
+    private final TitledGroup logGroup;
+    private final JButton toggleLog;
     private final Cancellation cancellation = new Cancellation();
     private final int total;
-    private LogViewerDialog logViewer;
     private SwingWorker<Result, Event> worker;
     private int done;
     private boolean closing;
@@ -101,6 +116,8 @@ public final class ProgressWindow extends JFrame {
         for (GeneratedSpecification spec : this.specs) {
             Generator g = spec.generator();
             JPanel list = Ui.stack(2);
+            list.setOpaque(true);
+            list.setBackground(Palette.WINDOW);
             Map<String, OperationRow> byFn = new LinkedHashMap<>();
             for (String fn : project.functions()) {
                 OperationRow row = new OperationRow(fn + " (" + spec.displayPath() + ")");
@@ -108,14 +125,21 @@ public final class ProgressWindow extends JFrame {
                 list.add(row);
             }
             rows.put(g, byFn);
+            rowLists.put(g, list);
             doneBy.put(g, 0);
             allProvedBy.put(g, true);
+            JScrollPane scroll = new JScrollPane(list);
+            scroll.setBorder(null);
+            scroll.getViewport().setBackground(Palette.WINDOW);
+            scroll.getVerticalScrollBar().setUnitIncrement(16);
+            int rowHeight = byFn.values().iterator().next().getPreferredSize().height + 2;
+            scroll.setPreferredSize(new Dimension(560, rowHeight * Math.min(VISIBLE_ROWS, Math.max(1, byFn.size())) + 2));
             if (mode.isCompare()) {
                 StatusBadge badge = new StatusBadge("0 / " + project.functions().size() + " done", StatusBadge.Kind.INFO);
                 groupBadges.put(g, badge);
-                content.add(new TitledGroup(g.label() + " specification", list).withHeader(badge));
+                content.add(new TitledGroup(g.label() + " specification", scroll).withHeader(badge));
             } else {
-                content.add(new TitledGroup("Operations", list));
+                content.add(new TitledGroup("Operations", scroll));
             }
         }
         if (mode.isCompare()) {
@@ -126,11 +150,22 @@ public final class ProgressWindow extends JFrame {
         }
         updateCounter();
 
+        log.setFont(Theme.mono(12f));
+        JScrollPane logScroll = Ui.scroll(log);
+        JPanel logContent = new JPanel(new BorderLayout(0, 8));
+        logContent.add(logScroll, BorderLayout.CENTER);
+        JPanel logActions = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.CENTER, 0, 0));
+        logActions.setOpaque(false);
+        logActions.add(Ui.button("Save Log (.txt)", e -> saveLog()));
+        logContent.add(logActions, BorderLayout.SOUTH);
+        logGroup = new TitledGroup("Log", logContent);
+        content.add(VerticalLayout.fill(logGroup));
+        toggleLog = Ui.button("Hide Logs", e -> toggleLog());
+
         JPanel root = new JPanel(new BorderLayout(0, 14));
         root.setBorder(Ui.padding(14, 16, 14, 16));
         root.add(content, BorderLayout.CENTER);
-        root.add(Ui.buttonBar(Ui.button("Close", e -> requestClose()), Ui.button("View Logs", e -> viewLogs())),
-                BorderLayout.SOUTH);
+        root.add(Ui.buttonBar(Ui.button("Close", e -> requestClose()), toggleLog), BorderLayout.SOUTH);
         setContentPane(root);
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
@@ -140,7 +175,7 @@ public final class ProgressWindow extends JFrame {
             }
         });
         pack();
-        setMinimumSize(new Dimension(Math.max(getWidth(), 480), getHeight()));
+        setMinimumSize(new Dimension(640, 420));
         setLocationRelativeTo(null);
     }
 
@@ -158,7 +193,7 @@ public final class ProgressWindow extends JFrame {
 
                             @Override
                             public void logLine(Generator generator, String function, String line) {
-                                publish(new Line(line));
+                                publish(new Line(generator, function, line));
                             }
 
                             @Override
@@ -197,23 +232,28 @@ public final class ProgressWindow extends JFrame {
     private void handle(Event e) {
         switch (e) {
             case Started s -> {
-                rows.get(s.generator()).get(s.function()).setStatus(FunctionStatus.RUNNING, null);
+                OperationRow row = rows.get(s.generator()).get(s.function());
+                row.setStatus(FunctionStatus.RUNNING, null);
+                rowLists.get(s.generator()).scrollRectToVisible(row.getBounds());
                 StatusBadge badge = groupBadges.get(s.generator());
                 if (badge != null) {
                     badge.setKind(StatusBadge.Kind.INFO);
                 }
             }
             case Line l -> {
-                rawLog.append(l.text()).append('\n');
-                if (logViewer != null && logViewer.isDisplayable()) {
-                    logViewer.append(l.text());
+                log.append(l.text());
+                log.append("\n");
+                log.setCaretPosition(log.getDocument().getLength());
+                Matcher scheduled = GOALS_SCHEDULED.matcher(l.text());
+                if (scheduled.matches()) {
+                    int n = Integer.parseInt(scheduled.group(1));
+                    rows.get(l.generator()).get(l.function()).setGoals(n + (n == 1 ? " goal" : " goals"));
                 }
             }
             case Finished f -> {
                 FunctionResult r = f.result();
                 FunctionStatus s = r.status();
-                rows.get(r.generator()).get(r.function())
-                        .setStatus(s, s == FunctionStatus.PROVED ? null : r.proved() + " / " + r.totalGoals());
+                rows.get(r.generator()).get(r.function()).setStatus(s, goalsText(r));
                 done++;
                 doneBy.merge(r.generator(), 1, Integer::sum);
                 if (s != FunctionStatus.PROVED) {
@@ -233,6 +273,38 @@ public final class ProgressWindow extends JFrame {
         }
     }
 
+    /** As in the pipeline: "27 / 30 goals", "no goals", "timed out (600s)", "WP exit code 1". */
+    private String goalsText(FunctionResult r) {
+        if (r.timedOut()) {
+            return "timed out (" + WpConfig.functionTimeoutSeconds() + "s)";
+        }
+        if (r.exitCode() != 0) {
+            return "WP exit code " + r.exitCode();
+        }
+        return r.totalGoals() > 0 ? r.proved() + " / " + r.totalGoals() + " goals" : "no goals";
+    }
+
+    private void toggleLog() {
+        boolean show = !logGroup.isVisible();
+        logGroup.setVisible(show);
+        toggleLog.setText(show ? "Hide Logs" : "View Logs");
+        pack();
+    }
+
+    private void saveLog() {
+        Path suggested = runRoot == null ? null : runRoot.resolve(project.name() + "-verification-log.txt");
+        Path file = LogViewerDialog.chooseSaveFile(this, suggested, project.name() + "-verification-log.txt");
+        if (file == null) {
+            return;
+        }
+        try {
+            Files.writeString(file, log.getText(), StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "Could not save the log: " + ex.getMessage(), "Save Log",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
     private void updateCounter() {
         counter.setText("Verified " + done + " / " + total + " operation(s)");
         counter.setFont(Theme.font(Font.BOLD, 12.5f));
@@ -247,7 +319,6 @@ public final class ProgressWindow extends JFrame {
         }
         try {
             Result result = w.get();
-            closeLogViewer();
             dispose();
             if (mode.isCompare() && result.runs().size() == 2) {
                 new ComparisonReportWindow(project, result.runs().get(0), result.runs().get(1), result.diffs(), runRoot,
@@ -271,9 +342,8 @@ public final class ProgressWindow extends JFrame {
                             ? ErrorReports.framaCNotFound(cause.getMessage())
                             : ErrorReports.verificationFailed("The verification failed",
                                     "Frama-C WP could not complete the verification of " + project.name() + ".",
-                                    String.valueOf(cause) + "\n\n" + tail(rawLog.toString()), false),
-                    new ErrorDialog.Actions(null, null, rawLog::toString));
-            closeLogViewer();
+                                    String.valueOf(cause) + "\n\n" + tail(log.getText()), false),
+                    new ErrorDialog.Actions(null, null, log::getText));
             dispose();
             onReturn.run();
         }
@@ -298,24 +368,8 @@ public final class ProgressWindow extends JFrame {
             cancellation.cancel();
             worker.cancel(false);
         }
-        closeLogViewer();
         dispose();
         onReturn.run();
-    }
-
-    private void viewLogs() {
-        if (logViewer == null || !logViewer.isDisplayable()) {
-            logViewer = LogViewerDialog.open(this, "Frama-C output", rawLog.toString(),
-                    runRoot == null ? null : runRoot.resolve("verification.log"));
-        } else {
-            logViewer.toFront();
-        }
-    }
-
-    private void closeLogViewer() {
-        if (logViewer != null) {
-            logViewer.dispose();
-        }
     }
 
     private void writeLog(List<VerificationRun> runs) {

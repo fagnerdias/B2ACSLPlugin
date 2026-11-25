@@ -9,7 +9,8 @@ import java.util.List;
  * @param smokePassed smoke tests that passed (WP could not prove the smoke goal), {@code -1} if
  *     none ran
  * @param smokeTotal smoke tests run, {@code -1} if none ran
- * @param processFailed Frama-C did not finish normally (non-zero exit, wall-clock timeout)
+ * @param exitCode Frama-C exit code ({@code -1} when it was killed)
+ * @param timedOut Frama-C was killed because it exceeded the wall-clock limit of one function
  */
 public record FunctionResult(
         String function,
@@ -20,7 +21,8 @@ public record FunctionResult(
         int timeouts,
         int smokePassed,
         int smokeTotal,
-        boolean processFailed,
+        int exitCode,
+        boolean timedOut,
         List<Issue> issues,
         long elapsedMs) {
 
@@ -28,9 +30,30 @@ public record FunctionResult(
         issues = List.copyOf(issues);
     }
 
+    /** Frama-C did not finish normally (non-zero exit or wall-clock timeout). */
+    public boolean processFailed() {
+        return timedOut || exitCode != 0;
+    }
+
+    /**
+     * The classification of the pipeline ({@code FramaCRunner.markCompletedFromSummary}): wall-clock
+     * timeout → Timeout; WP error → Failed; no goals or all proved → Proved; timeouts without
+     * failures → Timeout; some proved → Partial; otherwise Failed.
+     */
     public FunctionStatus status() {
-        boolean allProved = proved >= totalGoals && failures == 0 && timeouts == 0;
-        return !processFailed && allProved ? FunctionStatus.PROVED : FunctionStatus.FAILED;
+        if (timedOut) {
+            return FunctionStatus.TIMEOUT;
+        }
+        if (exitCode != 0) {
+            return FunctionStatus.FAILED;
+        }
+        if (totalGoals == 0 || proved >= totalGoals) {
+            return FunctionStatus.PROVED;
+        }
+        if (timeouts > 0 && failures == 0) {
+            return FunctionStatus.TIMEOUT;
+        }
+        return proved > 0 ? FunctionStatus.PARTIAL : FunctionStatus.FAILED;
     }
 
     public boolean hasSmokeTests() {
@@ -56,6 +79,6 @@ public record FunctionResult(
                 && timeouts == other.timeouts
                 && smokePassed == other.smokePassed
                 && smokeTotal == other.smokeTotal
-                && processFailed == other.processFailed;
+                && processFailed() == other.processFailed();
     }
 }

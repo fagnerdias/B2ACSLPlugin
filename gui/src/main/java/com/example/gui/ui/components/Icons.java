@@ -20,6 +20,8 @@ public final class Icons {
         CROSS,
         PLAY,
         CIRCLE,
+        HALF,
+        CLOCK,
         DASH,
         INFO,
         WARNING,
@@ -42,6 +44,28 @@ public final class Icons {
 
     public static Icon circle(Color c) {
         return new VectorIcon(Shape.CIRCLE, c, 14);
+    }
+
+    /** Half-filled circle (status Partial). */
+    public static Icon half(Color c) {
+        return new VectorIcon(Shape.HALF, c, 14);
+    }
+
+    /** Stopwatch (status Timeout). */
+    public static Icon clock(Color c) {
+        return new VectorIcon(Shape.CLOCK, c, 14);
+    }
+
+    /** The icon of a function status (○ ▶ ✓ ◐ ⏱ ✗), in the status colour. */
+    public static Icon status(com.example.gui.model.FunctionStatus s) {
+        return switch (s) {
+            case PENDING -> circle(s.color());
+            case RUNNING -> play(s.color());
+            case PROVED -> check(s.color());
+            case PARTIAL -> half(s.color());
+            case TIMEOUT -> clock(s.color());
+            case FAILED -> cross(s.color());
+        };
     }
 
     public static Icon dash(Color c) {
@@ -116,6 +140,24 @@ public final class Icons {
                 case CIRCLE -> {
                     g2.setStroke(new BasicStroke(1.3f));
                     g2.drawOval(Math.round(s * 0.18f), Math.round(s * 0.18f), Math.round(s * 0.64f), Math.round(s * 0.64f));
+                }
+                case HALF -> {
+                    int d = Math.round(s * 0.66f);
+                    int o = Math.round(s * 0.17f);
+                    g2.setStroke(new BasicStroke(1.3f));
+                    g2.drawOval(o, o, d, d);
+                    g2.fillArc(o, o, d, d, 90, 180);
+                }
+                case CLOCK -> {
+                    int d = Math.round(s * 0.66f);
+                    int o = Math.round(s * 0.22f);
+                    g2.setStroke(new BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g2.drawOval(Math.round(s * 0.17f), o, d, d);
+                    int cx = Math.round(s * 0.17f) + d / 2;
+                    int cy = o + d / 2;
+                    g2.drawLine(cx, cy, cx, cy - Math.round(d * 0.32f));
+                    g2.drawLine(cx, cy, cx + Math.round(d * 0.26f), cy);
+                    g2.drawLine(cx - 2, Math.round(s * 0.08f), cx + 2, Math.round(s * 0.08f));
                 }
                 case DASH -> {
                     g2.setStroke(new BasicStroke(s / 8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));

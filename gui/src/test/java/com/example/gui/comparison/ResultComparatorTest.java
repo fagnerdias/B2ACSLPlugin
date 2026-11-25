@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 class ResultComparatorTest {
 
     static FunctionResult r(String fn, Generator g, int total, int proved, int failures, int timeouts, int smokeP, int smokeT) {
-        return new FunctionResult(fn, g, total, proved, failures, timeouts, smokeP, smokeT, false, List.of(), 0);
+        return new FunctionResult(fn, g, total, proved, failures, timeouts, smokeP, smokeT, 0, false, List.of(), 0);
     }
 
     /** The case of mockup 5. */

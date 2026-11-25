@@ -12,12 +12,14 @@ import javax.swing.border.Border;
 import javax.swing.plaf.BorderUIResource;
 import javax.swing.plaf.ColorUIResource;
 import javax.swing.plaf.FontUIResource;
-import javax.swing.plaf.metal.DefaultMetalTheme;
 import javax.swing.plaf.metal.MetalLookAndFeel;
+import javax.swing.plaf.metal.OceanTheme;
 
 /**
- * Standard Swing look and feel (Metal, without the Ocean gradients) customised with the mockups'
- * palette; the system default sans-serif font for the UI and a monospaced font for logs and code.
+ * Standard Swing look and feel (Metal with the Ocean theme, as the pipeline's windows: same scroll
+ * bars, check boxes and combo boxes, and the source of the mockups' #EEEEEE / #A3B8CC / #B8CFE5
+ * colours) customised with the mockups' palette; the system default sans-serif font for the UI and a
+ * monospaced font for logs and code.
  */
 public final class Theme {
 
@@ -112,8 +114,8 @@ public final class Theme {
         UIManager.put(key, value);
     }
 
-    /** Metal colours and fonts from the palette. */
-    private static final class PaletteTheme extends DefaultMetalTheme {
+    /** Ocean (the Metal default) with the palette's text colours and the UI font. */
+    private static final class PaletteTheme extends OceanTheme {
 
         private final FontUIResource control = new FontUIResource(base);
         private final FontUIResource small = new FontUIResource(base.deriveFont(11f));
@@ -121,36 +123,6 @@ public final class Theme {
         @Override
         public String getName() {
             return "B2ACSL";
-        }
-
-        @Override
-        protected ColorUIResource getPrimary1() {
-            return new ColorUIResource(Palette.INPUT_BORDER);
-        }
-
-        @Override
-        protected ColorUIResource getPrimary2() {
-            return new ColorUIResource(new Color(0xC3D6F2));
-        }
-
-        @Override
-        protected ColorUIResource getPrimary3() {
-            return new ColorUIResource(new Color(0xDCE7F7));
-        }
-
-        @Override
-        protected ColorUIResource getSecondary1() {
-            return new ColorUIResource(Palette.GRAY);
-        }
-
-        @Override
-        protected ColorUIResource getSecondary2() {
-            return new ColorUIResource(new Color(0xC4C4C4));
-        }
-
-        @Override
-        protected ColorUIResource getSecondary3() {
-            return new ColorUIResource(Palette.WINDOW);
         }
 
         @Override

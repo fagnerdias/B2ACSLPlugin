@@ -30,15 +30,14 @@ These system properties are optional (`make gui GUI_ARGS="-D..."`):
 ## How to use it
 
 1. **Project.** Choose the root folder of an Atelier B project, the one that contains `bdp/` (with the `.bxml` files) and `lang/c/` (with the generated C code). The tool lists the functions named `<Machine>__<Operation>` that are defined in `lang/c/*.c`.
-2. **Specification.** Pick Plugin, ATL Rules, or Plugin + ATL Rules (compare), then click **Generate**. The log streams the generator output. If a generator fails, the error dialog explains:
+2. **Specification.** Pick Plugin, ATL Rules, or Plugin + ATL Rules (compare), then click **Generate**. The log streams the generator output. If a generator fails, the error dialog shows:
    - which step failed;
    - the details: stage, function, rule and exit code;
-   - the generator output;
-   - how to fix it.
+   - the generator output.
 
    In compare mode, when only one generator failed, you can **continue with the generator that worked**.
 3. **WP Config.** Choose the provers, the timeout per goal, the output type (`status` → `-wp-status`, `print` → `-wp-print`), and whether to run smoke tests and counterexamples. Provers that are not installed are disabled.
-4. **Progress.** One row per function and specification. **View Logs** shows the raw Frama-C output while it runs. **Close** stops the run: it kills `frama-c` together with the provers it started.
+4. **Progress.** One row per function and specification, in a list that scrolls to the running function. Each row has the same statuses as the pipeline's progress dialog: Pending, Running…, Proved, Partial, Timeout and Failed. While a function runs, the row shows how many goals WP scheduled for it (`[wp] N goals scheduled`); when it ends, the row shows proved / total goals. The raw Frama-C output is shown below the list during the verification and scrolls by itself; **Hide Logs** hides it and **Save Log (.txt)** saves it. **Close** stops the run: it kills `frama-c` together with the provers it started.
 5. **Report.** The single-generator report shows the summary, one block per function and the relevant WP output. The comparison report has two tabs:
    - **Results:** a verdict, the summaries side by side, and a per-function table with a difference sentence. Rows whose results differ are highlighted.
    - **Specifications:** the contract of the selected function from both files, aligned with line numbers and scrolling together. Below them come the differences explained in plain language and their impact on the verification.
@@ -72,7 +71,7 @@ Each generation creates a run folder inside the project. The tool never writes t
   frama-c -wp merged_code.c -wp-fct F -wp-prover P1,P2 [-wp-smoke-tests] [-wp-counter-examples] -wp-rte -wp-timeout S -wp-status|-wp-print
   ```
 
-  Goal counts are parsed by the same `VerificationReportData` the CLI uses. A smoke test passes when WP **cannot** prove the smoke goal.
+  Goal counts are parsed by the same `VerificationReportData` the CLI uses, and each function is classified as the pipeline does (`FramaCRunner.markCompletedFromSummary`): all goals proved (or no goals) → Proved; timeouts and no failures → Timeout; some goals proved → Partial; otherwise Failed. A Frama-C error is Failed and exceeding the wall-clock limit is Timeout. A smoke test passes when WP **cannot** prove the smoke goal.
 
   The GUI does not pass `-wp-split`, the same default as the CLI's options dialog. The comparator does pass it by default. So counts can differ from `comparator-out` for functions with goals that can be split. For example, `count_array`'s `CountArray__count` gives 27/30 here and 34/38 with `-wp-split`, from the same `merged_code.c`.
 - **Tool check at start-up.** The tool runs `frama-c -version` and `why3 config list-provers`. It does **not** run `why3 config detect`, which rewrites `~/.why3.conf`.

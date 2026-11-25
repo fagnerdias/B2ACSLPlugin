@@ -35,3 +35,11 @@ continuar do primeiro item não marcado.
   - [x] Rules jar inexistente: diálogo de erro + "Continue with Plugin Only" → passo 3 em modo Plugin
   - [x] Só Plugin em count_array: relatório simples; CountArray__count 27/30 sem -wp-split (o
         comparador usa -wp-split: 34/38, confirmado com o mesmo merged_code.c)
+- [x] 7. Ajustes pedidos depois da comparação com as telas antigas (2026-11-25)
+  - [x] Barras de rolagem no padrão anterior (tema Ocean) e rolagem automática: lista de funções
+        com rolagem que acompanha a função em execução, log que acompanha a última linha
+  - [x] Status Running com o número de goals agendados pelo WP (`[wp] N goals scheduled`)
+  - [x] Os seis status anteriores (Pending, Running…, Proved, Partial, Timeout, Failed) com a
+        mesma classificação de `markCompletedFromSummary`, também no relatório
+  - [x] Log do Frama-C embutido na janela de progresso durante a verificação (Hide Logs / Save Log)
+  - [x] "How to fix" removido do diálogo de erro (e do texto copiado)

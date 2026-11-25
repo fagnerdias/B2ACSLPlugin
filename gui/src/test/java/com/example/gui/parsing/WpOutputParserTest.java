@@ -57,7 +57,7 @@ class WpOutputParserTest {
         assertEquals(4, r.timeouts());
         assertEquals(0, r.failures());
         assertEquals("5 / 5", r.smokeDisplay());
-        assertEquals(FunctionStatus.FAILED, r.status());
+        assertEquals(FunctionStatus.TIMEOUT, r.status());
         assertEquals(
                 List.of(
                         "CountArray__count: postcondition (ensures) timed out after 10s (CVC5) (atl/merged_code.c:378)",
@@ -98,6 +98,7 @@ class WpOutputParserTest {
         assertEquals(1, r.smokePassed());
         assertEquals(2, r.smokeTotal());
         assertEquals(1, r.smokeFailed());
+        assertEquals(FunctionStatus.PARTIAL, r.status());
         List<String> texts = r.issues().stream().map(Issue::text).toList();
         assertEquals(3, texts.size(), texts.toString());
         assertEquals(
@@ -137,6 +138,7 @@ class WpOutputParserTest {
         FunctionResult killed =
                 WpOutputParser.parse("M__op", Generator.ATL, "", "atl/merged_code.c", 10, -1, "did not finish within 600 s", 0);
         assertEquals("M__op: did not finish within 600 s", killed.issues().get(0).text());
+        assertEquals(FunctionStatus.TIMEOUT, killed.status());
         assertEquals("—", killed.smokeDisplay());
     }
 

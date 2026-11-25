@@ -63,12 +63,10 @@ public final class WpOutputParser {
                 data.functionSummaries().isEmpty() ? null : data.functionSummaries().get(0);
 
         List<Issue> issues = new ArrayList<>(issues(function, text, displayFile, timeoutSeconds));
-        boolean processFailed = false;
-        if (killedReason != null) {
-            processFailed = true;
+        boolean timedOut = killedReason != null;
+        if (timedOut) {
             issues.add(new Issue(Issue.Kind.PROCESS, function, function + ": " + killedReason));
         } else if (exitCode != 0) {
-            processFailed = true;
             String headline = firstErrorLine(text);
             issues.add(
                     new Issue(
@@ -78,7 +76,7 @@ public final class WpOutputParser {
                                     + (headline.isEmpty() ? "" : " — " + headline)));
         }
         if (summary == null) {
-            return new FunctionResult(function, generator, 0, 0, 0, 0, -1, -1, processFailed, issues, elapsedMs);
+            return new FunctionResult(function, generator, 0, 0, 0, 0, -1, -1, exitCode, timedOut, issues, elapsedMs);
         }
         return new FunctionResult(
                 function,
@@ -89,7 +87,8 @@ public final class WpOutputParser {
                 summary.timeouts(),
                 summary.smokePassed(),
                 summary.smokeTotal(),
-                processFailed,
+                exitCode,
+                timedOut,
                 issues,
                 elapsedMs);
     }

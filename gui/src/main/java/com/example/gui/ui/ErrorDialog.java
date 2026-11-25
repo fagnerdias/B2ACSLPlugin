@@ -3,7 +3,6 @@ package com.example.gui.ui;
 import com.example.gui.model.ErrorReport;
 import com.example.gui.model.ErrorReport.PipelineStep;
 import com.example.gui.model.Generator;
-import com.example.gui.ui.components.Callout;
 import com.example.gui.ui.components.Icons;
 import com.example.gui.ui.components.TitledGroup;
 import java.awt.BorderLayout;
@@ -27,8 +26,8 @@ import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 
 /**
- * Modal error dialog (mockup E): what failed, where, the details, the output and how to fix it.
- * The same layout serves every error, only the texts change.
+ * Modal error dialog (mockup E): what failed, where, the details and the output. The same layout
+ * serves every error, only the texts change.
  */
 public final class ErrorDialog extends JDialog {
 
@@ -111,11 +110,6 @@ public final class ErrorDialog extends JDialog {
             sp.getViewport().setBackground(Palette.ERROR_BG);
             content.add(Ui.stack(6, Ui.bold(report.title().startsWith("Specification") ? "Generator output" : "Output"),
                     VerticalLayout.fill(sp)));
-        }
-        if (!report.howToFix().isEmpty()) {
-            Callout fix = new Callout(Callout.Kind.INFO, "How to fix", null, TEXT_WIDTH - 30);
-            fix.set("How to fix", null, report.howToFix());
-            content.add(fix);
         }
 
         List<JComponent> buttons = new ArrayList<>();

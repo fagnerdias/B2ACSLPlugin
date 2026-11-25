@@ -20,14 +20,12 @@ public record ErrorReport(
         List<PipelineStep> steps,
         Map<String, String> details,
         String output,
-        List<String> howToFix,
         Generator continueWith,
         boolean canRetry) {
 
     public ErrorReport {
         steps = List.copyOf(steps);
         details = new LinkedHashMap<>(details);
-        howToFix = List.copyOf(howToFix);
     }
 
     public enum StepState {
@@ -54,10 +52,6 @@ public record ErrorReport(
         sb.append("\nError details:\n");
         details.forEach((k, v) -> sb.append("  ").append(k).append(": ").append(v).append('\n'));
         sb.append("\nOutput:\n").append(output == null ? "" : output).append('\n');
-        if (!howToFix.isEmpty()) {
-            sb.append("\nHow to fix:\n");
-            howToFix.forEach(h -> sb.append("  - ").append(h).append('\n'));
-        }
         return sb.toString();
     }
 }
