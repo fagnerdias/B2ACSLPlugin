@@ -103,6 +103,7 @@ public final class WizardFrame extends JFrame {
             }
             spec.cancelGeneration();
         }
+        prefs.setMode(state.mode);
         prefs.flush();
         dispose();
         System.exit(0);
@@ -119,6 +120,11 @@ public final class WizardFrame extends JFrame {
     }
 
     void runVerification() {
+        if (state.tools != null && !state.tools.framaCFound()) {
+            ErrorDialog.show(this, ErrorReports.framaCNotFound(null),
+                    new ErrorDialog.Actions(this::detectTools, null, null));
+            return;
+        }
         prefs.setWpConfig(state.wpConfig);
         prefs.setMode(state.mode);
         prefs.flush();

@@ -24,5 +24,14 @@ continuar do primeiro item não marcado.
 - [x] 4. `ui/`: tema, componentes, passos do wizard, janela de progresso, relatórios, diálogo de erro
   - [x] Telas renderizadas fora do ecrã (harness em scratchpad) e comparadas com os mockups 1, 2, 2E,
         E, 3, 4, 5, 6, 5A
-- [ ] 5. Preferências, verificação de ferramentas no arranque, acabamento face aos mockups
-- [ ] 6. Verificação ponta a ponta (AddRunner nos 3 modos, caminhos de erro, cancelamento)
+- [x] 5. Preferências, verificação de ferramentas no arranque, acabamento face aos mockups
+  - [x] Next do passo 1 desativado enquanto a nova pasta não foi analisada (corrida encontrada no
+        teste ponta a ponta); Run Verification bloqueado com diálogo se o Frama-C não foi encontrado
+  - [x] gui/README.md (build, uso, ficheiros, comandos, pacotes) + entrada nos README da raiz
+- [x] 6. Verificação ponta a ponta (UI real conduzida por código, harness em scratchpad)
+  - [x] Compare em AddRunner: 41/41 nos dois lados (13/15/13, smoke 4/4) = baseline; relatório de
+        comparação e aba de especificações com os contratos reais; volta ao passo 3
+  - [x] Cancelar durante o WP: frama-c + why3server vivos antes, 0 processos depois
+  - [x] Rules jar inexistente: diálogo de erro + "Continue with Plugin Only" → passo 3 em modo Plugin
+  - [x] Só Plugin em count_array: relatório simples; CountArray__count 27/30 sem -wp-split (o
+        comparador usa -wp-split: 34/38, confirmado com o mesmo merged_code.c)

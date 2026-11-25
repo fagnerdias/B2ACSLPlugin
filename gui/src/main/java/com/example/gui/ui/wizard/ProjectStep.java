@@ -45,6 +45,8 @@ final class ProjectStep extends WizardStep {
     private final Timer rescan = new Timer(400, e -> scan(false));
     private ProjectScan scan;
     private int scanGeneration;
+    /** The folder text changed and its scan has not finished: Next must wait for it. */
+    private boolean scanPending;
 
     ProjectStep(WizardFrame frame, WizardState state, AppPreferences prefs) {
         super(frame, state, 0, "Select the project to verify");
@@ -76,17 +78,17 @@ final class ProjectStep extends WizardStep {
         folder.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
-                rescan.restart();
+                folderEdited();
             }
 
             @Override
             public void removeUpdate(DocumentEvent e) {
-                rescan.restart();
+                folderEdited();
             }
 
             @Override
             public void changedUpdate(DocumentEvent e) {
-                rescan.restart();
+                folderEdited();
             }
         });
         name.getDocument().addDocumentListener(new DocumentListener() {
@@ -112,6 +114,12 @@ final class ProjectStep extends WizardStep {
             scan(false);
         }
         updateNext();
+    }
+
+    private void folderEdited() {
+        scanPending = true;
+        updateNext();
+        rescan.restart();
     }
 
     private void browse() {
@@ -161,6 +169,7 @@ final class ProjectStep extends WizardStep {
     }
 
     private void apply(ProjectScan result, boolean report) {
+        scanPending = false;
         Path previous = scan == null ? null : scan.folder();
         scan = result;
         boxes.clear();
@@ -204,7 +213,7 @@ final class ProjectStep extends WizardStep {
         int n = boxes.size();
         int s = selected().size();
         counter.setText(s + " of " + n + " selected");
-        nextButton.setEnabled(scan != null && scan.valid() && s > 0 && !name.getText().isBlank());
+        nextButton.setEnabled(!scanPending && scan != null && scan.valid() && s > 0 && !name.getText().isBlank());
     }
 
     private void next() {

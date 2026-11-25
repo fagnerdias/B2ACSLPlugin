@@ -79,8 +79,11 @@ final class ResultsTab extends JPanel {
         table.getTableHeader().setFont(Theme.font(Font.BOLD, 12f));
         table.getTableHeader().setBackground(Palette.TABLE_HEADER);
         table.getTableHeader().setPreferredSize(new Dimension(10, 30));
-        int[] widths = {200, 150, 170, 280, 110, 80};
-        int[] minimum = {140, 145, 165, 120, 100, 75};
+        java.awt.FontMetrics bold = table.getFontMetrics(Theme.font(Font.BOLD, 12.5f));
+        int fnWidth = rows.stream().mapToInt(r -> bold.stringWidth(r.function())).max().orElse(120) + 28;
+        int linkWidth = bold.stringWidth("Compare ›") + 28;
+        int[] widths = {Math.max(fnWidth, 160), 150, 170, 260, 115, linkWidth};
+        int[] minimum = {Math.min(fnWidth, 260), 145, 165, 120, 110, linkWidth};
         for (int i = 0; i < widths.length; i++) {
             table.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
             table.getColumnModel().getColumn(i).setMinWidth(minimum[i]);
@@ -108,7 +111,9 @@ final class ResultsTab extends JPanel {
         });
         JScrollPane tableScroll = new JScrollPane(table);
         tableScroll.setBorder(BorderFactory.createLineBorder(Palette.TABLE_GRID));
-        tableScroll.setPreferredSize(new Dimension(800, 31 + 31 * Math.min(Math.max(rows.size(), 2), 8)));
+        table.setAutoResizeMode(JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS);
+        tableScroll.setPreferredSize(new Dimension(
+                java.util.Arrays.stream(widths).sum(), 31 + 31 * Math.min(Math.max(rows.size(), 2), 8)));
 
         List<String> details = new ArrayList<>();
         details.addAll(ReportSupport.issueLines(atl, Generator.ATL.reportPrefix()));

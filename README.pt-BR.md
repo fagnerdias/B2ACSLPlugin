@@ -134,6 +134,7 @@ O projeto é um reactor Maven multi-módulo (`pom.xml` na raiz, `packaging=pom`)
 - `frama-c/`: invocação do Frama-C (`FramaCRunner`) e pós-processamento de `merged_code.c`
 - `cli/`: ponto de entrada (`Main.java`) e orquestração (`B2ACSLPipeline`) — artifactId mantido como `xml-reader` (não `b2acsl-cli`) e build redirecionado para `target/` na raiz, para preservar os caminhos que `scripts/run_examples.sh`, o `Makefile` e o `plugin.etool` do Atelier B já esperavam antes do split
 - `comparator/`: compara este plugin com o B2ACSLRules (especificações e resultados do WP, relatórios JSON e HTML) — ver [Comparação com o B2ACSLRules](#comparação-com-o-b2acslrules)
+- `gui/`: wizard Swing que gera a especificação com o Plugin, as regras ATL ou ambos, verifica cada função com o Frama-C WP e mostra ou compara os resultados (`make gui`) — ver [gui/README.md](gui/README.md)
 - `rules/`: submodule Git [B2ACSLRules](https://github.com/fagnerdias/B2ACSLRules), o tradutor B → ACSL baseado em ATL usado pelo `comparator`
 - `pom.xml`: pai do reactor — propriedades compartilhadas, `<modules>`, versões de plugin
 - `Makefile`: automações `build-jar`, `build-native`, `build-installer`, `clean` (usa `mvn -pl cli help:evaluate` para descobrir `artifactId`/`version` do módulo final)

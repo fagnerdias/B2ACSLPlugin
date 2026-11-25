@@ -44,3 +44,6 @@ scripts/run-logs/
 
 # Saídas do comparator (make compare): workspaces e relatórios JSON
 comparator-out/
+
+# GUI do WP: pastas de execução criadas dentro dos projetos (<projeto>/b2acsl-wp/<data>/)
+b2acsl-wp/

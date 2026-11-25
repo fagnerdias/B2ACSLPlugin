@@ -287,6 +287,13 @@ public final class ProgressWindow extends JFrame {
             if (answer != JOptionPane.YES_OPTION) {
                 return;
             }
+        }
+        cancelAndClose();
+    }
+
+    /** Stops the running Frama-C processes (with their provers), closes and goes back to step 3. */
+    void cancelAndClose() {
+        if (worker != null && !worker.isDone()) {
             closing = true;
             cancellation.cancel();
             worker.cancel(false);
