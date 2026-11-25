@@ -16,8 +16,11 @@ continuar do primeiro item não marcado.
   - [x] 19 testes (parsing + comparison) verdes; deteção de funções = lista `function X:` dos .acsl
         em 53/56 exemplos (exceções esperadas: `b_pow`; railmap/safetyflasher sem definição C das
         máquinas BASIC)
-- [ ] 3. `generation/` (JVM filha, BundledTools, RunDirectory) e `verification/` (ProcessSupervisor,
+- [x] 3. `generation/` (JVM filha, BundledTools, RunDirectory) e `verification/` (ProcessSupervisor,
       VerificationService, ToolDetector)
+  - [x] Harness headless (sem UI) sobre cópia do AddRunner em modo compare: 41/41 nos dois lados,
+        13/15/13 por função = baseline do comparador; WP corre no merged_code.c publicado
+  - [x] Caminhos de erro: rules jar inexistente → NOT_AVAILABLE; railmap → IMPORT_ERROR nos dois lados
 - [ ] 4. `ui/`: tema, componentes, passos do wizard, janela de progresso, relatórios, diálogo de erro
 - [ ] 5. Preferências, verificação de ferramentas no arranque, acabamento face aos mockups
 - [ ] 6. Verificação ponta a ponta (AddRunner nos 3 modos, caminhos de erro, cancelamento)
