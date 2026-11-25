@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,11 +42,21 @@ public final class RulesSpecGenerator implements SpecGenerator {
     private final Path rulesJar;
     private final Path libDir;
     private final int timeoutSeconds;
+    private final Consumer<String> lineSink;
 
     public RulesSpecGenerator(Path rulesJar, Path libDir, int timeoutSeconds) {
+        this(rulesJar, libDir, timeoutSeconds, null);
+    }
+
+    /**
+     * @param lineSink receives each output line of the rules jar while it runs (live log); {@code
+     *     null} only writes {@code rules-translation.log}
+     */
+    public RulesSpecGenerator(Path rulesJar, Path libDir, int timeoutSeconds, Consumer<String> lineSink) {
         this.rulesJar = rulesJar;
         this.libDir = libDir;
         this.timeoutSeconds = timeoutSeconds;
+        this.lineSink = lineSink;
     }
 
     @Override
@@ -64,7 +75,8 @@ public final class RulesSpecGenerator implements SpecGenerator {
                             List.of(ProcessRunner.javaExecutable(), "-jar", rulesJar.toString(), bdp.toString(), cDir.toString()),
                             workspace.sideRoot(Side.RULES),
                             workspace.sideRoot(Side.RULES).resolve("rules-translation.log"),
-                            timeoutSeconds);
+                            timeoutSeconds,
+                            lineSink);
             List<String> warnings = matches(WARNING, run.output(), 1);
             if (run.timedOut()) {
                 return GeneratedSpec.failed(

@@ -485,31 +485,41 @@ public final class FramaCRunner {
             String importOutput) {}
 
     /**
-     * Igual a {@link #verify}, mas devolve o relatório estruturado em vez de só o código de saída.
+     * Resultado de {@link #buildMergedCode}: {@code status} é {@link VerificationStatus#COMPLETED}
+     * quando {@code merged_code.c} foi gerado e pós-processado; senão um de {@code NO_C_FILES},
+     * {@code NO_ACSL_FILES}, {@code IMPORT_TIMEOUT} ou {@code IMPORT_ERROR}, com o mesmo {@code
+     * exitCode} que {@link #verify} devolveria.
      *
-     * @param showReportDialog {@code false} não mostra o relatório final (janela ou, sem display,
-     *     resumo + log WP completo reimpresso no console) — para chamadores que consomem o {@link
-     *     VerificationOutcome} diretamente
+     * @param importCommand linha de comando do {@code -acsl-import} ({@code ""} se não chegou a correr)
+     * @param importOutput saída do {@code -acsl-import} quando ele falhou ({@code ""} caso contrário)
      */
-    public static VerificationOutcome verifyWithReport(
+    public record MergeOutcome(
+            int exitCode,
+            VerificationStatus status,
+            Path mergedCode,
+            String importCommand,
+            String importOutput) {}
+
+    /**
+     * Primeira metade de {@link #verifyWithReport}: {@code -acsl-import} (com a auto-cura de
+     * palavras reservadas) + a cadeia de pós-processamento de {@code merged_code.c}, sem correr o
+     * WP e sem abrir nenhuma janela — para chamadores (ex.: a GUI) que geram a especificação e só
+     * verificam depois. {@link #verifyWithReport} chama este método e mantém o diálogo de erro.
+     */
+    public static MergeOutcome buildMergedCode(
             List<Path> acslFiles,
             Path ghostCi,
             List<Path> cFiles,
             Path cDir,
-            List<String> specificationUsedTypes,
-            WpOptions wpOptions,
-            String projectName,
-            boolean showReportDialog)
+            List<String> specificationUsedTypes)
             throws IOException, InterruptedException {
-        VerificationReportData reportData = new VerificationReportData();
-        long wpStartNanos = System.nanoTime();
         Path mergedCode = cDir.resolve(MERGED_CODE_FILE_NAME);
         if (cFiles == null || cFiles.isEmpty()) {
-            return outcome(0, VerificationStatus.NO_C_FILES, reportData, wpStartNanos, mergedCode, "");
+            return new MergeOutcome(0, VerificationStatus.NO_C_FILES, mergedCode, "", "");
         }
         if (acslFiles == null || acslFiles.isEmpty()) {
             System.err.println("[B2ACSL] Nenhum .acsl para importar.");
-            return outcome(4, VerificationStatus.NO_ACSL_FILES, reportData, wpStartNanos, mergedCode, "");
+            return new MergeOutcome(4, VerificationStatus.NO_ACSL_FILES, mergedCode, "", "");
         }
         List<Path> acslImportFiles = List.copyOf(acslFiles);
 
@@ -579,7 +589,8 @@ public final class FramaCRunner {
             boolean importOk = pImport.waitFor(120, TimeUnit.SECONDS);
             if (!importOk) {
                 pImport.destroyForcibly();
-                return outcome(5, VerificationStatus.IMPORT_TIMEOUT, reportData, wpStartNanos, mergedCode, "");
+                return new MergeOutcome(
+                        5, VerificationStatus.IMPORT_TIMEOUT, mergedCode, String.join(" ", importCmd), "");
             }
             importExitCode = pImport.exitValue();
             if (importExitCode == 0) {
@@ -591,11 +602,9 @@ public final class FramaCRunner {
                             : "";
             String badToken = extractAcslImportSyntaxErrorToken(importOutput);
             if (badToken == null || PROTECTED_ACSL_STRUCTURAL_WORDS.contains(badToken)) {
-                PreVerificationErrorDialog.show(
-                        projectName, "Frama-C -acsl-import", String.join(" ", importCmd), importOutput);
-                return outcome(
-                        importExitCode, VerificationStatus.IMPORT_ERROR, reportData, wpStartNanos,
-                        mergedCode, importOutput);
+                return new MergeOutcome(
+                        importExitCode, VerificationStatus.IMPORT_ERROR, mergedCode,
+                        String.join(" ", importCmd), importOutput);
             }
             System.out.println(
                     "[B2ACSL] '"
@@ -607,11 +616,9 @@ public final class FramaCRunner {
             healedReservedWords.add(badToken);
         }
         if (importExitCode != 0) {
-            PreVerificationErrorDialog.show(
-                    projectName, "Frama-C -acsl-import", String.join(" ", importCmd), importOutput);
-            return outcome(
-                    importExitCode, VerificationStatus.IMPORT_ERROR, reportData, wpStartNanos,
-                    mergedCode, importOutput);
+            return new MergeOutcome(
+                    importExitCode, VerificationStatus.IMPORT_ERROR, mergedCode,
+                    String.join(" ", importCmd), importOutput);
         }
 
         // Cadeia ordenada de pós-processamento de merged_code.c — ver
@@ -628,9 +635,45 @@ public final class FramaCRunner {
         for (String healed : healedReservedWords) {
             renameReservedWordCollisionInAcslCommentsOnly(mergedCode, healed);
         }
+        return new MergeOutcome(0, VerificationStatus.COMPLETED, mergedCode, String.join(" ", importCmd), "");
+    }
+
+    /**
+     * Igual a {@link #verify}, mas devolve o relatório estruturado em vez de só o código de saída.
+     *
+     * @param showReportDialog {@code false} não mostra o relatório final (janela ou, sem display,
+     *     resumo + log WP completo reimpresso no console) — para chamadores que consomem o {@link
+     *     VerificationOutcome} diretamente
+     */
+    public static VerificationOutcome verifyWithReport(
+            List<Path> acslFiles,
+            Path ghostCi,
+            List<Path> cFiles,
+            Path cDir,
+            List<String> specificationUsedTypes,
+            WpOptions wpOptions,
+            String projectName,
+            boolean showReportDialog)
+            throws IOException, InterruptedException {
+        VerificationReportData reportData = new VerificationReportData();
+        long wpStartNanos = System.nanoTime();
+        MergeOutcome merge = buildMergedCode(acslFiles, ghostCi, cFiles, cDir, specificationUsedTypes);
+        Path mergedCode = merge.mergedCode();
+        if (merge.status() == VerificationStatus.IMPORT_ERROR) {
+            PreVerificationErrorDialog.show(
+                    projectName, "Frama-C -acsl-import", merge.importCommand(), merge.importOutput());
+        }
+        if (merge.status() != VerificationStatus.COMPLETED) {
+            return outcome(
+                    merge.exitCode(), merge.status(), reportData, wpStartNanos, mergedCode,
+                    merge.importOutput());
+        }
+        List<Path> acslImportFiles = List.copyOf(acslFiles);
 
         String cSourcesLabel =
                 cFiles.stream().map(p -> p.getFileName().toString()).reduce((a, b) -> a + ", " + b).orElse("");
+
+
 
         List<String> operationFunctionNames =
                 wpOptions.verifyPerOperation()
@@ -781,7 +824,7 @@ public final class FramaCRunner {
         progress.markCompleted(sourceName, status, proved, total, null);
     }
 
-    private static List<String> buildWpCommand(
+    public static List<String> buildWpCommand(
             Path mergedCode, WpOptions wpOptions, String functionName, String cSourcesLabel) throws IOException {
         List<String> wpCmd = new ArrayList<>();
         wpCmd.add(FRAMA_C);
@@ -829,7 +872,7 @@ public final class FramaCRunner {
         return wpCmd;
     }
 
-    private static List<String> resolveOperationFunctionNamesForWp(List<Path> acslImportFiles)
+    public static List<String> resolveOperationFunctionNamesForWp(List<Path> acslImportFiles)
             throws IOException {
         if (acslImportFiles == null || acslImportFiles.isEmpty()) {
             return List.of();

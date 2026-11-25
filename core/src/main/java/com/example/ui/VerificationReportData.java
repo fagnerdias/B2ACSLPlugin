@@ -62,13 +62,27 @@ public final class VerificationReportData {
         boolean smokeTestsPresent;
     }
 
+    /**
+     * Contagens de uma fonte (função) absorvida por {@link #absorbOutput}.
+     *
+     * @param smokePassed smoke tests que passaram (WP não provou o goal de smoke), ou {@code -1}
+     *     quando a saída não trazia a linha {@code Smoke Tests}
+     * @param smokeTotal smoke tests executados, ou {@code -1} (idem)
+     */
     public record FunctionSummary(
             String functionName,
             int totalGoals,
             int provedGoals,
             int failures,
             int timeouts,
-            String smokeTestsDisplay) {}
+            int smokePassed,
+            int smokeTotal) {
+
+        /** {@code "p / t"}, ou {@code "—"} quando não houve smoke tests. */
+        public String smokeTestsDisplay() {
+            return smokeTotal < 0 ? "—" : smokePassed + " / " + smokeTotal;
+        }
+    }
 
     public void absorbOutput(String output, String sourceName) {
         if (output == null || output.isBlank()) {
@@ -285,10 +299,6 @@ public final class VerificationReportData {
         List<FunctionSummary> out = new ArrayList<>();
         for (Map.Entry<String, SourceSummary> entry : summaryBySource.entrySet()) {
             SourceSummary summary = entry.getValue();
-            String smoke =
-                    summary.smokeTestsPresent
-                            ? summary.smokeTestsPassed + " / " + summary.smokeTestsTotal
-                            : "—";
             out.add(
                     new FunctionSummary(
                             entry.getKey(),
@@ -296,7 +306,8 @@ public final class VerificationReportData {
                             summary.provedGoals,
                             summary.unknownGoals,
                             summary.timeoutGoals,
-                            smoke));
+                            summary.smokeTestsPresent ? summary.smokeTestsPassed : -1,
+                            summary.smokeTestsPresent ? summary.smokeTestsTotal : -1));
         }
         return List.copyOf(out);
     }

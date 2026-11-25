@@ -74,7 +74,7 @@ public final class PreVerificationErrorDialog {
      * casar, cai para as últimas linhas não vazias do output (o Frama-C tipicamente termina com
      * a mensagem mais relevante).
      */
-    static String extractHeadline(String rawOutput) {
+    public static String extractHeadline(String rawOutput) {
         if (rawOutput == null || rawOutput.isBlank()) {
             return "Frama-C failed but produced no output.";
         }
