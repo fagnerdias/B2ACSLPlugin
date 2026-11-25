@@ -19,6 +19,7 @@
     <module>frama-c</module>
     <module>cli</module>
     <module>comparator</module>
+    <module>gui</module>
   </modules>
 
   <properties>
@@ -70,6 +71,11 @@
       <dependency>
         <groupId>com.example</groupId>
         <artifactId>xml-reader</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.example</groupId>
+        <artifactId>b2acsl-comparator</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
@@ -159,7 +165,10 @@
         ^
         |
       comparator  (com.example.comparator.*) — compara as especificações e os resultados WP do
-                   B2ACSLPlugin e do B2ACSLRules (submodule rules/); depende de cli
+        ^          B2ACSLPlugin e do B2ACSLRules (submodule rules/); depende de cli
+        |
+      gui         (com.example.gui.*) — wizard Swing: gera a especificação (Plugin, ATL Rules ou
+                   ambos), verifica cada função com o WP e compara; depende de comparator
 
     Achado do split: havia uma dependência circular real entre o pacote raiz com.example e
     com.example.bxml (algumas classes de bxml importavam AcslGenerator/AcslLibIncludes/etc.,

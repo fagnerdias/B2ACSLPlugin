@@ -12,7 +12,10 @@ continuar do primeiro item não marcado.
   - [x] `ProcessRunner.run(..., lineSink)` + `RulesSpecGenerator(..., lineSink)`
   - [x] Regressão: testes existentes OK; comparador AddRunner 41/41 nos dois lados, `merged_code.c`
         idêntico byte a byte ao run 20261124_114005
-- [ ] 2. Módulo `gui`: pom, Makefile, `model/`, `parsing/`, `comparison/` + testes unitários
+- [x] 2. Módulo `gui`: pom, Makefile, `model/`, `parsing/`, `comparison/` + testes unitários
+  - [x] 19 testes (parsing + comparison) verdes; deteção de funções = lista `function X:` dos .acsl
+        em 53/56 exemplos (exceções esperadas: `b_pow`; railmap/safetyflasher sem definição C das
+        máquinas BASIC)
 - [ ] 3. `generation/` (JVM filha, BundledTools, RunDirectory) e `verification/` (ProcessSupervisor,
       VerificationService, ToolDetector)
 - [ ] 4. `ui/`: tema, componentes, passos do wizard, janela de progresso, relatórios, diálogo de erro

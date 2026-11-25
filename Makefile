@@ -1,4 +1,4 @@
-.PHONY: build-jar build-native build-installer clean run build-rules compare
+.PHONY: build-jar build-native build-installer clean run build-rules compare gui
 
 APP_NAME ?= B2ACSLExec
 MAIN_CLASS ?= com.example.Main
@@ -96,3 +96,13 @@ COMPARE_ARGS ?= --all
 compare:
 	@test -f "$(COMPARATOR_JAR)" || $(MVN) -q -DskipTests package
 	java -jar "$(COMPARATOR_JAR)" $(COMPARE_ARGS)
+
+# Wizard Swing (gui/): Plugin, ATL Rules ou ambos + Frama-C WP + relatorio/comparacao, ex.:
+#   make gui
+#   make gui GUI_ARGS="-Db2acsl.gui.rulesJar=/outro/b2acsl.jar"
+GUI_JAR := gui/target/b2acsl-gui-$(VERSION)-all.jar
+GUI_ARGS ?=
+
+gui:
+	@test -f "$(GUI_JAR)" || $(MVN) -q -DskipTests package
+	java $(GUI_ARGS) -jar "$(GUI_JAR)"

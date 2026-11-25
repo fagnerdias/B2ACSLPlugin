@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>b2acsl-parent</artifactId>
+    <version>0.1.0</version>
+  </parent>
+
+  <artifactId>b2acsl-gui</artifactId>
+  <name>b2acsl-gui</name>
+  <description>Swing wizard for Frama-C WP verification: generates the ACSL specification with the
+    B2ACSL Plugin, the ATL Rules (rules/ submodule, bundled), or both, verifies each function and
+    compares the results and contracts side by side.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>b2acsl-comparator</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.java-diff-utils</groupId>
+      <artifactId>java-diff-utils</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- ATL rules (compiled .asm + .ecore metamodels inside the jar), bundled so the user never
+           selects them; extracted at run time by BundledTools. -->
+      <resource>
+        <directory>${project.basedir}/../rules/dist</directory>
+        <includes>
+          <include>b2acsl.jar</include>
+        </includes>
+        <targetPath>bundled</targetPath>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+      </plugin>
+      <!-- Runnable jar: gui/target/b2acsl-gui-0.1.0-all.jar -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>${maven.shade.plugin.version}</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>all</shadedClassifierName>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.example.gui.WpGuiMain</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
