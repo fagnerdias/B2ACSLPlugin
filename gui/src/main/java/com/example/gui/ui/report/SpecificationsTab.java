@@ -146,6 +146,18 @@ final class SpecificationsTab extends JPanel {
         }
         left.setLines(l);
         right.setLines(r);
+        int firstDifference = 0;
+        for (int i = 0; i < l.size(); i++) {
+            if (l.get(i).background() != null || r.get(i).background() != null) {
+                firstDifference = i;
+                break;
+            }
+        }
+        int target = firstDifference;
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            left.scrollToRow(target);
+            right.scrollToRow(target);
+        });
 
         int n = diff == null ? 0 : diff.differenceCount();
         count.set(n == 0 ? "No differences" : n + (n == 1 ? " difference" : " differences"),

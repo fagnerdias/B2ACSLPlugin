@@ -103,6 +103,14 @@ public final class DiffPane extends JComponent implements Scrollable {
         g2.dispose();
     }
 
+    /** Scrolls so that row {@code index} is visible, with a few rows of context above it. */
+    public void scrollToRow(int index) {
+        int rh = rowHeight();
+        int y = Math.max(0, (index - 3) * rh);
+        int h = getParent() == null ? rh : getParent().getHeight();
+        scrollRectToVisible(new Rectangle(0, y, 1, h));
+    }
+
     /** Keeps the vertical position of two scroll panes in step. */
     public static void synchronize(JScrollPane a, JScrollPane b) {
         boolean[] busy = {false};

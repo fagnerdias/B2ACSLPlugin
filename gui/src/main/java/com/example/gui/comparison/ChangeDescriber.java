@@ -43,6 +43,10 @@ public final class ChangeDescriber {
                 return "The assigns clause is different: the Plugin specification also allows changes to "
                         + String.join(", ", pl) + ".";
             }
+            if (pl.equals(al)) {
+                return "The assigns clause lists the same locations in a different order (same meaning): Plugin “"
+                        + p + "”, ATL Rules “" + a + "”.";
+            }
         }
         return "The " + clauseName(kind) + " is different: Plugin “" + p + "”, ATL Rules “" + a + "”.";
     }

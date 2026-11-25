@@ -62,6 +62,27 @@ class SpecificationDifferTest {
     }
 
     @Test
+    void reorderedAssignsHaveTheSameMeaning() {
+        Contract plugin = contract("""
+                /*@ assigns JogoDados__dado1, JogoDados__dado2, JogoDados__semente; */
+                void AddRunner__Add(int a)
+                {
+                }
+                """);
+        Contract atl = contract("""
+                /*@ assigns JogoDados__semente, JogoDados__dado1, JogoDados__dado2; */
+                void AddRunner__Add(int a)
+                {
+                }
+                """);
+        assertEquals(
+                "The assigns clause lists the same locations in a different order (same meaning): Plugin"
+                        + " “JogoDados__dado1, JogoDados__dado2, JogoDados__semente”, ATL Rules"
+                        + " “JogoDados__semente, JogoDados__dado1, JogoDados__dado2”.",
+                SpecificationDiffer.diff("f", plugin, atl).changes().get(0).sentence());
+    }
+
+    @Test
     void differentKindsAreNotPairedAsChanged() {
         Contract plugin = contract("""
                 /*@ requires a > 0; */
