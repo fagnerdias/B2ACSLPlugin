@@ -28,7 +28,7 @@ final class WpConfigStep extends WizardStep {
     private final JLabel projectLabel = Ui.secondary(" ");
     private final JLabel specLabel = Ui.secondary(" ");
     private final Map<String, JCheckBox> provers = new LinkedHashMap<>();
-    private final Callout missing = new Callout(Callout.Kind.WARNING, null, " ", 230);
+    private final Callout missing = new Callout(Callout.Kind.WARNING, null, " ", 600);
     private final JSpinner timeout = new JSpinner(new SpinnerNumberModel(10, 1, 3600, 1));
     private final JComboBox<String> outputType = new JComboBox<>(WpConfig.OUTPUT_TYPES.toArray(String[]::new));
     private final JCheckBox smoke = new JCheckBox("Enable Smoke Tests (-wp-smoke-tests)");
@@ -122,9 +122,7 @@ final class WpConfigStep extends WizardStep {
                     + ". Install it and restart the tool to use it.", List.of());
         }
         updateRun();
-        if (isShowing()) {
-            frame.pack();
-        }
+        revalidate();
     }
 
     private void load(WpConfig config) {

@@ -40,7 +40,7 @@ final class SpecificationStep extends WizardStep {
 
     private final Map<GenerationMode, JRadioButton> radios = new EnumMap<>(GenerationMode.class);
     private final Callout compareNote = new Callout(Callout.Kind.INFO, null,
-            "The verification runs once for each specification, so it takes about twice as long.", 330);
+            "The verification runs once for each specification, so it takes about twice as long.", 600);
     private final JButton generate = Ui.button("Generate Specification", e -> startGeneration());
     private final JLabel status = new JLabel(" ");
     private final LinkLabel errorLink = new LinkLabel("View error details ›", this::showError);
@@ -63,7 +63,7 @@ final class SpecificationStep extends WizardStep {
             r.addActionListener(e -> modeChosen(m));
             group.add(r);
             radios.put(m, r);
-            JLabel description = Ui.wrap(m.description(), 320, Palette.SECONDARY, Theme.font(Font.PLAIN, 12f));
+            JLabel description = Ui.wrap(m.description(), 620, Palette.SECONDARY, Theme.font(Font.PLAIN, 12f));
             description.setBorder(Ui.padding(0, 22, 0, 0));
             modes.add(Ui.stack(0, r, description));
         }
@@ -89,8 +89,9 @@ final class SpecificationStep extends WizardStep {
         JScrollPane logScroll = Ui.scroll(log);
         logScroll.setPreferredSize(new Dimension(420, 120));
 
+        logScroll.setMinimumSize(new Dimension(200, 60));
         setContent(Ui.stack(10, modeGroup, generateRow, specList,
-                Ui.stack(5, Ui.bold("Generation log"), logScroll)));
+                VerticalLayout.fill(Ui.stack(5, Ui.bold("Generation log"), VerticalLayout.fill(logScroll)))));
         back = Ui.button("Back", e -> frame.back());
         cancel = Ui.button("Cancel", e -> frame.requestClose());
         nextButton = Ui.button("Next", e -> next());
@@ -254,7 +255,7 @@ final class SpecificationStep extends WizardStep {
         specList.revalidate();
         specList.repaint();
         revalidate();
-        frame.pack();
+        repaint();
     }
 
     private void setRow(Generator g, RowState rs) {

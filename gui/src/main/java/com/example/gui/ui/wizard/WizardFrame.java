@@ -7,12 +7,10 @@ import com.example.gui.ui.AppPreferences;
 import com.example.gui.ui.ErrorDialog;
 import com.example.gui.ui.ErrorReports;
 import com.example.gui.ui.ProgressWindow;
+import com.example.gui.ui.Ui;
 import com.example.gui.verification.ToolDetector;
 import com.example.gui.verification.ToolDetector.ToolStatus;
 import java.awt.CardLayout;
-import java.awt.Component;
-import java.awt.Dimension;
-import java.awt.Insets;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.List;
@@ -32,15 +30,7 @@ public final class WizardFrame extends JFrame {
     private final AppPreferences prefs;
     private final WizardState state = new WizardState();
     private final CardLayout cardLayout = new CardLayout();
-    private final JPanel cards = new JPanel(cardLayout) {
-        @Override
-        public Dimension getPreferredSize() {
-            Component visible = steps[current];
-            Dimension d = visible.getPreferredSize();
-            Insets in = getInsets();
-            return new Dimension(d.width + in.left + in.right, d.height + in.top + in.bottom);
-        }
-    };
+    private final JPanel cards = new JPanel(cardLayout);
     private final WizardStep[] steps;
     private int current;
 
@@ -63,11 +53,11 @@ public final class WizardFrame extends JFrame {
                 requestClose();
             }
         });
+        Ui.standardSize(this);
     }
 
     public void start() {
         showStep(0);
-        setLocationRelativeTo(null);
         setVisible(true);
         detectTools();
     }
@@ -76,7 +66,8 @@ public final class WizardFrame extends JFrame {
         current = index;
         cardLayout.show(cards, Integer.toString(index));
         steps[index].onShow();
-        pack();
+        revalidate();
+        repaint();
     }
 
     void next() {

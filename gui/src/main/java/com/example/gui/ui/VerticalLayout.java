@@ -25,6 +25,11 @@ public final class VerticalLayout implements LayoutManager {
         return component;
     }
 
+    /** Turns the "share the remaining height" behaviour of a child on or off. */
+    public static void setFill(JComponent component, boolean fill) {
+        component.putClientProperty(FILL, fill ? Boolean.TRUE : null);
+    }
+
     @Override
     public void addLayoutComponent(String name, Component comp) {}
 

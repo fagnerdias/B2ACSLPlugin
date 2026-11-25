@@ -13,6 +13,9 @@ import javax.swing.JPanel;
 /** Card with a small label and a big value (Total Goals, Proved, Failures, Timeouts, Smoke Tests). */
 public final class SummaryCard extends JPanel {
 
+    private static final float LABEL_SIZE = 11f;
+    private static final float VALUE_SIZE = 20f;
+    private final JLabel label;
     private final JLabel value = new JLabel();
 
     public SummaryCard(String label, String value) {
@@ -23,12 +26,12 @@ public final class SummaryCard extends JPanel {
         super(new BorderLayout(0, 2));
         setBackground(Palette.CARD_BG);
         setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(Palette.CARD_BORDER), BorderFactory.createEmptyBorder(5, 8, 6, 8)));
-        JLabel l = new JLabel(label);
-        l.setFont(Theme.font(Font.PLAIN, 11f));
-        l.setForeground(Palette.TEXT);
-        this.value.setFont(Theme.font(Font.BOLD, 20f));
-        add(l, BorderLayout.NORTH);
+                BorderFactory.createLineBorder(Palette.CARD_BORDER), BorderFactory.createEmptyBorder(5, 7, 6, 7)));
+        this.label = new JLabel(label);
+        this.label.setFont(Theme.font(Font.PLAIN, LABEL_SIZE));
+        this.label.setForeground(Palette.TEXT);
+        this.value.setFont(Theme.font(Font.BOLD, VALUE_SIZE));
+        add(this.label, BorderLayout.NORTH);
         add(this.value, BorderLayout.CENTER);
         setValue(value, valueColor);
     }
@@ -43,9 +46,31 @@ public final class SummaryCard extends JPanel {
         value.setForeground(color);
     }
 
+    /** In a narrow window the label and the value get a smaller font instead of being cut ("12 /…"). */
+    @Override
+    public void doLayout() {
+        super.doLayout();
+        fit(label, LABEL_SIZE, 9f);
+        fit(value, VALUE_SIZE, 12f);
+    }
+
+    private static void fit(JLabel l, float max, float min) {
+        int available = l.getWidth();
+        if (available <= 0 || l.getText() == null) {
+            return;
+        }
+        float size = max;
+        while (size > min && l.getFontMetrics(l.getFont().deriveFont(size)).stringWidth(l.getText()) > available) {
+            size -= 0.5f;
+        }
+        if (l.getFont().getSize2D() != size) {
+            l.setFont(l.getFont().deriveFont(size));
+        }
+    }
+
     @Override
     public Dimension getPreferredSize() {
         Dimension d = super.getPreferredSize();
-        return new Dimension(Math.max(d.width, 84), d.height);
+        return new Dimension(Math.max(d.width, 84), Math.max(d.height, 54));
     }
 }

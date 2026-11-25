@@ -44,6 +44,8 @@ These system properties are optional (`make gui GUI_ARGS="-D..."`):
 
    Closing a report takes you back to step 3, where the generated specifications are kept so you can re-run with other settings.
 
+Every window (the three wizard steps, the progress window, the reports, the error dialog and the log viewer) opens with the same size, 960 × 720 (smaller on a smaller screen), centred on the screen, so going from one window to the next keeps the same frame. Lists, logs and diff panes take the free height; the wizard's forms sit in a centred column.
+
 The last folder, generation mode, provers, timeout and options are saved between sessions with `java.util.prefs`.
 
 ## Where files go

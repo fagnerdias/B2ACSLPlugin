@@ -80,6 +80,7 @@ public final class ProgressWindow extends JFrame {
     private final Map<Generator, Integer> doneBy = new EnumMap<>(Generator.class);
     private final Map<Generator, Boolean> allProvedBy = new EnumMap<>(Generator.class);
     private final Map<Generator, JPanel> rowLists = new EnumMap<>(Generator.class);
+    private final List<TitledGroup> operationGroups = new java.util.ArrayList<>();
     private final JLabel counter = Ui.bold(" ");
     private final JProgressBar bar = new JProgressBar(0, 100);
     private final JTextArea log = Ui.monoArea(12, 84);
@@ -134,13 +135,16 @@ public final class ProgressWindow extends JFrame {
             scroll.getVerticalScrollBar().setUnitIncrement(16);
             int rowHeight = byFn.values().iterator().next().getPreferredSize().height + 2;
             scroll.setPreferredSize(new Dimension(560, rowHeight * Math.min(VISIBLE_ROWS, Math.max(1, byFn.size())) + 2));
+            TitledGroup group;
             if (mode.isCompare()) {
                 StatusBadge badge = new StatusBadge("0 / " + project.functions().size() + " done", StatusBadge.Kind.INFO);
                 groupBadges.put(g, badge);
-                content.add(new TitledGroup(g.label() + " specification", scroll).withHeader(badge));
+                group = new TitledGroup(g.label() + " specification", scroll).withHeader(badge);
             } else {
-                content.add(new TitledGroup("Operations", scroll));
+                group = new TitledGroup("Operations", scroll);
             }
+            operationGroups.add(group);
+            content.add(group);
         }
         if (mode.isCompare()) {
             JLabel note = Ui.secondary("The results will be compared automatically when both verifications finish.");
@@ -174,9 +178,7 @@ public final class ProgressWindow extends JFrame {
                 requestClose();
             }
         });
-        pack();
-        setMinimumSize(new Dimension(640, 420));
-        setLocationRelativeTo(null);
+        Ui.standardSize(this);
     }
 
     public void start() {
@@ -284,11 +286,16 @@ public final class ProgressWindow extends JFrame {
         return r.totalGoals() > 0 ? r.proved() + " / " + r.totalGoals() + " goals" : "no goals";
     }
 
+    /** Hides or shows the log; without it, the function lists take the window's height. */
     private void toggleLog() {
         boolean show = !logGroup.isVisible();
         logGroup.setVisible(show);
+        for (TitledGroup group : operationGroups) {
+            VerticalLayout.setFill(group, !show);
+        }
         toggleLog.setText(show ? "Hide Logs" : "View Logs");
-        pack();
+        getContentPane().revalidate();
+        getContentPane().repaint();
     }
 
     private void saveLog() {

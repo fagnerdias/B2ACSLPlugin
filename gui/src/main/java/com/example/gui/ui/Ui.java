@@ -19,7 +19,28 @@ import javax.swing.border.Border;
 /** Small factory methods shared by the windows. */
 public final class Ui {
 
+    /** The size every window of the tool opens with (smaller only when the screen is smaller). */
+    public static final java.awt.Dimension WINDOW_SIZE = new java.awt.Dimension(960, 720);
+
+    /** Width of the centred column that holds the wizard's forms inside the standard window. */
+    public static final int WIZARD_COLUMN = 760;
+
     private Ui() {}
+
+    /**
+     * Gives a window the standard size, centred on the screen, so that moving from the wizard to the
+     * progress window, a report or a dialog keeps the same size and position.
+     */
+    public static void standardSize(java.awt.Window w) {
+        java.awt.Rectangle screen = java.awt.GraphicsEnvironment.isHeadless()
+                ? new java.awt.Rectangle(0, 0, 1920, 1080)
+                : java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+        int width = Math.min(WINDOW_SIZE.width, screen.width - 40);
+        int height = Math.min(WINDOW_SIZE.height, screen.height - 40);
+        w.setMinimumSize(new java.awt.Dimension(Math.min(720, width), Math.min(540, height)));
+        w.setSize(width, height);
+        w.setLocationRelativeTo(null);
+    }
 
     public static JLabel label(String text) {
         JLabel l = new JLabel(text);
@@ -61,9 +82,13 @@ public final class Ui {
         return l;
     }
 
-    /** A label that wraps at {@code width} pixels. */
+    /**
+     * A label that wraps at {@code width} screen pixels. Swing's HTML renderer scales CSS {@code px}
+     * by 1.3, so the CSS width is divided by that factor to wrap where asked.
+     */
     public static JLabel wrap(String text, int width, Color color, Font font) {
-        JLabel l = new JLabel("<html><div style='width:" + width + "px'>" + html(text) + "</div></html>");
+        int cssWidth = Math.round(width / 1.3f);
+        JLabel l = new JLabel("<html><div style='width:" + cssWidth + "px'>" + html(text) + "</div></html>");
         l.setForeground(color);
         l.setFont(font);
         return l;
@@ -133,6 +158,53 @@ public final class Ui {
         a.setBackground(Palette.WHITE);
         a.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
         return a;
+    }
+
+    /**
+     * A vertically scrolling page whose content always takes the viewport's width (no horizontal
+     * scrolling: rows, cards and tables shrink to the window instead of being cut off).
+     */
+    public static JScrollPane page(JComponent content) {
+        JPanel tracking = new TrackingPanel(content);
+        JScrollPane s = new JScrollPane(tracking, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        s.setBorder(null);
+        s.getViewport().setBackground(Palette.WINDOW);
+        s.getVerticalScrollBar().setUnitIncrement(16);
+        return s;
+    }
+
+    private static final class TrackingPanel extends JPanel implements javax.swing.Scrollable {
+        TrackingPanel(JComponent content) {
+            super(new BorderLayout());
+            setOpaque(false);
+            add(content, BorderLayout.CENTER);
+        }
+
+        @Override
+        public java.awt.Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(java.awt.Rectangle r, int orientation, int direction) {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(java.awt.Rectangle r, int orientation, int direction) {
+            return Math.max(16, r.height - 32);
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return getParent() != null && getParent().getHeight() > getPreferredSize().height;
+        }
     }
 
     public static JScrollPane scroll(Component c) {

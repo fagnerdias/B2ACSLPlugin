@@ -10,7 +10,6 @@ import com.example.gui.ui.Ui;
 import com.example.gui.ui.components.Icons;
 import com.example.gui.ui.components.TitledGroup;
 import java.awt.BorderLayout;
-import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -20,7 +19,6 @@ import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.ScrollPaneConstants;
 import javax.swing.WindowConstants;
 
 /** Report of a single generator (mockups 5A/5P). */
@@ -59,11 +57,7 @@ public final class VerificationReportWindow extends JFrame {
                 new TitledGroup("Per-function verification summary", perFunction),
                 new TitledGroup("Output Details", details));
         body.setBorder(Ui.padding(0, 0, 0, 6));
-        JScrollPane scroll = new JScrollPane(body, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
-                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-        scroll.setBorder(null);
-        scroll.getViewport().setBackground(Palette.WINDOW);
-        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        JScrollPane scroll = Ui.page(body);
 
         JPanel root = new JPanel(new BorderLayout(0, 12));
         root.setBorder(Ui.padding(14, 16, 14, 16));
@@ -82,10 +76,7 @@ public final class VerificationReportWindow extends JFrame {
                 close();
             }
         });
-        pack();
-        Dimension pref = getPreferredSize();
-        setSize(Math.max(pref.width + 20, 640), Math.min(pref.height, 760));
-        setLocationRelativeTo(null);
+        Ui.standardSize(this);
         header.getComponent(0).setFont(Theme.font(Font.BOLD, 17f));
     }
 

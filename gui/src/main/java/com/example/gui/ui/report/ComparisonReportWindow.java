@@ -10,7 +10,6 @@ import com.example.gui.ui.LogViewerDialog;
 import com.example.gui.ui.Palette;
 import com.example.gui.ui.Ui;
 import java.awt.BorderLayout;
-import java.awt.Dimension;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
@@ -75,10 +74,7 @@ public final class ComparisonReportWindow extends JFrame {
                 close();
             }
         });
-        pack();
-        Dimension pref = getPreferredSize();
-        setSize(Math.max(pref.width, 860), Math.min(Math.max(pref.height, 640), 820));
-        setLocationRelativeTo(null);
+        Ui.standardSize(this);
     }
 
     private void showSpecifications(String function) {

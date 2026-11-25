@@ -43,3 +43,14 @@ continuar do primeiro item não marcado.
         mesma classificação de `markCompletedFromSummary`, também no relatório
   - [x] Log do Frama-C embutido na janela de progresso durante a verificação (Hide Logs / Save Log)
   - [x] "How to fix" removido do diálogo de erro (e do texto copiado)
+- [x] 8. Todas as janelas no mesmo tamanho (pedido de 2026-11-25)
+  - [x] `Ui.standardSize`: 960 × 720 (limitado à tela), centralizado — wizard (3 passos), progresso,
+        relatório simples, relatório de comparação, diálogo de erro, visualizador de log; nenhum
+        `pack()` por passo
+  - [x] Conteúdo adaptado: formulários do wizard numa coluna centralizada de 760 px; lista de
+        funções, log de geração, log do WP e saída do erro ocupam a altura livre; páginas dos
+        relatórios acompanham a largura (sem corte horizontal); cartões reduzem a fonte para caber
+  - [x] Corrigido: `Ui.wrap` quebrava 30% mais largo (o HTML do Swing escala `px` por 1,3)
+  - [x] Verificado em janelas reais: compare no AddRunner e falha do ATL, todas 960 × 720 na mesma
+        posição
+

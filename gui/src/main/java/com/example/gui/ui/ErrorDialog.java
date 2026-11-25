@@ -31,7 +31,7 @@ import javax.swing.JTextArea;
  */
 public final class ErrorDialog extends JDialog {
 
-    private static final int TEXT_WIDTH = 430;
+    private static final int TEXT_WIDTH = 820;
 
     /**
      * @param onRetry "Try Again" ({@code null} hides it)
@@ -108,8 +108,10 @@ public final class ErrorDialog extends JDialog {
             JScrollPane sp = Ui.scroll(out);
             sp.setBorder(javax.swing.BorderFactory.createLineBorder(new java.awt.Color(0xF2B8B8)));
             sp.getViewport().setBackground(Palette.ERROR_BG);
-            content.add(Ui.stack(6, Ui.bold(report.title().startsWith("Specification") ? "Generator output" : "Output"),
-                    VerticalLayout.fill(sp)));
+            sp.setMinimumSize(new java.awt.Dimension(200, 60));
+            content.add(VerticalLayout.fill(Ui.stack(6,
+                    Ui.bold(report.title().startsWith("Specification") ? "Generator output" : "Output"),
+                    VerticalLayout.fill(sp))));
         }
 
         List<JComponent> buttons = new ArrayList<>();
@@ -139,9 +141,7 @@ public final class ErrorDialog extends JDialog {
         root.add(content, BorderLayout.CENTER);
         root.add(Ui.buttonBar(buttons.toArray(JComponent[]::new)), BorderLayout.SOUTH);
         setContentPane(root);
-        pack();
-        setMinimumSize(getPreferredSize());
-        setLocationRelativeTo(owner);
+        Ui.standardSize(this);
     }
 
     public static void show(Window owner, ErrorReport report, Actions actions) {

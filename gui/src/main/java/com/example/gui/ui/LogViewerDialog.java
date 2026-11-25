@@ -1,7 +1,6 @@
 package com.example.gui.ui;
 
 import java.awt.BorderLayout;
-import java.awt.Dimension;
 import java.awt.Window;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -34,9 +33,7 @@ public final class LogViewerDialog extends JDialog {
         root.add(Ui.buttonBar(Ui.button("Save Log (.txt)", e -> save()), Ui.button("Close", e -> dispose())),
                 BorderLayout.SOUTH);
         setContentPane(root);
-        setMinimumSize(new Dimension(520, 320));
-        pack();
-        setLocationRelativeTo(owner);
+        Ui.standardSize(this);
     }
 
     public void append(String line) {

@@ -173,11 +173,14 @@ final class SpecificationsTab extends JPanel {
                     case ONLY_ATL -> Palette.DIFF_ONLY_ATL;
                     default -> Palette.DIFF_CHANGED;
                 };
-                JLabel s = Ui.wrap(c.sentence(), 720, Palette.TEXT, Theme.font(Font.PLAIN, 12.5f));
-                s.setIcon(Icons.square(color, color.darker()));
-                s.setIconTextGap(8);
-                s.setVerticalTextPosition(JLabel.TOP);
-                changes.add(s);
+                JLabel marker = new JLabel(Icons.square(color, color.darker()));
+                marker.setVerticalAlignment(JLabel.TOP);
+                marker.setBorder(Ui.padding(2, 0, 0, 0));
+                JPanel line = new JPanel(new BorderLayout(8, 0));
+                line.setOpaque(false);
+                line.add(marker, BorderLayout.WEST);
+                line.add(Ui.wrap(c.sentence(), 760, Palette.TEXT, Theme.font(Font.PLAIN, 12.5f)), BorderLayout.CENTER);
+                changes.add(line);
             }
         }
 
