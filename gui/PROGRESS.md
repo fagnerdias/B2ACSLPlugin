@@ -72,4 +72,7 @@ continuar do primeiro item não marcado.
   - [x] Specifications: só no Plugin em azul, só no ATL Rules em laranja
   - [x] Close dos relatórios encerra a aplicação (como a pipeline)
   - [x] Verificado no app real (compare AddRunner: janelas 760/960 × 720, JVM termina com 0 no Close)
+- [x] 11. Timeouts em amarelo (pedido de 2026-11-26): número do cartão Timeouts, selo de resumo sem
+      falhas ("0 failures · N timeouts"), proved/total da tabela de comparação — mesma cor do status
+      Timeout; falhas continuam em vermelho
 

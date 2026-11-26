@@ -38,7 +38,12 @@ public final class SummaryCard extends JPanel {
 
     /** A count shown in red when it is not zero (Failures, Timeouts). */
     public static SummaryCard alert(String label, int count) {
-        return new SummaryCard(label, Integer.toString(count), count > 0 ? Palette.RED : Palette.TEXT);
+        return alert(label, count, Palette.RED);
+    }
+
+    /** A count shown in {@code color} when it is not zero (yellow for Timeouts). */
+    public static SummaryCard alert(String label, int count, Color color) {
+        return new SummaryCard(label, Integer.toString(count), count > 0 ? color : Palette.TEXT);
     }
 
     public void setValue(String text, Color color) {

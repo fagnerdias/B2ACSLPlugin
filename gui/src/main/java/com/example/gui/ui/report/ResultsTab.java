@@ -145,9 +145,13 @@ final class ResultsTab extends JPanel {
         }
     }
 
+    /** Badge: green when all proved, red with failures (or a Frama-C error), yellow with only timeouts. */
     private static JPanel column(VerificationRun run) {
-        boolean ok = run.allProved();
-        StatusBadge badge = new StatusBadge(ResultComparator.badge(run), ok ? StatusBadge.Kind.SUCCESS : StatusBadge.Kind.ERROR);
+        boolean failed = run.failures() > 0 || run.results().stream().anyMatch(FunctionResult::processFailed);
+        StatusBadge.Kind kind = run.allProved() ? StatusBadge.Kind.SUCCESS
+                : failed || run.timeouts() == 0 ? StatusBadge.Kind.ERROR
+                : StatusBadge.Kind.TIMEOUT;
+        StatusBadge badge = new StatusBadge(ResultComparator.badge(run), kind);
         return new TitledGroup(run.generator().label(), ReportSupport.cards(run)).boldTitle().withHeader(badge);
     }
 
@@ -214,8 +218,11 @@ final class ResultsTab extends JPanel {
                 case 0 -> l.setFont(Theme.font(Font.BOLD, 12.5f));
                 case 1, 2 -> {
                     FunctionResult r = column == 1 ? c.plugin() : c.atl();
-                    if (!c.same() && r != null && (r.failures() > 0 || r.timeouts() > 0 || r.processFailed())) {
+                    if (!c.same() && r != null && (r.failures() > 0 || r.processFailed())) {
                         l.setForeground(Palette.RED);
+                        l.setFont(Theme.font(Font.BOLD, 12.5f));
+                    } else if (!c.same() && r != null && r.timeouts() > 0) {
+                        l.setForeground(Palette.TIMEOUT);
                         l.setFont(Theme.font(Font.BOLD, 12.5f));
                     }
                 }

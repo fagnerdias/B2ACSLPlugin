@@ -43,7 +43,7 @@ final class ReportSupport {
         p.add(new SummaryCard("Total Goals", Integer.toString(total)));
         p.add(new SummaryCard("Proved", Integer.toString(proved)));
         p.add(SummaryCard.alert("Failures", failures));
-        p.add(SummaryCard.alert("Timeouts", timeouts));
+        p.add(SummaryCard.alert("Timeouts", timeouts, Palette.TIMEOUT));
         p.add(new SummaryCard("Smoke Tests", smoke));
         return p;
     }

@@ -16,6 +16,10 @@ public final class Palette {
     public static final Color GREEN = new Color(0x2E8540);
     public static final Color RED = new Color(0xC62828);
     public static final Color GRAY = new Color(0x8A8A8A);
+    /** Timeouts: the dark yellow of the Timeout status (readable on the light cards). */
+    public static final Color TIMEOUT = com.example.gui.model.FunctionStatus.TIMEOUT.color();
+    public static final Color TIMEOUT_BG = new Color(0xFFF4C2);
+    public static final Color TIMEOUT_FG = new Color(0x8C6A00);
 
     public static final Color CARD_BG = new Color(0xF2F2F2);
     public static final Color CARD_BORDER = new Color(0x9FA6AD);

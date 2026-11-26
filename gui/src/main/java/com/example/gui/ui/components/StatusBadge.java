@@ -17,6 +17,8 @@ public final class StatusBadge extends JLabel {
         SUCCESS(Palette.SUCCESS_BG, Palette.SUCCESS_FG),
         WARNING(Palette.WARNING_BG, Palette.WARNING_FG),
         ERROR(Palette.ERROR_BG, Palette.ERROR_FG),
+        /** Yellow: timeouts without failures. */
+        TIMEOUT(Palette.TIMEOUT_BG, Palette.TIMEOUT_FG),
         INFO(Palette.INFO_BG, Palette.INFO_FG);
 
         final Color background;
