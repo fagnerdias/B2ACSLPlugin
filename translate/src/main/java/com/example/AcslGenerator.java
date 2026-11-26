@@ -786,8 +786,12 @@ public final class AcslGenerator {
             Map<String, String> gluing,
             Element machineEl,
             Map<String, String> refinementChainVariableLogicTypes) {
+        // Valores enumerados (próprios e das máquinas vistas) com o mesmo nome prefixado da raiz:
+        // sem isto, um invariante/PROPERTIES/VALUES do refinamento ou da implementação (e a colagem
+        // em connection.acsl) citava o valor cru (ec_front), não declarado em nenhum .acsl.
         return BxmlTranslateContext.forMachineWithSharedComprehensions(
                         mel, ctx.comprehensions(), gluing, machineEl)
+                .withEnumRenames(ctx.enumValueRenames())
                 .withEnumeratedSetRenames(ctx.enumeratedSetRenames())
                 .withLambdaRegistry(ctx.lambdaRegistry())
                 .withSigmaRegistry(ctx.sigmaRegistry())
@@ -1031,7 +1035,8 @@ public final class AcslGenerator {
         StringBuilder mergedInvariantsSb = new StringBuilder();
         appendMergedInvariantPredicatesOnly(
                 mergedInvariantsSb, mergedMachineElements, gluing, ctx.comprehensions(), machineEl,
-                ctx.enumeratedSetRenames(), mergedVariableRenames, ctx.lambdaRegistry(), ctx.sigmaRegistry(),
+                ctx.enumeratedSetRenames(), ctx.enumValueRenames(), mergedVariableRenames, ctx.lambdaRegistry(),
+                ctx.sigmaRegistry(),
                 ctx.unionInterRegistry(), ctx.crossMachineVariableNames(),
                 ctx.crossMachineVariableLogicTypes(), refinementChainVariableLogicTypes,
                 ctx.seenGlobalLogicNames());
@@ -1527,6 +1532,7 @@ public final class AcslGenerator {
             BxmlComprehensionRegistry sharedComprehensions,
             Element rootAbstractMachineEl,
             Map<String, String> enumeratedSetRenames,
+            Map<String, String> enumValueRenames,
             Map<Element, Map<String, String>> variableRenamesByMachine,
             LambdaFunctionRegistry lambdaRegistry,
             SigmaFunctionRegistry sigmaRegistry,
@@ -1542,6 +1548,8 @@ public final class AcslGenerator {
             BxmlTranslateContext ctx =
                     BxmlTranslateContext.forMachineWithSharedComprehensions(
                             mel, sharedComprehensions, gluing, rootAbstractMachineEl)
+                    // valores enumerados com o nome prefixado da raiz, como em buildMergedElementContext
+                    .withEnumRenames(enumValueRenames)
                     .withEnumeratedSetRenames(enumeratedSetRenames)
                     .withLambdaRegistry(lambdaRegistry)
                     .withSigmaRegistry(sigmaRegistry)
