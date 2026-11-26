@@ -75,4 +75,7 @@ continuar do primeiro item não marcado.
 - [x] 11. Timeouts em amarelo (pedido de 2026-11-26): número do cartão Timeouts, selo de resumo sem
       falhas ("0 failures · N timeouts"), proved/total da tabela de comparação — mesma cor do status
       Timeout; falhas continuam em vermelho
+- [x] 12. Botões dos diálogos do Swing em inglês (pedido de 2026-11-26): confirmações Yes/No, OK e a
+      janela de salvar (Save/Cancel) não seguem mais o idioma do sistema; `Theme.install` muda o
+      locale padrão da JVM para inglês e mantém o formato de números do sistema ("16,54s")
 

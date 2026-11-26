@@ -5,6 +5,7 @@ import java.awt.Color;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.util.Arrays;
+import java.util.Locale;
 import javax.swing.BorderFactory;
 import javax.swing.UIManager;
 import javax.swing.UnsupportedLookAndFeelException;
@@ -56,6 +57,13 @@ public final class Theme {
                 mono = new Font("Ubuntu Mono", Font.PLAIN, 13);
             }
         }
+        // Swing's own texts (Yes/No/OK/Cancel of the confirmations, the Save dialog) in English like the
+        // rest of the UI, whatever the system language. The default locale itself must change: Java's
+        // resource bundles fall back to it (pt_BR → "Sim"/"Não") before the English base texts. Numbers
+        // keep the system format ("16,54s").
+        Locale format = Locale.getDefault(Locale.Category.FORMAT);
+        Locale.setDefault(Locale.ENGLISH);
+        Locale.setDefault(Locale.Category.FORMAT, format);
         MetalLookAndFeel.setCurrentTheme(new PaletteTheme());
         try {
             UIManager.setLookAndFeel(new MetalLookAndFeel());
