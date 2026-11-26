@@ -1134,7 +1134,10 @@ public final class GhostOperationsCiGenerator {
                     return "dummy_" + lhs + " == " + GhostNamespacePrefixer.prefixAbstractVarsForGhost(rhs, abstractVars);
                 }
             }
-            return rewriteAbstractIdsWithOld(s, abstractVars);
+            // O texto de appendEnsuresFromBody já traz \old só no pré-estado (o mesmo do contrato real):
+            // só prefixar, como toGhostEnsurePostState. Envolver tudo em \old trocava o pós-estado pelo
+            // pré-estado (CHOICE: "(cl_q == \Nil) || ..." virava "(\old(dummy_cl_q) == \Nil) || ...").
+            return GhostNamespacePrefixer.prefixAbstractVarsForGhost(s, abstractVars);
         }
         int open = s.indexOf('(');
         int comma = findTopLevelComma(s, open + 1);
