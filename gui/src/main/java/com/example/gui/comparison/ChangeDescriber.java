@@ -51,6 +51,13 @@ public final class ChangeDescriber {
         return "The " + clauseName(kind) + " is different: Plugin “" + p + "”, ATL Rules “" + a + "”.";
     }
 
+    /** "The assigns clause “ghost_books” is at a different position in each specification (same meaning)." */
+    static String moved(String text) {
+        String kind = SpecificationDiffer.kind(text);
+        return "The " + clauseName(kind) + " “" + body(text, kind)
+                + "” is at a different position in each specification (same meaning).";
+    }
+
     /** requires → precondition, ensures → postcondition, assigns → assigns clause, ... */
     static String clauseName(String kind) {
         return switch (kind) {

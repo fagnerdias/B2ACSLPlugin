@@ -21,6 +21,8 @@ public final class SpecificationDiffer {
         ONLY_PLUGIN,
         ONLY_ATL,
         CHANGED,
+        /** The same clause on both sides, at different positions (same meaning). */
+        MOVED,
         /** "/*@" or "@*&#47;" around the clauses: shown, never counted. */
         DELIMITER
     }
@@ -49,7 +51,7 @@ public final class SpecificationDiffer {
         List<DiffRow> rows = new ArrayList<>();
         rows.add(new DiffRow(
                 RowKind.DELIMITER, delimiter(plugin, true), delimiter(atl, true)));
-        rows.addAll(clauseRows(plugin.clauses(), atl.clauses()));
+        rows.addAll(reclassifyMoved(clauseRows(plugin.clauses(), atl.clauses())));
         rows.add(new DiffRow(RowKind.DELIMITER, delimiter(plugin, false), delimiter(atl, false)));
         ClauseLine ps = plugin.signature();
         ClauseLine as = atl.signature();
@@ -59,8 +61,15 @@ public final class SpecificationDiffer {
             rows.add(new DiffRow(kind, ps, as));
         }
         List<Change> changes = new ArrayList<>();
+        java.util.Set<String> movedDescribed = new java.util.HashSet<>();
         for (DiffRow row : rows) {
-            if (row.kind() != RowKind.EQUAL && row.kind() != RowKind.DELIMITER) {
+            if (row.kind() == RowKind.MOVED) {
+                for (ClauseLine side : new ClauseLine[] {row.plugin(), row.atl()}) {
+                    if (side != null && movedDescribed.add(side.text())) {
+                        changes.add(new Change(RowKind.MOVED, ChangeDescriber.moved(side.text())));
+                    }
+                }
+            } else if (row.kind() != RowKind.EQUAL && row.kind() != RowKind.DELIMITER) {
                 changes.add(new Change(row.kind(), ChangeDescriber.describe(row, row == rows.get(rows.size() - 1) && isSignatureRow(row, ps, as))));
             }
         }
@@ -69,6 +78,66 @@ public final class SpecificationDiffer {
 
     private static boolean isSignatureRow(DiffRow row, ClauseLine ps, ClauseLine as) {
         return row.plugin() == ps && row.atl() == as;
+    }
+
+    /**
+     * A clause present on both sides at different positions comes out of the line diff as an
+     * only-Plugin row plus an only-ATL row (or inside a changed pair). Clause order does not change
+     * the meaning of an ACSL contract, so such rows become MOVED; a changed pair keeps only the side
+     * that really differs.
+     */
+    static List<DiffRow> reclassifyMoved(List<DiffRow> rows) {
+        java.util.Map<String, Integer> left = new java.util.HashMap<>();
+        java.util.Map<String, Integer> right = new java.util.HashMap<>();
+        for (DiffRow r : rows) {
+            if (r.kind() == RowKind.ONLY_PLUGIN || r.kind() == RowKind.CHANGED) {
+                left.merge(r.plugin().text(), 1, Integer::sum);
+            }
+            if (r.kind() == RowKind.ONLY_ATL || r.kind() == RowKind.CHANGED) {
+                right.merge(r.atl().text(), 1, Integer::sum);
+            }
+        }
+        java.util.Map<String, Integer> movedLeft = new java.util.HashMap<>();
+        for (var e : left.entrySet()) {
+            int n = Math.min(e.getValue(), right.getOrDefault(e.getKey(), 0));
+            if (n > 0) {
+                movedLeft.put(e.getKey(), n);
+            }
+        }
+        java.util.Map<String, Integer> movedRight = new java.util.HashMap<>(movedLeft);
+        List<DiffRow> out = new ArrayList<>();
+        for (DiffRow r : rows) {
+            boolean lm = (r.kind() == RowKind.ONLY_PLUGIN || r.kind() == RowKind.CHANGED) && take(movedLeft, r.plugin().text());
+            boolean rm = (r.kind() == RowKind.ONLY_ATL || r.kind() == RowKind.CHANGED) && take(movedRight, r.atl().text());
+            RowKind kind = r.kind();
+            switch (r.kind()) {
+                case ONLY_PLUGIN -> kind = lm ? RowKind.MOVED : kind;
+                case ONLY_ATL -> kind = rm ? RowKind.MOVED : kind;
+                case CHANGED -> kind = lm && rm ? RowKind.MOVED : lm ? RowKind.ONLY_ATL : rm ? RowKind.ONLY_PLUGIN : kind;
+                default -> {
+                }
+            }
+            if (kind == RowKind.ONLY_ATL && r.kind() == RowKind.CHANGED) {
+                // the Plugin clause of this pair exists elsewhere on the ATL side: show it as moved there
+                out.add(new DiffRow(RowKind.MOVED, r.plugin(), null));
+                out.add(new DiffRow(RowKind.ONLY_ATL, null, r.atl()));
+            } else if (kind == RowKind.ONLY_PLUGIN && r.kind() == RowKind.CHANGED) {
+                out.add(new DiffRow(RowKind.ONLY_PLUGIN, r.plugin(), null));
+                out.add(new DiffRow(RowKind.MOVED, null, r.atl()));
+            } else {
+                out.add(new DiffRow(kind, r.plugin(), r.atl()));
+            }
+        }
+        return out;
+    }
+
+    private static boolean take(java.util.Map<String, Integer> pool, String text) {
+        Integer n = pool.get(text);
+        if (n == null || n == 0) {
+            return false;
+        }
+        pool.put(text, n - 1);
+        return true;
     }
 
     static List<DiffRow> clauseRows(List<ClauseLine> left, List<ClauseLine> right) {

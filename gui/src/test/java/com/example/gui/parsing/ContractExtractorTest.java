@@ -79,6 +79,28 @@ class ContractExtractorTest {
     }
 
     @Test
+    void quantifierSemicolonsStayInsideTheClause() {
+        List<String> lines = """
+                /*@ ensures \\exists Relation_integer_integer rr;
+                      is_total_function(rr, interval_set(0, max_IDX), relation_ran(\\old(array))) &&
+                      (\\forall integer ii; belongs(ii, interval_set(0, max_IDX - 1)) ==> P(rr, ii));
+                    ensures \\let n = count(array); n >= 0;
+                    assigns array[0 .. max_IDX];
+                 */
+                void HeapSort__sort(void)
+                {
+                }
+                """.lines().toList();
+        List<String> clauses = ContractExtractor.extract(lines, "HeapSort__sort").clauses().stream()
+                .map(ContractExtractor.ClauseLine::text).toList();
+        assertEquals(3, clauses.size(), clauses.toString());
+        assertTrue(clauses.get(0).startsWith("ensures \\exists Relation_integer_integer rr; is_total_function("));
+        assertTrue(clauses.get(0).endsWith("==> P(rr, ii));"));
+        assertEquals("ensures \\let n = count(array); n >= 0;", clauses.get(1));
+        assertEquals("assigns array[0 .. max_IDX];", clauses.get(2));
+    }
+
+    @Test
     void functionWithoutContractOrMissing() {
         Contract none = ContractExtractor.extract(ADD_RUNNER, "AddRunner__count");
         assertTrue(none.found());

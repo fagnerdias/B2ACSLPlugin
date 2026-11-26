@@ -1,6 +1,7 @@
 package com.example.gui.comparison;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.gui.comparison.SpecificationDiffer.Change;
 import com.example.gui.comparison.SpecificationDiffer.DiffRow;
@@ -80,6 +81,61 @@ class SpecificationDifferTest {
                         + " “JogoDados__dado1, JogoDados__dado2, JogoDados__semente”, ATL Rules"
                         + " “JogoDados__semente, JogoDados__dado1, JogoDados__dado2”.",
                 SpecificationDiffer.diff("f", plugin, atl).changes().get(0).sentence());
+    }
+
+    @Test
+    void clausesAtOtherPositionsAreMovedNotOneSided() {
+        Contract plugin = contract("""
+                /*@ requires P;
+                    assigns ghost_turn_completed;
+                    assigns ghost_player_coins;
+                    assigns ghost_winner;
+                 */
+                void AddRunner__Add(int a)
+                {
+                }
+                """);
+        Contract atl = contract("""
+                /*@ requires P;
+                    assigns ghost_winner;
+                    assigns ghost_turn_completed;
+                    assigns ghost_player_coins;
+                 */
+                void AddRunner__Add(int a)
+                {
+                }
+                """);
+        SpecDiff diff = SpecificationDiffer.diff("f", plugin, atl);
+        assertTrue(diff.rows().stream().noneMatch(r -> r.kind() == RowKind.ONLY_PLUGIN || r.kind() == RowKind.ONLY_ATL
+                || r.kind() == RowKind.CHANGED), diff.rows().toString());
+        assertEquals(List.of("The assigns clause “ghost_winner” is at a different position in each specification (same meaning)."),
+                diff.changes().stream().map(Change::sentence).toList());
+    }
+
+    @Test
+    void movedAndRealDifferencesTogether() {
+        Contract plugin = contract("""
+                /*@ assigns a;
+                    assigns b;
+                    ensures x == 1;
+                 */
+                void AddRunner__Add(int a)
+                {
+                }
+                """);
+        Contract atl = contract("""
+                /*@ assigns b;
+                    assigns a;
+                    ensures x == 2;
+                 */
+                void AddRunner__Add(int a)
+                {
+                }
+                """);
+        List<String> sentences = SpecificationDiffer.diff("f", plugin, atl).changes().stream().map(Change::sentence).toList();
+        assertTrue(sentences.contains("The postcondition is different: Plugin “x == 1”, ATL Rules “x == 2”."), sentences.toString());
+        assertTrue(sentences.stream().anyMatch(t -> t.contains("is at a different position")), sentences.toString());
+        assertTrue(sentences.stream().noneMatch(t -> t.contains("exists only")), sentences.toString());
     }
 
     @Test

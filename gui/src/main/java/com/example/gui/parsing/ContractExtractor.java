@@ -111,6 +111,8 @@ public final class ContractExtractor {
         StringBuilder current = new StringBuilder();
         int currentLine = -1;
         int depth = 0;
+        // "\exists T x; P", "\forall", "\let x = e; P", "\lambda": their ";" does not end the clause
+        int binders = 0;
         for (int i = start; i <= end; i++) {
             String line = lines.get(i);
             if (i == start) {
@@ -130,10 +132,14 @@ public final class ContractExtractor {
                     currentLine = i + 1;
                 }
                 current.append(c);
-                if (c == '(' || c == '{' || c == '[') {
+                if (c == '\\' && depth == 0 && startsBinder(body, k)) {
+                    binders++;
+                } else if (c == '(' || c == '{' || c == '[') {
                     depth++;
                 } else if ((c == ')' || c == '}' || c == ']') && depth > 0) {
                     depth--;
+                } else if (c == ';' && depth == 0 && binders > 0) {
+                    binders--;
                 } else if (c == ';' && depth == 0) {
                     out.add(new ClauseLine(currentLine, normalize(current.toString())));
                     current.setLength(0);
@@ -152,6 +158,19 @@ public final class ContractExtractor {
             out.add(new ClauseLine(currentLine, rest));
         }
         return out;
+    }
+
+    private static final java.util.List<String> BINDERS = java.util.List.of("\\forall", "\\exists", "\\let", "\\lambda");
+
+    /** A quantifier or binder keyword starts at {@code k} (its ";" separates the binding from the body). */
+    private static boolean startsBinder(String text, int k) {
+        for (String b : BINDERS) {
+            int end = k + b.length();
+            if (text.startsWith(b, k) && (end >= text.length() || !Character.isLetterOrDigit(text.charAt(end)))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Collapses runs of whitespace and trims. */

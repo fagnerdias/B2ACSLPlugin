@@ -146,7 +146,7 @@ final class SpecificationsTab extends JPanel {
                 Color bg = switch (row.kind()) {
                     case ONLY_PLUGIN -> Palette.DIFF_ONLY_PLUGIN;
                     case ONLY_ATL -> Palette.DIFF_ONLY_ATL;
-                    case CHANGED -> Palette.DIFF_CHANGED;
+                    case CHANGED, MOVED -> Palette.DIFF_CHANGED;
                     default -> null;
                 };
                 DiffPane.Line pl = line(row.plugin(), afterClose, firstLeft, bg);

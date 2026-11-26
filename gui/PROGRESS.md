@@ -83,4 +83,13 @@ continuar do primeiro item não marcado.
       o log mantém altura mínima; verificado com fuel_level (19 × 2) e AddRunner (sem mudança)
   - [x] Mesmo risco na aba Specifications: "What changed" limitado a ~4 frases com rolagem, para os
         painéis dos contratos não perderem a altura (verificado com 11 diferenças)
+- [x] 14. Varredura dos projetos de B-projects (2026-11-26) e correções da comparação de contratos
+  - [x] `ContractExtractor`: o ";" de \exists/\forall/\let/\lambda não termina mais a cláusula
+        (pós-condições com quantificador eram partidas em duas, "is_total_function clause")
+  - [x] `SpecificationDiffer`: cláusula presente nos dois lados em posições diferentes = MOVED (mesmo
+        significado), em vez de "só no Plugin" + "só no ATL"
+  - [x] `BundledTools` seguro com gerações simultâneas (a varredura em paralelo expôs a corrida)
+  - [x] Resultado: 61 projetos válidos — 41 contratos idênticos, 13 com diferenças só de forma
+        (ordem de cláusulas/localizações, apelido Relation_integer_integer, MAX_COPY vs 9), 7 com
+        falha de geração
 
