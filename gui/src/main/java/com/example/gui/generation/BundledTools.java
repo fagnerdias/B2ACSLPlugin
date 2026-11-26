@@ -38,7 +38,8 @@ public final class BundledTools {
 
     private BundledTools() {}
 
-    public static Path rulesJar() throws IOException {
+    /** Synchronized: several generations in one process must not extract the same copy at once. */
+    public static synchronized Path rulesJar() throws IOException {
         String override = System.getProperty("b2acsl.gui.rulesJar");
         if (override != null && !override.isBlank()) {
             return Path.of(override).toAbsolutePath();
@@ -53,7 +54,8 @@ public final class BundledTools {
         return fromSourceTree(Path.of("rules", "dist", "b2acsl.jar"));
     }
 
-    public static Path acslLibDir() throws IOException {
+    /** Synchronized: several generations in one process must not extract the same copy at once. */
+    public static synchronized Path acslLibDir() throws IOException {
         String override = System.getProperty("b2acsl.gui.libDir");
         if (override != null && !override.isBlank()) {
             return Path.of(override).toAbsolutePath();
@@ -107,7 +109,8 @@ public final class BundledTools {
         }
         try {
             Path source = fs.getPath(root);
-            Path staging = target.resolveSibling("B2ACSLLib.tmp-" + ProcessHandle.current().pid());
+            Path staging = target.resolveSibling(
+                    "B2ACSLLib.tmp-" + ProcessHandle.current().pid() + "-" + System.nanoTime());
             try (Stream<Path> walk = Files.walk(source)) {
                 for (Path p : (Iterable<Path>) walk::iterator) {
                     Path dest = staging.resolve(source.relativize(p).toString());
