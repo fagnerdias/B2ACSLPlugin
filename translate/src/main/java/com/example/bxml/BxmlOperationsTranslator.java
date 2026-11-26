@@ -421,7 +421,10 @@ public final class BxmlOperationsTranslator {
                             dummyGhostEnsureVars,
                             connectionConcreteAssigns,
                             loops,
-                            skipBody));
+                            skipBody,
+                            ghostCallAtEntry(
+                                    child, body, bodyEnsuresOnly, ghostSlug, abstractVariableNames,
+                                    collapsedVariableNames, outputParams)));
         }
         return out;
     }
@@ -731,6 +734,44 @@ public final class BxmlOperationsTranslator {
                 ensures.set(i, com.example.AnySubMarkerSpec.markerCall(opSlug));
             }
         }
+    }
+
+    /**
+     * A chamada ghost vai para o início da função quando o ghost lê o valor de entrada de uma
+     * variável real (concreta da abstração ou colapsada) que a própria operação altera — no
+     * {@code return} o C já a alterou. Mesmo critério do ghost_operations.ci: as cláusulas
+     * consideradas são as que o ghost mantém ({@link GhostStateClauses}). Corpo com ANY fica no
+     * {@code return}, como antes.
+     */
+    private static boolean ghostCallAtEntry(
+            Element abstractOp,
+            Element body,
+            List<String> bodyEnsuresOnly,
+            String ghostSlug,
+            Set<String> abstractVariableNames,
+            Set<String> collapsedVariableNames,
+            List<String> outputParams) {
+        if (ghostSlug == null || ghostSlug.isBlank() || body == null || abstractVariableNames == null
+                || GhostContractPredicates.operationBodyHasAnySub(abstractOp)) {
+            return false;
+        }
+        Element machine = abstractOp.getOwnerDocument().getDocumentElement();
+        Set<String> realStateVariables = new LinkedHashSet<>(BxmlMachineVariables.declaredVariableNames(machine));
+        if (collapsedVariableNames != null) {
+            realStateVariables.addAll(collapsedVariableNames);
+        }
+        realStateVariables.removeAll(abstractVariableNames);
+        if (realStateVariables.isEmpty()) {
+            return false;
+        }
+        Set<String> realStateAssigned = new LinkedHashSet<>();
+        GhostOperationsCiGenerator.collectAssignedAbstractVarsInBody(body, realStateVariables, realStateAssigned);
+        Set<String> ghostAssigned = new LinkedHashSet<>();
+        GhostOperationsCiGenerator.collectAssignedAbstractVarsInBody(body, abstractVariableNames, ghostAssigned);
+        List<String> kept =
+                GhostStateClauses.withoutRealStateOnlyClauses(bodyEnsuresOnly, ghostAssigned, realStateVariables);
+        return GhostStateClauses.callAtEntry(
+                kept, realStateAssigned, outputParams != null && !outputParams.isEmpty());
     }
 
     private static GhostSlugInfo computeGhostSlugInfo(
@@ -1716,7 +1757,12 @@ public final class BxmlOperationsTranslator {
             List<String> connectionConcreteAssigns,
             List<BxmlLoopTranslator.LoopContract> loops,
             /** Verdadeiro quando o corpo da operação é somente {@code skip}. */
-            boolean skipBody) {
+            boolean skipBody,
+            /**
+             * Chamada ghost no início da função ({@code at 1:}) em vez do {@code return}: o ghost lê o
+             * valor de entrada de uma variável real que o C altera (ver {@link GhostStateClauses}).
+             */
+            boolean ghostCallAtEntry) {
 
         public OperationAcsl {
             functionTypedOutputParameters =
@@ -1751,6 +1797,7 @@ public final class BxmlOperationsTranslator {
                     dummyGhostEnsureVarNames,
                     connectionConcreteAssigns,
                     List.of(),
+                    false,
                     false);
         }
 
@@ -1807,7 +1854,8 @@ public final class BxmlOperationsTranslator {
                 sb.append("    assigns \\nothing;\n");
             }
             if (ghostBehaviorSlug != null && !ghostBehaviorSlug.isBlank()) {
-                sb.append("    at return: assert ghost__").append(ghostBehaviorSlug);
+                sb.append(ghostCallAtEntry ? "    at 1: assert ghost__" : "    at return: assert ghost__")
+                        .append(ghostBehaviorSlug);
                 if (ghostBehaviorInputNames != null && !ghostBehaviorInputNames.isEmpty()) {
                     sb.append("(").append(String.join(", ", ghostBehaviorInputNames)).append(")");
                 }

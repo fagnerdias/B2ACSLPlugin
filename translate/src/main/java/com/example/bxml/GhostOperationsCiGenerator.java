@@ -656,6 +656,7 @@ public final class GhostOperationsCiGenerator {
         }
         Set<String> initAssigned = new LinkedHashSet<>();
         collectAssignedAbstractVarsInInit(abstractMachineEl, abstractSet, initAssigned);
+        initEnsures = GhostStateClauses.withoutRealStateOnlyClauses(initEnsures, initAssigned, logicOnlyVars);
         if (!initAssigned.isEmpty()) {
             List<String> prefixedInitEnsures = new ArrayList<>();
             for (String e : initEnsures) {
@@ -760,6 +761,10 @@ public final class GhostOperationsCiGenerator {
                     // "at return: assert ghost__op" do contrato real continuar com alvo
                     ensures.clear();
                 }
+                // Cláusulas só sobre o estado real (concretas da abstração, colapsadas) ficam só no
+                // contrato real: a função ghost não as atribui, e no WP elas virariam suposição.
+                ensures = new ArrayList<>(
+                        GhostStateClauses.withoutRealStateOnlyClauses(ensures, assigned, logicOnlyVars));
                 BxmlOperationsTranslator.rewriteAcslListForArrayBackedParams(ensures, arrayParams);
                 List<String> ghostEnsures = new ArrayList<>();
                 for (String e : ensures) {
