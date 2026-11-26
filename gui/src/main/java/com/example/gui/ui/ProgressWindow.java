@@ -56,6 +56,8 @@ public final class ProgressWindow extends JFrame {
     /** "[wp] 30 goals scheduled": how many proof obligations WP will check for the running function. */
     private static final Pattern GOALS_SCHEDULED = Pattern.compile("^\\[wp\\]\\s+(\\d+)\\s+goals?\\s+scheduled\\s*$");
     private static final int VISIBLE_ROWS = 8;
+    /** Rows a function list keeps when the window is short (it scrolls for the rest). */
+    private static final int MIN_VISIBLE_ROWS = 3;
 
     private sealed interface Event permits Started, Line, Finished {}
 
@@ -137,6 +139,7 @@ public final class ProgressWindow extends JFrame {
             scroll.getVerticalScrollBar().setUnitIncrement(16);
             int rowHeight = byFn.values().iterator().next().getPreferredSize().height + 2;
             scroll.setPreferredSize(new Dimension(560, rowHeight * Math.min(VISIBLE_ROWS, Math.max(1, byFn.size())) + 2));
+            scroll.setMinimumSize(new Dimension(200, rowHeight * Math.min(MIN_VISIBLE_ROWS, Math.max(1, byFn.size())) + 2));
             TitledGroup group;
             if (mode.isCompare()) {
                 JLabel counter = new JLabel();
@@ -148,7 +151,8 @@ public final class ProgressWindow extends JFrame {
                 group = new TitledGroup("Operations", scroll);
             }
             operationGroups.add(group);
-            content.add(group);
+            // with many functions the lists give up height first, so the log stays visible
+            content.add(VerticalLayout.shrink(group));
         }
         if (mode.isCompare()) {
             JLabel note = Ui.secondary("The results will be compared automatically when both verifications finish.");
@@ -160,6 +164,7 @@ public final class ProgressWindow extends JFrame {
 
         log.setFont(Theme.mono(12f));
         JScrollPane logScroll = Ui.scroll(log);
+        logScroll.setMinimumSize(new Dimension(200, 100));
         JPanel logContent = new JPanel(new BorderLayout(0, 8));
         logContent.add(logScroll, BorderLayout.CENTER);
         JPanel logActions = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.CENTER, 0, 0));

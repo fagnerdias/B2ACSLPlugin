@@ -78,4 +78,9 @@ continuar do primeiro item não marcado.
 - [x] 12. Botões dos diálogos do Swing em inglês (pedido de 2026-11-26): confirmações Yes/No, OK e a
       janela de salvar (Save/Cancel) não seguem mais o idioma do sistema; `Theme.install` muda o
       locale padrão da JVM para inglês e mantém o formato de números do sistema ("16,54s")
+- [x] 13. Log sumia com muitas operações (pedido de 2026-11-26): `VerticalLayout` ganhou filhos
+      "shrink" que cedem altura primeiro; as listas de funções encolhem até 3 linhas (com rolagem) e
+      o log mantém altura mínima; verificado com fuel_level (19 × 2) e AddRunner (sem mudança)
+  - [x] Mesmo risco na aba Specifications: "What changed" limitado a ~4 frases com rolagem, para os
+        painéis dos contratos não perderem a altura (verificado com 11 diferenças)
 

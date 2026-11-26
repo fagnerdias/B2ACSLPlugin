@@ -47,6 +47,8 @@ final class SpecificationsTab extends JPanel {
     private final JCheckBox onlyDifferences = new JCheckBox("Show only differences");
     private final DiffPane left = new DiffPane();
     private final DiffPane right = new DiffPane();
+    /** About four sentences; more differences scroll. */
+    private static final int MAX_CHANGES_HEIGHT = 100;
     private final JPanel changes = Ui.stack(6);
     private final Callout impact = new Callout(Callout.Kind.WARNING, null, null, 700);
 
@@ -91,7 +93,19 @@ final class SpecificationsTab extends JPanel {
         changesBox.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(Palette.TABLE_GRID), Ui.padding(8, 10, 10, 10)));
         changesBox.add(Ui.label("What changed"), BorderLayout.NORTH);
-        changesBox.add(changes, BorderLayout.CENTER);
+        // a function with many differences scrolls its list instead of taking the contracts' height
+        JScrollPane changesScroll = Ui.page(changes);
+        changesScroll.getViewport().setBackground(new Color(0xF7F7F7));
+        JPanel changesHolder = new JPanel(new BorderLayout()) {
+            @Override
+            public Dimension getPreferredSize() {
+                Dimension d = super.getPreferredSize();
+                return new Dimension(d.width, Math.min(d.height, MAX_CHANGES_HEIGHT));
+            }
+        };
+        changesHolder.setOpaque(false);
+        changesHolder.add(changesScroll, BorderLayout.CENTER);
+        changesBox.add(changesHolder, BorderLayout.CENTER);
 
         add(Ui.stack(10, top, legend), BorderLayout.NORTH);
         add(panes, BorderLayout.CENTER);
