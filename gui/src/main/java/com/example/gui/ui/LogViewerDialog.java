@@ -33,7 +33,7 @@ public final class LogViewerDialog extends JDialog {
         root.add(Ui.buttonBar(Ui.button("Save Log (.txt)", e -> save()), Ui.button("Close", e -> dispose())),
                 BorderLayout.SOUTH);
         setContentPane(root);
-        Ui.standardSize(this);
+        Ui.sameAs(this, owner);
     }
 
     public void append(String line) {

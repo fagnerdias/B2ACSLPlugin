@@ -61,4 +61,15 @@ continuar do primeiro item não marcado.
   - [x] Sem projeto ou projeto inválido: o wizard abre e o diálogo de erro diz como iniciar (aberto
         depois de a janela aparecer)
   - [x] Verificado: compare real no AddRunner passando `AddRunner/bdp`; 22 testes
+- [x] 10. Ajustes pedidos em 2026-11-26
+  - [x] Wizard 760 × 720 (sem faixas vazias nas laterais; mesma altura das outras janelas); diálogo de
+        erro e visualizador de log com o tamanho e o lugar da janela de baixo
+  - [x] Nome do projeto só leitura
+  - [x] Provadores na ordem CVC5, Alt-Ergo, Z3
+  - [x] Progresso: "X / N done" sem cor na palavra "done"; só a contagem colorida (cinza no início,
+        azul parcial, verde/laranja no resultado final)
+  - [x] Results: sem a coluna Difference (a diferença fica no tooltip de "Different"); coluna "Action"
+  - [x] Specifications: só no Plugin em azul, só no ATL Rules em laranja
+  - [x] Close dos relatórios encerra a aplicação (como a pipeline)
+  - [x] Verificado no app real (compare AddRunner: janelas 760/960 × 720, JVM termina com 0 no Close)
 

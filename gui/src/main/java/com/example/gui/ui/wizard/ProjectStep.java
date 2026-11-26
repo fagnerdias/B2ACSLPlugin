@@ -20,14 +20,11 @@ import javax.swing.JScrollPane;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
 
 /**
  * Step 1: the project to verify, as the pipeline receives it: the folder comes from the command line
  * (the project root or its {@code bdp/}, as Atelier B passes it), and every function the project
- * defines is verified. The step shows the folder, the name (editable, as in the pipeline's options
- * dialog) and the functions.
+ * defines is verified. The step only shows the folder, the name and the functions.
  */
 final class ProjectStep extends WizardStep {
 
@@ -43,6 +40,7 @@ final class ProjectStep extends WizardStep {
         super(frame, state, 0, "Project to verify");
 
         folder.setEditable(false);
+        name.setEditable(false);
         folder.setText(project == null ? "" : project.toAbsolutePath().normalize().toString());
         problem.setForeground(Palette.RED);
         problem.setFont(Theme.font(Font.PLAIN, 11.5f));
@@ -61,22 +59,6 @@ final class ProjectStep extends WizardStep {
         nextButton.setEnabled(false);
         setButtons(Ui.button("Cancel", e -> frame.requestClose()), nextButton);
 
-        name.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                updateNext();
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                updateNext();
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                updateNext();
-            }
-        });
         scan(project);
     }
 
@@ -116,9 +98,7 @@ final class ProjectStep extends WizardStep {
         } else {
             problem.setText(" ");
             folder.setText(result.folder().toString());
-            if (name.getText().isBlank()) {
-                name.setText(result.folder().getFileName().toString());
-            }
+            name.setText(result.folder().getFileName().toString());
             for (String fn : result.functions()) {
                 JLabel l = Ui.label(fn);
                 l.setFont(Theme.font(Font.PLAIN, Theme.BASE_SIZE));

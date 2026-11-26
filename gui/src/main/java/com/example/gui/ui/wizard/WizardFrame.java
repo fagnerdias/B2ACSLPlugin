@@ -54,7 +54,7 @@ public final class WizardFrame extends JFrame {
                 requestClose();
             }
         });
-        Ui.standardSize(this);
+        Ui.wizardSize(this);
     }
 
     public void start() {
@@ -101,6 +101,14 @@ public final class WizardFrame extends JFrame {
         System.exit(0);
     }
 
+    /** Closing the report ends the application, as the pipeline does after its report. */
+    private void quit() {
+        prefs.setMode(state.mode);
+        prefs.flush();
+        dispose();
+        System.exit(0);
+    }
+
     /** "Continue with &lt;generator&gt; Only" from the error dialog: single mode, keep its spec, go to step 3. */
     void continueWith(Generator generator) {
         GeneratedSpecification spec = state.generation.successes().get(generator);
@@ -122,7 +130,7 @@ public final class WizardFrame extends JFrame {
         prefs.flush();
         setVisible(false);
         new ProgressWindow(state.project, state.mode, state.specsToVerify, state.wpConfig, state.runRoot(),
-                this::returnFromVerification).start();
+                this::returnFromVerification, this::quit).start();
     }
 
     /** Back from the progress window (cancelled) or a report (closed): step 3, specs kept. */

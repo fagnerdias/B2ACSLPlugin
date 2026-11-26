@@ -101,6 +101,7 @@ public final class ComparisonReportWindow extends JFrame {
         }
     }
 
+    /** Close (button or window): ends the application. */
     private void close() {
         dispose();
         onClose.run();

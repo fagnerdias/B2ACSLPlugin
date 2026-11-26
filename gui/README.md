@@ -33,7 +33,7 @@ These system properties are optional (`make gui GUI_ARGS="-D..."`):
 
 ## How to use it
 
-1. **Project.** Shows the project given on the command line: its folder (which contains `bdp/` with the `.bxml` files and `lang/c/` with the generated C code), its name (editable) and the functions named `<Machine>__<Operation>` defined in `lang/c/*.c`. As in the pipeline, all of them are verified.
+1. **Project.** Shows the project given on the command line: its folder (which contains `bdp/` with the `.bxml` files and `lang/c/` with the generated C code), its name and the functions named `<Machine>__<Operation>` defined in `lang/c/*.c`. As in the pipeline, all of them are verified.
 2. **Specification.** Pick Plugin, ATL Rules, or Plugin + ATL Rules (compare), then click **Generate**. The log streams the generator output. If a generator fails, the error dialog shows:
    - which step failed;
    - the details: stage, function, rule and exit code;
@@ -43,12 +43,12 @@ These system properties are optional (`make gui GUI_ARGS="-D..."`):
 3. **WP Config.** Choose the provers, the timeout per goal, the output type (`status` → `-wp-status`, `print` → `-wp-print`), and whether to run smoke tests and counterexamples. Provers that are not installed are disabled.
 4. **Progress.** One row per function and specification, in a list that scrolls to the running function. Each row has the same statuses as the pipeline's progress dialog: Pending, Running…, Proved, Partial, Timeout and Failed. While a function runs, the row shows how many goals WP scheduled for it (`[wp] N goals scheduled`); when it ends, the row shows proved / total goals. The raw Frama-C output is shown below the list during the verification and scrolls by itself; **Hide Logs** hides it and **Save Log (.txt)** saves it. **Close** stops the run: it kills `frama-c` together with the provers it started.
 5. **Report.** The single-generator report shows the summary, one block per function and the relevant WP output. The comparison report has two tabs:
-   - **Results:** a verdict, the summaries side by side, and a per-function table with a difference sentence. Rows whose results differ are highlighted.
-   - **Specifications:** the contract of the selected function from both files, aligned with line numbers and scrolling together. Below them come the differences explained in plain language and their impact on the verification.
+   - **Results:** a verdict, the summaries side by side, and a per-function table (Function, proved / total of each side, Result, Action). Rows whose results differ are highlighted; hovering "Different" shows what differs, and **Compare ›** opens the function in the Specifications tab.
+   - **Specifications:** the contract of the selected function from both files, aligned with line numbers and scrolling together: clauses only in the Plugin in blue, only in the ATL Rules in orange, changed ones in yellow. Below them come the differences explained in plain language and their impact on the verification.
 
-   Closing a report takes you back to step 3, where the generated specifications are kept so you can re-run with other settings.
+   Closing a report ends the application, as the pipeline does after its report.
 
-Every window (the three wizard steps, the progress window, the reports, the error dialog and the log viewer) opens with the same size, 960 × 720 (smaller on a smaller screen), centred on the screen, so going from one window to the next keeps the same frame. Lists, logs and diff panes take the free height; the wizard's forms sit in a centred column.
+All windows have the same height and open centred on the screen: the wizard is 760 × 720 (as wide as its forms), the progress window and the reports 960 × 720 (smaller on a smaller screen), and the error dialog and the log viewer take the size and place of the window they open over. Lists, logs and diff panes take the free height.
 
 The last generation mode, provers, timeout and options are saved between sessions with `java.util.prefs`.
 

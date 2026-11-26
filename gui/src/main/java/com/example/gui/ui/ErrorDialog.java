@@ -31,7 +31,6 @@ import javax.swing.JTextArea;
  */
 public final class ErrorDialog extends JDialog {
 
-    private static final int TEXT_WIDTH = 820;
 
     /**
      * @param onRetry "Try Again" ({@code null} hides it)
@@ -50,7 +49,7 @@ public final class ErrorDialog extends JDialog {
         icon.setVerticalAlignment(JLabel.TOP);
         head.add(icon, BorderLayout.WEST);
         head.add(Ui.stack(4, Ui.title(report.title(), 17f),
-                Ui.wrap(report.sentence(), TEXT_WIDTH - 40, Palette.TEXT, Theme.font(Font.PLAIN, 12.5f))),
+                Ui.wrap(report.sentence(), Ui.textWidth(owner, 120), Palette.TEXT, Theme.font(Font.PLAIN, 12.5f))),
                 BorderLayout.CENTER);
         content.add(head);
 
@@ -141,7 +140,7 @@ public final class ErrorDialog extends JDialog {
         root.add(content, BorderLayout.CENTER);
         root.add(Ui.buttonBar(buttons.toArray(JComponent[]::new)), BorderLayout.SOUTH);
         setContentPane(root);
-        Ui.standardSize(this);
+        Ui.sameAs(this, owner);
     }
 
     public static void show(Window owner, ErrorReport report, Actions actions) {

@@ -80,6 +80,7 @@ public final class VerificationReportWindow extends JFrame {
         header.getComponent(0).setFont(Theme.font(Font.BOLD, 17f));
     }
 
+    /** Close (button or window): ends the application. */
     private void close() {
         dispose();
         onClose.run();

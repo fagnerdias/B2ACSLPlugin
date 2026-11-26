@@ -40,8 +40,10 @@ import javax.swing.table.TableCellRenderer;
 final class ResultsTab extends JPanel {
 
     private static final String[] COLUMNS = {
-        "Function", "Plugin proved / total", "ATL Rules proved / total", "Difference", "Result", ""
+        "Function", "Plugin proved / total", "ATL Rules proved / total", "Result", "Action"
     };
+    private static final int RESULT = 3;
+    private static final int ACTION = 4;
     private final List<FunctionComparison> rows;
     private final JTable table;
 
@@ -81,8 +83,8 @@ final class ResultsTab extends JPanel {
         java.awt.FontMetrics bold = table.getFontMetrics(Theme.font(Font.BOLD, 12.5f));
         int fnWidth = rows.stream().mapToInt(r -> bold.stringWidth(r.function())).max().orElse(120) + 28;
         int linkWidth = bold.stringWidth("Compare ›") + 28;
-        int[] widths = {Math.max(fnWidth, 160), 150, 170, 260, 115, linkWidth};
-        int[] minimum = {Math.min(fnWidth, 260), 145, 165, 120, 110, linkWidth};
+        int[] widths = {Math.max(fnWidth, 160), 170, 190, 130, Math.max(linkWidth, 90)};
+        int[] minimum = {Math.min(fnWidth, 260), 145, 165, 110, Math.max(linkWidth, 80)};
         for (int i = 0; i < widths.length; i++) {
             table.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
             table.getColumnModel().getColumn(i).setMinWidth(minimum[i]);
@@ -96,7 +98,7 @@ final class ResultsTab extends JPanel {
             public void mouseClicked(MouseEvent e) {
                 int row = table.rowAtPoint(e.getPoint());
                 int col = table.columnAtPoint(e.getPoint());
-                if (row >= 0 && (col == 5 || e.getClickCount() == 2)) {
+                if (row >= 0 && (col == ACTION || e.getClickCount() == 2)) {
                     compare.accept(rows.get(row).function());
                 }
             }
@@ -105,7 +107,7 @@ final class ResultsTab extends JPanel {
             @Override
             public void mouseMoved(MouseEvent e) {
                 table.setCursor(Cursor.getPredefinedCursor(
-                        table.columnAtPoint(e.getPoint()) == 5 ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
+                        table.columnAtPoint(e.getPoint()) == ACTION ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
             }
         });
         JScrollPane tableScroll = new JScrollPane(table);
@@ -172,8 +174,7 @@ final class ResultsTab extends JPanel {
                 case 0 -> c.function();
                 case 1 -> provedTotal(c.plugin());
                 case 2 -> provedTotal(c.atl());
-                case 3 -> c.difference();
-                case 4 -> c.same() ? "Same result" : "Different";
+                case RESULT -> c.same() ? "Same result" : "Different";
                 default -> "Compare ›";
             };
         }
@@ -197,9 +198,10 @@ final class ResultsTab extends JPanel {
                 JTable t, Object value, boolean selected, boolean focus, int row, int column) {
             FunctionComparison c = rows.get(row);
             Color bg = selected ? new Color(0xDCE7F7) : c.same() ? Palette.WHITE : Palette.ROW_DIFFERENT;
-            if (column == 4) {
+            if (column == RESULT) {
                 badge.set(String.valueOf(value), c.same() ? StatusBadge.Kind.SUCCESS : StatusBadge.Kind.WARNING);
                 badgeCell.setBackground(bg);
+                badgeCell.setToolTipText(c.same() ? null : c.difference());
                 return badgeCell;
             }
             JLabel l = (JLabel) text.getTableCellRendererComponent(t, value, false, false, row, column);
@@ -207,7 +209,7 @@ final class ResultsTab extends JPanel {
             l.setBorder(Ui.padding(0, 8, 0, 8));
             l.setForeground(Palette.TEXT);
             l.setFont(Theme.font(Font.PLAIN, 12.5f));
-            l.setToolTipText(column == 3 ? String.valueOf(value) : null);
+            l.setToolTipText(null);
             switch (column) {
                 case 0 -> l.setFont(Theme.font(Font.BOLD, 12.5f));
                 case 1, 2 -> {
@@ -217,7 +219,7 @@ final class ResultsTab extends JPanel {
                         l.setFont(Theme.font(Font.BOLD, 12.5f));
                     }
                 }
-                case 5 -> {
+                case ACTION -> {
                     l.setForeground(Palette.BLUE);
                     l.setFont(Theme.font(Font.BOLD, 12.5f));
                 }

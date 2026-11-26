@@ -13,7 +13,6 @@ import com.example.gui.model.WpConfig;
 import com.example.gui.parsing.ContractExtractor;
 import com.example.gui.ui.components.Icons;
 import com.example.gui.ui.components.OperationRow;
-import com.example.gui.ui.components.StatusBadge;
 import com.example.gui.ui.components.TitledGroup;
 import com.example.gui.ui.report.ComparisonReportWindow;
 import com.example.gui.ui.report.VerificationReportWindow;
@@ -75,8 +74,9 @@ public final class ProgressWindow extends JFrame {
     private final WpConfig config;
     private final Path runRoot;
     private final Runnable onReturn;
+    private final Runnable onExit;
     private final Map<Generator, Map<String, OperationRow>> rows = new EnumMap<>(Generator.class);
-    private final Map<Generator, StatusBadge> groupBadges = new EnumMap<>(Generator.class);
+    private final Map<Generator, JLabel> doneCounters = new EnumMap<>(Generator.class);
     private final Map<Generator, Integer> doneBy = new EnumMap<>(Generator.class);
     private final Map<Generator, Boolean> allProvedBy = new EnumMap<>(Generator.class);
     private final Map<Generator, JPanel> rowLists = new EnumMap<>(Generator.class);
@@ -98,7 +98,8 @@ public final class ProgressWindow extends JFrame {
             List<GeneratedSpecification> specs,
             WpConfig config,
             Path runRoot,
-            Runnable onReturn) {
+            Runnable onReturn,
+            Runnable onExit) {
         super("Verification Progress");
         this.project = project;
         this.mode = mode;
@@ -106,6 +107,7 @@ public final class ProgressWindow extends JFrame {
         this.config = config;
         this.runRoot = runRoot;
         this.onReturn = onReturn;
+        this.onExit = onExit;
         this.total = specs.size() * project.functions().size();
 
         JPanel content = Ui.stack(10);
@@ -137,9 +139,11 @@ public final class ProgressWindow extends JFrame {
             scroll.setPreferredSize(new Dimension(560, rowHeight * Math.min(VISIBLE_ROWS, Math.max(1, byFn.size())) + 2));
             TitledGroup group;
             if (mode.isCompare()) {
-                StatusBadge badge = new StatusBadge("0 / " + project.functions().size() + " done", StatusBadge.Kind.INFO);
-                groupBadges.put(g, badge);
-                group = new TitledGroup(g.label() + " specification", scroll).withHeader(badge);
+                JLabel counter = new JLabel();
+                counter.setFont(Theme.font(Font.PLAIN, 12f));
+                setDone(counter, 0, project.functions().size(), true);
+                doneCounters.put(g, counter);
+                group = new TitledGroup(g.label() + " specification", scroll).withHeader(counter);
             } else {
                 group = new TitledGroup("Operations", scroll);
             }
@@ -237,10 +241,6 @@ public final class ProgressWindow extends JFrame {
                 OperationRow row = rows.get(s.generator()).get(s.function());
                 row.setStatus(FunctionStatus.RUNNING, null);
                 rowLists.get(s.generator()).scrollRectToVisible(row.getBounds());
-                StatusBadge badge = groupBadges.get(s.generator());
-                if (badge != null) {
-                    badge.setKind(StatusBadge.Kind.INFO);
-                }
             }
             case Line l -> {
                 log.append(l.text());
@@ -261,18 +261,25 @@ public final class ProgressWindow extends JFrame {
                 if (s != FunctionStatus.PROVED) {
                     allProvedBy.put(r.generator(), false);
                 }
-                StatusBadge badge = groupBadges.get(r.generator());
-                if (badge != null) {
-                    int n = project.functions().size();
-                    int d = doneBy.get(r.generator());
-                    boolean complete = d == n;
-                    badge.set(d + " / " + n + " done",
-                            !complete ? StatusBadge.Kind.INFO
-                                    : allProvedBy.get(r.generator()) ? StatusBadge.Kind.SUCCESS : StatusBadge.Kind.WARNING);
+                JLabel counter = doneCounters.get(r.generator());
+                if (counter != null) {
+                    setDone(counter, doneBy.get(r.generator()), project.functions().size(), allProvedBy.get(r.generator()));
                 }
                 updateCounter();
             }
         }
+    }
+
+    /**
+     * "1 / 3 done": only the count is coloured — grey before the first function, blue while the
+     * verification runs, and at the end green (all proved) or orange (some function not proved).
+     */
+    private static void setDone(JLabel label, int done, int total, boolean allProved) {
+        java.awt.Color color = done == 0 ? Palette.GRAY
+                : done < total ? Palette.BLUE
+                : allProved ? Palette.GREEN : FunctionStatus.PARTIAL.color();
+        String hex = String.format("#%06x", color.getRGB() & 0xFFFFFF);
+        label.setText("<html><b><font color='" + hex + "'>" + done + " / " + total + "</font></b> done</html>");
     }
 
     /** As in the pipeline: "27 / 30 goals", "no goals", "timed out (600s)", "WP exit code 1". */
@@ -329,9 +336,9 @@ public final class ProgressWindow extends JFrame {
             dispose();
             if (mode.isCompare() && result.runs().size() == 2) {
                 new ComparisonReportWindow(project, result.runs().get(0), result.runs().get(1), result.diffs(), runRoot,
-                        onReturn).setVisible(true);
+                        onExit).setVisible(true);
             } else {
-                new VerificationReportWindow(project, result.runs().get(0), runRoot, onReturn).setVisible(true);
+                new VerificationReportWindow(project, result.runs().get(0), runRoot, onExit).setVisible(true);
             }
         } catch (CancellationException | InterruptedException e) {
             dispose();

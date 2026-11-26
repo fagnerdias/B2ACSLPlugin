@@ -34,9 +34,11 @@ public final class Palette {
     public static final Color CALLOUT_WARNING_BG = new Color(0xFFF4DE);
     public static final Color CALLOUT_WARNING_BORDER = new Color(0xF0C674);
 
-    public static final Color DIFF_ONLY_PLUGIN = new Color(0xFDE7E7);
+    /** Only in Plugin: blue. */
+    public static final Color DIFF_ONLY_PLUGIN = new Color(0xD3E3FC);
     public static final Color DIFF_CHANGED = new Color(0xFFF4CC);
-    public static final Color DIFF_ONLY_ATL = new Color(0xE3F4E1);
+    /** Only in ATL Rules: orange. */
+    public static final Color DIFF_ONLY_ATL = new Color(0xFFD8B0);
     public static final Color DIFF_PLACEHOLDER = new Color(0xF3F3F3);
 
     /** Per-function table row with different results. */

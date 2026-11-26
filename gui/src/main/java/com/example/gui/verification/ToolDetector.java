@@ -16,8 +16,8 @@ import java.util.regex.Pattern;
  */
 public final class ToolDetector {
 
-    /** The provers offered in step 3, by their {@code -wp-prover} name. */
-    public static final List<String> PROVERS = List.of("Alt-Ergo", "CVC5", "Z3");
+    /** The provers offered in step 3, in this order, by their {@code -wp-prover} name. */
+    public static final List<String> PROVERS = List.of("CVC5", "Alt-Ergo", "Z3");
 
     private static final Map<String, String> EXECUTABLES = Map.of("Alt-Ergo", "alt-ergo", "CVC5", "cvc5", "Z3", "z3");
     private static final Pattern WHY3_PROVER = Pattern.compile("^(Alt-Ergo|CVC5|Z3) (\\S+)(?: \\((.+)\\))?\\s*$");

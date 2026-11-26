@@ -22,8 +22,11 @@ public final class Ui {
     /** The size every window of the tool opens with (smaller only when the screen is smaller). */
     public static final java.awt.Dimension WINDOW_SIZE = new java.awt.Dimension(960, 720);
 
-    /** Width of the centred column that holds the wizard's forms inside the standard window. */
+    /** Width of the column that holds the wizard's forms (and of the wizard window itself). */
     public static final int WIZARD_COLUMN = 760;
+
+    /** The wizard window: as tall as the others, as wide as its forms (no empty bands at the sides). */
+    public static final java.awt.Dimension WIZARD_SIZE = new java.awt.Dimension(WIZARD_COLUMN, WINDOW_SIZE.height);
 
     private Ui() {}
 
@@ -32,14 +35,43 @@ public final class Ui {
      * progress window, a report or a dialog keeps the same size and position.
      */
     public static void standardSize(java.awt.Window w) {
+        sized(w, WINDOW_SIZE);
+    }
+
+    /** The wizard's size: {@link #WIZARD_SIZE}, centred. */
+    public static void wizardSize(java.awt.Window w) {
+        sized(w, WIZARD_SIZE);
+    }
+
+    /**
+     * A dialog over another window takes that window's size and place (the error dialog over the
+     * wizard is as wide as the wizard); without a visible owner it gets the standard size.
+     */
+    public static void sameAs(java.awt.Window w, java.awt.Window owner) {
+        if (owner == null || !owner.isShowing()) {
+            standardSize(w);
+            return;
+        }
+        w.setMinimumSize(new java.awt.Dimension(Math.min(620, owner.getWidth()), Math.min(540, owner.getHeight())));
+        w.setSize(owner.getSize());
+        w.setLocation(owner.getLocation());
+    }
+
+    private static void sized(java.awt.Window w, java.awt.Dimension size) {
         java.awt.Rectangle screen = java.awt.GraphicsEnvironment.isHeadless()
                 ? new java.awt.Rectangle(0, 0, 1920, 1080)
                 : java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
-        int width = Math.min(WINDOW_SIZE.width, screen.width - 40);
-        int height = Math.min(WINDOW_SIZE.height, screen.height - 40);
-        w.setMinimumSize(new java.awt.Dimension(Math.min(720, width), Math.min(540, height)));
+        int width = Math.min(size.width, screen.width - 40);
+        int height = Math.min(size.height, screen.height - 40);
+        w.setMinimumSize(new java.awt.Dimension(Math.min(620, width), Math.min(540, height)));
         w.setSize(width, height);
         w.setLocationRelativeTo(null);
+    }
+
+    /** Width available for wrapped text in a window as wide as {@code owner} (or the standard one). */
+    public static int textWidth(java.awt.Window owner, int margin) {
+        int width = owner != null && owner.isShowing() ? owner.getWidth() : WINDOW_SIZE.width;
+        return Math.max(300, width - margin);
     }
 
     public static JLabel label(String text) {
